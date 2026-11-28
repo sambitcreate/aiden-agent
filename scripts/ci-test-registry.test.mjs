@@ -1,6 +1,9 @@
 /* global structuredClone */
 
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import {
   collectSourceTests,
@@ -9,6 +12,7 @@ import {
   discoverSwiftPackages,
   discoverTestFiles,
   parseIosUiTestSource,
+  parseIosUiTestSources,
   parseSwiftPackageManifest,
   readCliPackageManifest,
   readPackageManifest,
@@ -230,6 +234,29 @@ test("manual allowlist entries are required for intentionally manual suites and 
 test("workflow-owned scripts count only while a workflow still invokes them", () => {
   const workflows = readWorkflows().replaceAll("npm run test:linux-native", "npm run test:linux-native-removed");
   assert.throws(() => validateRegistry({ workflows }), /not invoked by any workflow: test:linux-native/u);
+
+  // Comments, echo commands, failure-only steps, and `||` fallbacks do not count as workflow execution.
+  for (const replacement of [
+    "# npm run test:form-fill:native",
+    "echo npm run test:form-fill:native",
+    "true || npm run test:form-fill:native",
+    "if false; then npm run test:form-fill:native; fi",
+  ]) {
+    const spoofedWorkflows = readWorkflows().replaceAll("npm run test:form-fill:native", replacement);
+    assert.throws(
+      () => validateRegistry({ workflows: spoofedWorkflows }),
+      /not invoked by any workflow: test:form-fill:native/u,
+    );
+  }
+
+  const failureStepWorkflows = readWorkflows().replaceAll(
+    "run: npm run test:foreground-file-tools:electron",
+    "if: failure()\n        run: npm run test:foreground-file-tools:electron",
+  );
+  assert.throws(
+    () => validateRegistry({ workflows: failureStepWorkflows }),
+    /not invoked by any workflow: test:foreground-file-tools:electron/u,
+  );
 });
 
 test("duplicate prerequisite and preserved ids are rejected", () => {
@@ -405,6 +432,61 @@ test("iOS UI XCTest classes and methods are statically inventoried against -only
     ],
   });
 
+  // XCTestCase extensions split across separate Swift files are discovered regardless of file order.
+  assert.deepEqual(
+    parseIosUiTestSources([
+      `
+        import XCTest
+        extension SplitUITests {
+          func testDefinedInEarlierSortedExtensionFile() {}
+        }
+      `,
+      `
+        import XCTest
+        final class SplitUITests: XCTestCase {
+          func testDefinedOnClass() {}
+        }
+      `,
+      `
+        import XCTest
+        extension SplitUITests {
+          func testDefinedInLaterSortedExtensionFile() {}
+        }
+      `,
+    ]),
+    {
+      classes: ["SplitUITests"],
+      tests: [
+        "SplitUITests/testDefinedInEarlierSortedExtensionFile",
+        "SplitUITests/testDefinedInLaterSortedExtensionFile",
+        "SplitUITests/testDefinedOnClass",
+      ],
+    },
+  );
+
+  const tempIosRoot = mkdtempSync(path.join(os.tmpdir(), "aiden-ios-ui-split-"));
+  try {
+    const uiDir = path.join(tempIosRoot, "ios/AidenOnTheGoUITests");
+    mkdirSync(uiDir, { recursive: true });
+    writeFileSync(
+      path.join(uiDir, "ASplitUITests+Extra.swift"),
+      "import XCTest\nextension SplitUITests { func testFromSeparateExtensionFile() {} }\n",
+    );
+    writeFileSync(
+      path.join(uiDir, "SplitUITests.swift"),
+      "import XCTest\nfinal class SplitUITests: XCTestCase { func testOnPrimaryClass() {} }\n",
+    );
+    assert.deepEqual(discoverIosUiTests(tempIosRoot), {
+      classes: ["SplitUITests"],
+      tests: [
+        "SplitUITests/testFromSeparateExtensionFile",
+        "SplitUITests/testOnPrimaryClass",
+      ],
+    });
+  } finally {
+    rmSync(tempIosRoot, { recursive: true, force: true });
+  }
+
   // Adding a new UI test class or method without -only-testing or manualIosUiTests fails closed.
   assert.throws(
     () =>
@@ -417,7 +499,17 @@ test("iOS UI XCTest classes and methods are statically inventoried against -only
     /iOS UI tests on disk never run in CI: \["AidenNewFeatureUITests\/testOfflineBanner"\]/u,
   );
 
-  // Removing -only-testing for AidenWorkspaceHTMLUITests from workflows fails closed.
+  // Removing -only-testing from only one of jobs.ios / jobs.ios-27 fails closed on parity mismatch.
+  const mismatchedIosWorkflows = readWorkflows().replace(
+    "-only-testing:AidenOnTheGoUITests/AidenWorkspaceHTMLUITests",
+    "-only-testing:AidenOnTheGoUITests/AidenSandboxedHTMLUITests",
+  );
+  assert.throws(
+    () => validateRegistry({ workflows: mismatchedIosWorkflows }),
+    /Workflow jobs "ios" and "ios-27" must run identical iOS UI -only-testing targets/u,
+  );
+
+  // Removing -only-testing for AidenWorkspaceHTMLUITests from both iOS jobs fails closed as unrun.
   const withoutHtmlWorkflows = readWorkflows().replaceAll(
     "-only-testing:AidenOnTheGoUITests/AidenWorkspaceHTMLUITests",
     "-only-testing:AidenOnTheGoUITests/AidenSandboxedHTMLUITests",
@@ -516,6 +608,22 @@ test("CLI test files and server-bundle packaging workflows fail closed when CLI 
     () => validateRegistry({ workflows: lateCliTestsWorkflow }),
     /packs packages\/cli without building a keyless bundle and running CLI tests before cli:dist and npm pack/u,
   );
+
+  // Shell comments, echo commands, and fallback branches cannot spoof the keyless CLI build/test gate.
+  for (const spoofedRun of [
+    "          # npm run cli:build\n          # npm --prefix packages/cli test",
+    "          echo npm run cli:build\n          echo npm --prefix packages/cli test",
+    "          npm run cli:build\n          true || npm --prefix packages/cli test",
+  ]) {
+    const spoofedCliWorkflow = readWorkflows().replace(
+      "          npm run cli:build\n          npm --prefix packages/cli test",
+      spoofedRun,
+    );
+    assert.throws(
+      () => validateRegistry({ workflows: spoofedCliWorkflow }),
+      /packs packages\/cli without building a keyless bundle and running CLI tests before cli:dist and npm pack/u,
+    );
+  }
 });
 
 test("root package.json test:* scripts and build:native fail closed when unwired or left in manualScripts", () => {

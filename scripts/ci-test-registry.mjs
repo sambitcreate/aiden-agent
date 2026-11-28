@@ -6,9 +6,10 @@ import {
   readdirSync,
   readFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseAllDocuments } from "yaml";
+import { isDeepStrictEqual } from "node:util";
 
 export const PROJECT_ROOT = fileURLToPath(new URL("../", import.meta.url));
 const PACKAGE_JSON_PATH = path.join(PROJECT_ROOT, "package.json");
@@ -450,13 +451,14 @@ export function discoverSwiftPackages(root = PROJECT_ROOT) {
   return packages.sort((left, right) => left.packagePath.localeCompare(right.packagePath));
 }
 
-/** Statically parses XCTestCase classes and 0-arg test*() methods from Swift UI test sources. */
-export function parseIosUiTestSource(source) {
-  const tokens = tokenizeSwift(source);
+/** Statically parses XCTestCase classes and 0-arg test*() methods across Swift UI test sources. */
+export function parseIosUiTestSources(sources) {
+  const tokenizedSources = Array.from(sources, (source) => tokenizeSwift(source));
   const classes = new Set();
   const methodsByClass = new Map();
+  const pendingExtensions = [];
 
-  const scanMethodsInBody = (className, openBraceIndex, closeBraceIndex) => {
+  const scanMethodsInBody = (tokens, className, openBraceIndex, closeBraceIndex) => {
     const methods = methodsByClass.get(className) ?? new Set();
     let braceDepth = 0;
     for (let cursor = openBraceIndex + 1; cursor < closeBraceIndex; cursor += 1) {
@@ -486,41 +488,42 @@ export function parseIosUiTestSource(source) {
     methodsByClass.set(className, methods);
   };
 
-  // First pass: find XCTestCase classes.
-  const pendingExtensions = [];
-  for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index];
-    if (token.type === "ident" && (token.value === "class" || token.value === "extension") && tokens[index + 1]?.type === "ident") {
-      const kind = token.value;
-      const typeName = tokens[index + 1].value;
-      let openBrace = -1;
-      for (let lookahead = index + 2; lookahead < tokens.length; lookahead += 1) {
-        if (tokens[lookahead].type === "punct" && tokens[lookahead].value === "{") {
-          openBrace = lookahead;
-          break;
+  // First pass across all files: discover XCTestCase subclasses and record extensions.
+  for (const tokens of tokenizedSources) {
+    for (let index = 0; index < tokens.length; index += 1) {
+      const token = tokens[index];
+      if (token.type === "ident" && (token.value === "class" || token.value === "extension") && tokens[index + 1]?.type === "ident") {
+        const kind = token.value;
+        const typeName = tokens[index + 1].value;
+        let openBrace = -1;
+        for (let lookahead = index + 2; lookahead < tokens.length; lookahead += 1) {
+          if (tokens[lookahead].type === "punct" && tokens[lookahead].value === "{") {
+            openBrace = lookahead;
+            break;
+          }
         }
-      }
-      if (openBrace === -1) continue;
-      const closeBrace = findMatchingDelimiter(tokens, openBrace, "{", "}");
-      if (closeBrace === -1) continue;
+        if (openBrace === -1) continue;
+        const closeBrace = findMatchingDelimiter(tokens, openBrace, "{", "}");
+        if (closeBrace === -1) continue;
 
-      if (kind === "class") {
-        const header = tokens.slice(index + 2, openBrace);
-        const inheritsXCTestCase = header.some((item) => item.type === "ident" && item.value === "XCTestCase");
-        if (inheritsXCTestCase) {
-          classes.add(typeName);
-          scanMethodsInBody(typeName, openBrace, closeBrace);
+        if (kind === "class") {
+          const header = tokens.slice(index + 2, openBrace);
+          const inheritsXCTestCase = header.some((item) => item.type === "ident" && item.value === "XCTestCase");
+          if (inheritsXCTestCase) {
+            classes.add(typeName);
+            scanMethodsInBody(tokens, typeName, openBrace, closeBrace);
+          }
+        } else {
+          pendingExtensions.push({ tokens, typeName, openBrace, closeBrace });
         }
-      } else {
-        pendingExtensions.push({ typeName, openBrace, closeBrace });
+        index = closeBrace;
       }
-      index = closeBrace;
     }
   }
 
   for (const ext of pendingExtensions) {
     if (classes.has(ext.typeName)) {
-      scanMethodsInBody(ext.typeName, ext.openBrace, ext.closeBrace);
+      scanMethodsInBody(ext.tokens, ext.typeName, ext.openBrace, ext.closeBrace);
     }
   }
 
@@ -536,21 +539,20 @@ export function parseIosUiTestSource(source) {
   };
 }
 
+/** Statically parses XCTestCase classes and 0-arg test*() methods from a single Swift UI test file. */
+export function parseIosUiTestSource(source) {
+  return parseIosUiTestSources([source]);
+}
+
 /** Discovers XCTestCase classes and test methods across ios/AidenOnTheGoUITests/*.swift. */
 export function discoverIosUiTests(root = PROJECT_ROOT) {
   const uiTestsDir = path.join(root, "ios/AidenOnTheGoUITests");
   if (!existsSync(uiTestsDir)) return { classes: [], tests: [] };
-  const classes = new Set();
-  const tests = new Set();
-  for (const name of readdirSync(uiTestsDir).filter((entry) => entry.endsWith(".swift")).sort()) {
-    const parsed = parseIosUiTestSource(readFileSync(path.join(uiTestsDir, name), "utf8"));
-    for (const cls of parsed.classes) classes.add(cls);
-    for (const testId of parsed.tests) tests.add(testId);
-  }
-  return {
-    classes: [...classes].sort(),
-    tests: [...tests].sort(),
-  };
+  const sources = readdirSync(uiTestsDir)
+    .filter((entry) => entry.endsWith(".swift"))
+    .sort()
+    .map((name) => readFileSync(path.join(uiTestsDir, name), "utf8"));
+  return parseIosUiTestSources(sources);
 }
 
 function tokenizeScript(command, scriptName) {
@@ -902,25 +904,370 @@ function assertUniqueIds(entries, label) {
   }
 }
 
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+let cachedParseAllDocuments = null;
+
+/**
+ * Lazily loads `yaml` only when workflow validation runs so pre-`npm ci`
+ * scripts (`ci-changes.mjs`, `ci-select-tests.mjs`) can import `readRegistry`
+ * and `PROJECT_ROOT` without `node_modules` installed.
+ */
+function parseWorkflowDocuments(workflows) {
+  if (!cachedParseAllDocuments) {
+    const require = createRequire(import.meta.url);
+    ({ parseAllDocuments: cachedParseAllDocuments } = require("yaml"));
+  }
+  const parsedDocs = [];
+  for (const doc of cachedParseAllDocuments(workflows)) {
+    if (doc.errors.length > 0) {
+      throw new Error(`Invalid workflow YAML: ${doc.errors[0].message}`);
+    }
+    const parsed = doc.toJS();
+    if (parsed && typeof parsed === "object") {
+      parsedDocs.push(parsed);
+    }
+  }
+  return parsedDocs;
 }
 
-function workflowInvokesScript(workflows, scriptName) {
-  return new RegExp(`npm run ${escapeRegExp(scriptName)}(?![\\w:-])`, "u").test(workflows);
+function isFailureOnlyCondition(condition) {
+  if (typeof condition !== "string") return false;
+  return /\b(?:failure|cancelled)\s*\(\s*\)/u.test(condition);
+}
+
+const SHELL_CONTROL_OPENERS = new Set(["if", "for", "while", "until", "case"]);
+const SHELL_CONTROL_CLOSERS = new Set(["fi", "done", "esac"]);
+const SHELL_CLAUSE_KEYWORDS = new Set(["then", "elif", "else", "do"]);
+
+function consumeCommandSubstitution(source, startIndex) {
+  let cursor = startIndex + 2;
+  let depth = 1;
+  while (cursor < source.length && depth > 0) {
+    const ch = source[cursor];
+    if (ch === "\\") {
+      cursor += 2;
+      continue;
+    }
+    if (ch === "'") {
+      cursor += 1;
+      while (cursor < source.length && source[cursor] !== "'") cursor += 1;
+      if (source[cursor] === "'") cursor += 1;
+      continue;
+    }
+    if (ch === '"') {
+      cursor += 1;
+      while (cursor < source.length && source[cursor] !== '"') {
+        if (source[cursor] === "\\") {
+          cursor += 2;
+          continue;
+        }
+        if (source[cursor] === "$" && source[cursor + 1] === "(") {
+          cursor = consumeCommandSubstitution(source, cursor);
+          continue;
+        }
+        cursor += 1;
+      }
+      if (source[cursor] === '"') cursor += 1;
+      continue;
+    }
+    if (ch === "$" && source[cursor + 1] === "(") {
+      cursor = consumeCommandSubstitution(source, cursor);
+      continue;
+    }
+    if (ch === "(") depth += 1;
+    else if (ch === ")") depth -= 1;
+    cursor += 1;
+  }
+  return cursor;
+}
+
+/**
+ * Extracts shell command segments from a GitHub Actions `step.run` script.
+ * Strips `#` comments and heredoc bodies, respects quotes/escapes/`$(...)`,
+ * and marks fallback (`||`), background (`&`), and shell conditional (`if`,
+ * `for`, `while`, `case`) branches as `unconditional: false`.
+ */
+function extractWorkflowShellSegments(runSource) {
+  const segments = [];
+  let current = [];
+  let token = "";
+  let afterOrFallback = false;
+  let controlDepth = 0;
+  const pendingHeredocs = [];
+  let index = 0;
+
+  const pushToken = () => {
+    if (token.length > 0) {
+      current.push(token);
+      token = "";
+    }
+  };
+
+  const pushSegment = () => {
+    pushToken();
+    while (current.length > 0 && SHELL_CLAUSE_KEYWORDS.has(current[0])) {
+      current.shift();
+    }
+    while (current.length > 0 && (current[0] === "{" || current[0] === "}")) {
+      current.shift();
+    }
+    if (current.length === 0) return;
+
+    const head = current[0];
+    if (SHELL_CONTROL_CLOSERS.has(head)) {
+      controlDepth = Math.max(0, controlDepth - 1);
+      current.shift();
+      while (current.length > 0 && (current[0] === "{" || current[0] === "}")) {
+        current.shift();
+      }
+      if (current.length === 0) return;
+    }
+
+    const segmentUnconditional = !afterOrFallback && controlDepth === 0;
+    if (SHELL_CONTROL_OPENERS.has(current[0])) {
+      controlDepth += 1;
+      current = [];
+      return;
+    }
+    if (current[current.length - 1] === "}") {
+      current.pop();
+    }
+    if (current.length > 0) {
+      segments.push({
+        tokens: current,
+        unconditional: segmentUnconditional,
+      });
+    }
+    current = [];
+  };
+
+  const consumePendingHeredocs = () => {
+    while (pendingHeredocs.length > 0 && index < runSource.length) {
+      const { delimiter, stripTabs } = pendingHeredocs.shift();
+      while (index < runSource.length) {
+        const lineEnd = runSource.indexOf("\n", index);
+        const rawLine = lineEnd === -1 ? runSource.slice(index) : runSource.slice(index, lineEnd);
+        index = lineEnd === -1 ? runSource.length : lineEnd + 1;
+        const normalized = (stripTabs ? rawLine.replace(/^\t+/u, "") : rawLine).replace(/\r$/u, "");
+        if (normalized === delimiter) break;
+      }
+    }
+  };
+
+  while (index < runSource.length) {
+    const ch = runSource[index];
+    const next = runSource[index + 1];
+
+    if (ch === "\\") {
+      if (next === "\n") {
+        index += 2;
+        continue;
+      }
+      if (next === "\r" && runSource[index + 2] === "\n") {
+        index += 3;
+        continue;
+      }
+      token += next ?? "";
+      index += 2;
+      continue;
+    }
+
+    if (ch === "'") {
+      index += 1;
+      while (index < runSource.length && runSource[index] !== "'") {
+        token += runSource[index];
+        index += 1;
+      }
+      if (runSource[index] === "'") index += 1;
+      continue;
+    }
+
+    if (ch === '"') {
+      index += 1;
+      while (index < runSource.length && runSource[index] !== '"') {
+        if (runSource[index] === "\\") {
+          if (runSource[index + 1] === "\n") {
+            index += 2;
+            continue;
+          }
+          token += runSource[index + 1] ?? "";
+          index += 2;
+          continue;
+        }
+        if (runSource[index] === "$" && runSource[index + 1] === "(") {
+          const endSub = consumeCommandSubstitution(runSource, index);
+          token += runSource.slice(index, endSub);
+          index = endSub;
+          continue;
+        }
+        token += runSource[index];
+        index += 1;
+      }
+      if (runSource[index] === '"') index += 1;
+      continue;
+    }
+
+    if (ch === "$" && next === "(") {
+      const endSub = consumeCommandSubstitution(runSource, index);
+      token += runSource.slice(index, endSub);
+      index = endSub;
+      continue;
+    }
+
+    if (ch === "#" && token.length === 0) {
+      while (index < runSource.length && runSource[index] !== "\n") index += 1;
+      continue;
+    }
+
+    if (ch === "\n") {
+      pushSegment();
+      afterOrFallback = false;
+      index += 1;
+      consumePendingHeredocs();
+      continue;
+    }
+
+    if (/\s/u.test(ch)) {
+      pushToken();
+      index += 1;
+      continue;
+    }
+
+    if (ch === ";") {
+      pushSegment();
+      afterOrFallback = false;
+      index += 1;
+      continue;
+    }
+
+    if (ch === "&" && next === "&") {
+      pushSegment();
+      index += 2;
+      continue;
+    }
+
+    if (ch === "|" && next === "|") {
+      pushSegment();
+      afterOrFallback = true;
+      index += 2;
+      continue;
+    }
+
+    if (ch === "|") {
+      pushSegment();
+      index += 1;
+      continue;
+    }
+
+    if (ch === "<" && next === "<" && runSource[index + 2] !== "<") {
+      pushToken();
+      index += 2;
+      let stripTabs = false;
+      if (runSource[index] === "-") {
+        stripTabs = true;
+        index += 1;
+      }
+      while (index < runSource.length && (runSource[index] === " " || runSource[index] === "\t")) {
+        index += 1;
+      }
+      let delimiter = "";
+      while (index < runSource.length && !/[\s;|&<>]/u.test(runSource[index])) {
+        if (runSource[index] === "'" || runSource[index] === '"') {
+          const quote = runSource[index];
+          index += 1;
+          while (index < runSource.length && runSource[index] !== quote) {
+            delimiter += runSource[index];
+            index += 1;
+          }
+          if (runSource[index] === quote) index += 1;
+          continue;
+        }
+        if (runSource[index] === "\\") {
+          delimiter += runSource[index + 1] ?? "";
+          index += 2;
+          continue;
+        }
+        delimiter += runSource[index];
+        index += 1;
+      }
+      if (delimiter.length > 0) {
+        pendingHeredocs.push({ delimiter, stripTabs });
+      }
+      continue;
+    }
+
+    if (ch === ">" || ch === "<") {
+      if (/^\d+$/u.test(token)) token = "";
+      else pushToken();
+      if (runSource.startsWith("<<<", index)) index += 3;
+      else if (next === ">" || next === "<" || next === "&") index += 2;
+      else index += 1;
+      continue;
+    }
+
+    if (ch === "&") {
+      pushSegment();
+      afterOrFallback = true;
+      index += 1;
+      continue;
+    }
+
+    token += ch;
+    index += 1;
+  }
+
+  pushSegment();
+  return segments;
+}
+
+function extractNpmRunScriptName(tokens) {
+  if (tokens[0] !== "npm") return null;
+  if (tokens[1] !== "run" && tokens[1] !== "run-script") return null;
+  const scriptName = tokens[2];
+  if (typeof scriptName !== "string" || scriptName.length === 0 || scriptName.startsWith("-")) {
+    return null;
+  }
+  if (tokens.length > 3 && tokens[3] !== "--") {
+    return null;
+  }
+  return scriptName;
+}
+
+function collectInvokedWorkflowNpmScripts(workflowDocs) {
+  const invoked = new Set();
+  for (const parsed of workflowDocs) {
+    for (const job of Object.values(parsed?.jobs ?? {})) {
+      if (isFailureOnlyCondition(job?.if)) continue;
+      for (const step of job?.steps ?? []) {
+        if (isFailureOnlyCondition(step?.if)) continue;
+        if (typeof step?.run !== "string") continue;
+        for (const segment of extractWorkflowShellSegments(step.run)) {
+          if (!segment.unconditional) continue;
+          const { index } = splitEnvironmentAssignments(segment.tokens);
+          const scriptName = extractNpmRunScriptName(segment.tokens.slice(index));
+          if (scriptName) invoked.add(scriptName);
+        }
+      }
+    }
+  }
+  return invoked;
 }
 
 /**
  * Audits workflowScripts entries in scripts/ci-test-registry.json:
- * - Every entry must exist in root package.json and appear as `npm run <script>`
- *   in workflows.
+ * - Every entry must exist in root package.json and appear as an executed
+ *   `npm run <script>` command in a non-failure workflow step.
  * - Any `tsx --test` / `node --test` segments reachable from workflowScripts
  *   contribute their files to `workflowFiles`.
  * - Reachable `swift test`, `swift build`, and `node scripts/build-*.mjs --required`
  *   segments are returned so Swift manifest targets can be verified against
  *   workflow-invoked scripts.
  */
-function collectWorkflowScriptCoverage(registry, packageManifest, workflows, root = PROJECT_ROOT) {
+function collectWorkflowScriptCoverage(
+  registry,
+  packageManifest,
+  invokedWorkflowScripts,
+  root = PROJECT_ROOT,
+) {
   const entries = registry.workflowScripts ?? [];
   const declared = new Set();
   for (const entry of entries) {
@@ -934,7 +1281,7 @@ function collectWorkflowScriptCoverage(registry, packageManifest, workflows, roo
     if (typeof packageManifest.scripts?.[entry.script] !== "string") {
       throw new Error(`Workflow script is missing from package.json: ${entry.script}`);
     }
-    if (!workflowInvokesScript(workflows, entry.script)) {
+    if (!invokedWorkflowScripts.has(entry.script)) {
       throw new Error(`Workflow script is not invoked by any workflow: ${entry.script}`);
     }
   }
@@ -1185,35 +1532,38 @@ function validateSwiftPackages({
   return [...allTargets].sort();
 }
 
-function collectWorkflowIosUiTests(workflows, discoveredIosUi) {
+function collectJobIosUiTests(job, discoveredIosUi) {
   const knownClasses = new Set(discoveredIosUi.classes);
   const knownTests = new Set(discoveredIosUi.tests);
   const covered = new Set();
 
-  for (const doc of parseAllDocuments(workflows)) {
-    if (doc.errors.length > 0) {
-      throw new Error(`Invalid workflow YAML: ${doc.errors[0].message}`);
-    }
-    const parsed = doc.toJS();
-    for (const job of Object.values(parsed?.jobs ?? {})) {
-      for (const step of job?.steps ?? []) {
-        const run = typeof step?.run === "string" ? step.run : "";
-        if (!run.includes("xcodebuild") || run.includes("-skip-testing:AidenOnTheGoUITests")) continue;
-        for (const match of run.matchAll(/-only-testing:AidenOnTheGoUITests\/([A-Za-z0-9_]+)(?:\/([A-Za-z0-9_]+))?/gu)) {
-          const [, className, methodName] = match;
-          if (!knownClasses.has(className)) {
-            throw new Error(`Workflow -only-testing references unknown iOS UI test class: ${className}`);
+  if (isFailureOnlyCondition(job?.if)) return covered;
+  for (const step of job?.steps ?? []) {
+    if (isFailureOnlyCondition(step?.if)) continue;
+    if (typeof step?.run !== "string") continue;
+    for (const segment of extractWorkflowShellSegments(step.run)) {
+      if (!segment.unconditional) continue;
+      const { index } = splitEnvironmentAssignments(segment.tokens);
+      let tokens = segment.tokens.slice(index);
+      if (tokens[0] === "xcrun") tokens = tokens.slice(1);
+      if (tokens[0] !== "xcodebuild") continue;
+      if (tokens.includes("-skip-testing:AidenOnTheGoUITests")) continue;
+      for (const arg of tokens.slice(1)) {
+        const match = /^-only-testing:AidenOnTheGoUITests\/([A-Za-z0-9_]+)(?:\/([A-Za-z0-9_]+))?$/u.exec(arg);
+        if (!match) continue;
+        const [, className, methodName] = match;
+        if (!knownClasses.has(className)) {
+          throw new Error(`Workflow -only-testing references unknown iOS UI test class: ${className}`);
+        }
+        if (methodName) {
+          const testId = `${className}/${methodName}`;
+          if (!knownTests.has(testId)) {
+            throw new Error(`Workflow -only-testing references unknown iOS UI test method: ${testId}`);
           }
-          if (methodName) {
-            const testId = `${className}/${methodName}`;
-            if (!knownTests.has(testId)) {
-              throw new Error(`Workflow -only-testing references unknown iOS UI test method: ${testId}`);
-            }
-            covered.add(testId);
-          } else {
-            for (const testId of discoveredIosUi.tests) {
-              if (testId.startsWith(`${className}/`)) covered.add(testId);
-            }
+          covered.add(testId);
+        } else {
+          for (const testId of discoveredIosUi.tests) {
+            if (testId.startsWith(`${className}/`)) covered.add(testId);
           }
         }
       }
@@ -1222,10 +1572,39 @@ function collectWorkflowIosUiTests(workflows, discoveredIosUi) {
   return covered;
 }
 
-function validateIosUiTests({ discoveredIosUi, workflows, registry }) {
+function collectWorkflowIosUiTests(workflowDocs, discoveredIosUi) {
+  let iosCovered = null;
+  let ios27Covered = null;
+
+  for (const parsed of workflowDocs) {
+    for (const [jobId, job] of Object.entries(parsed?.jobs ?? {})) {
+      const jobCovered = collectJobIosUiTests(job, discoveredIosUi);
+      if (jobId === "ios") iosCovered = jobCovered;
+      else if (jobId === "ios-27") ios27Covered = jobCovered;
+    }
+  }
+
+  if (!iosCovered || !ios27Covered) {
+    throw new Error('Workflows must define both "ios" and "ios-27" jobs to run iOS simulator UI tests');
+  }
+
+  const iosList = [...iosCovered].sort();
+  const ios27List = [...ios27Covered].sort();
+  if (!isDeepStrictEqual(iosList, ios27List)) {
+    const onlyInIos = iosList.filter((testId) => !ios27Covered.has(testId));
+    const onlyInIos27 = ios27List.filter((testId) => !iosCovered.has(testId));
+    throw new Error(
+      `Workflow jobs "ios" and "ios-27" must run identical iOS UI -only-testing targets; only-in-ios=${JSON.stringify(onlyInIos)}, only-in-ios-27=${JSON.stringify(onlyInIos27)}`,
+    );
+  }
+
+  return iosCovered;
+}
+
+function validateIosUiTests({ discoveredIosUi, workflowDocs, registry }) {
   const knownClasses = new Set(discoveredIosUi.classes);
   const knownTests = new Set(discoveredIosUi.tests);
-  const workflowCovered = collectWorkflowIosUiTests(workflows, discoveredIosUi);
+  const workflowCovered = collectWorkflowIosUiTests(workflowDocs, discoveredIosUi);
 
   const seenManualEntries = new Set();
   const manualMethodMap = new Map();
@@ -1287,7 +1666,83 @@ function validateIosUiTests({ discoveredIosUi, workflows, registry }) {
   };
 }
 
-function validateCliInventory({ cliManifest, discoveredCliFiles, workflows }) {
+function normalizeCliPathArg(value) {
+  return value.replaceAll("\\", "/").replace(/^\.\//u, "").replace(/\/+$/u, "");
+}
+
+function parseNpmCommandWithPrefix(tokens) {
+  if (tokens[0] !== "npm") return null;
+  let prefix = null;
+  const rest = [];
+  for (let i = 1; i < tokens.length; i += 1) {
+    const arg = tokens[i];
+    if (arg === "--prefix" && typeof tokens[i + 1] === "string") {
+      prefix = normalizeCliPathArg(tokens[i + 1]);
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith("--prefix=")) {
+      prefix = normalizeCliPathArg(arg.slice("--prefix=".length));
+      continue;
+    }
+    rest.push(arg);
+  }
+  return { prefix, rest };
+}
+
+function isCliPackCommand(tokens) {
+  const parsed = parseNpmCommandWithPrefix(tokens);
+  if (!parsed || parsed.rest[0] !== "pack") return false;
+  if (parsed.prefix === "packages/cli") return true;
+  for (let i = 1; i < parsed.rest.length; i += 1) {
+    const arg = parsed.rest[i];
+    if (arg === "--pack-destination") {
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith("-")) continue;
+    if (normalizeCliPathArg(arg) === "packages/cli") return true;
+  }
+  return false;
+}
+
+function isCliDistCommand(tokens) {
+  if (extractNpmRunScriptName(tokens) === "cli:dist") return true;
+  const parsed = parseNpmCommandWithPrefix(tokens);
+  return Boolean(
+    parsed &&
+      parsed.prefix === "packages/cli" &&
+      (parsed.rest[0] === "run" || parsed.rest[0] === "run-script") &&
+      parsed.rest[1] === "build:dist",
+  );
+}
+
+function isCliBuildCommand(tokens) {
+  if (extractNpmRunScriptName(tokens) === "cli:build") return true;
+  const parsed = parseNpmCommandWithPrefix(tokens);
+  return Boolean(
+    parsed &&
+      parsed.prefix === "packages/cli" &&
+      (parsed.rest[0] === "run" || parsed.rest[0] === "run-script") &&
+      parsed.rest[1] === "build" &&
+      (parsed.rest.length === 2 || parsed.rest[2] === "--"),
+  );
+}
+
+function isCliTestCommand(tokens) {
+  const parsed = parseNpmCommandWithPrefix(tokens);
+  if (!parsed || parsed.prefix !== "packages/cli") return false;
+  if ((parsed.rest[0] === "test" || parsed.rest[0] === "t") && parsed.rest.length === 1) {
+    return true;
+  }
+  return (
+    (parsed.rest[0] === "run" || parsed.rest[0] === "run-script") &&
+    parsed.rest[1] === "test" &&
+    parsed.rest.length === 2
+  );
+}
+
+function validateCliInventory({ cliManifest, discoveredCliFiles, workflowDocs }) {
   const testCommand = cliManifest?.scripts?.test;
   if (typeof testCommand !== "string" || testCommand.trim().length === 0) {
     throw new Error("packages/cli/package.json must define a test script");
@@ -1322,66 +1777,109 @@ function validateCliInventory({ cliManifest, discoveredCliFiles, workflows }) {
     );
   }
 
-  for (const doc of parseAllDocuments(workflows)) {
-    if (doc.errors.length > 0) {
-      throw new Error(`Invalid workflow YAML: ${doc.errors[0].message}`);
-    }
-    const parsed = doc.toJS();
+  const stepContainsCommand = (step, predicate) => {
+    if (typeof step?.run !== "string") return false;
+    return extractWorkflowShellSegments(step.run).some((segment) => {
+      const { index } = splitEnvironmentAssignments(segment.tokens);
+      return predicate(segment.tokens.slice(index));
+    });
+  };
+
+  for (const parsed of workflowDocs) {
     const workflowName = parsed?.name ?? "workflow";
     for (const [jobId, job] of Object.entries(parsed?.jobs ?? {})) {
       const steps = job?.steps ?? [];
-      const packStepIndex = steps.findIndex((step) =>
-        /\bnpm\s+pack\s+(?:\.\/)?packages\/cli\b/u.test(String(step?.run ?? "")),
-      );
+      const packStepIndex = steps.findIndex((step) => stepContainsCommand(step, isCliPackCommand));
       if (packStepIndex === -1) continue;
 
-      const distStepIndex = steps.findIndex((step) =>
-        /\bnpm\s+run\s+cli:dist\b/u.test(String(step?.run ?? "")),
-      );
+      const distStepIndex = steps.findIndex((step) => stepContainsCommand(step, isCliDistCommand));
       const upperBound = distStepIndex !== -1 && distStepIndex < packStepIndex ? distStepIndex : packStepIndex;
 
       let keylessBuilt = false;
       let cliTestedBeforePack = false;
       const jobHasPosthogKey = Boolean(job?.env && Object.hasOwn(job.env, "AIDEN_POSTHOG_PROJECT_KEY"));
+      const jobHasDistFlag = job?.env?.AIDEN_DISTRIBUTION_BUILD === "1";
 
       for (let stepIndex = 0; stepIndex < upperBound; stepIndex += 1) {
         const step = steps[stepIndex];
-        const run = String(step?.run ?? "");
-        if (!run) continue;
-        const stepHasPosthogKey =
+        if (isFailureOnlyCondition(step?.if)) continue;
+        if (typeof step?.run !== "string" || step.run.length === 0) continue;
+
+        const stepEnvHasPosthogKey =
           jobHasPosthogKey ||
-          Boolean(step?.env && Object.hasOwn(step.env, "AIDEN_POSTHOG_PROJECT_KEY")) ||
-          /\bAIDEN_POSTHOG_PROJECT_KEY\s*=/u.test(run);
+          Boolean(step?.env && Object.hasOwn(step.env, "AIDEN_POSTHOG_PROJECT_KEY"));
+        const stepEnvHasDistFlag = jobHasDistFlag || step?.env?.AIDEN_DISTRIBUTION_BUILD === "1";
+        let stepExportsPosthogKey = false;
+        let stepExportsDistFlag = false;
 
-        const runsTestCli = /\bnpm\s+run\s+test:cli\b/u.test(run);
-        const buildMatch = /\b(?:npm\s+run\s+cli:build|npm\s+--prefix\s+packages\/cli\s+run\s+build)\b/u.exec(run);
-        const testMatch = /\bnpm\s+--prefix\s+packages\/cli\s+test\b/u.exec(run);
+        for (const segment of extractWorkflowShellSegments(step.run)) {
+          const { assignments, index } = splitEnvironmentAssignments(segment.tokens);
+          const tokens = segment.tokens.slice(index);
 
-        if (runsTestCli) {
-          if (stepHasPosthogKey) {
-            throw new Error(
-              `Workflow "${workflowName}" job "${jobId}" must run CLI tests without AIDEN_POSTHOG_PROJECT_KEY before packing packages/cli`,
-            );
+          if (
+            tokens.length === 0 &&
+            assignments.some((item) => item.startsWith("AIDEN_POSTHOG_PROJECT_KEY="))
+          ) {
+            stepExportsPosthogKey = true;
+            continue;
           }
-          keylessBuilt = true;
-          cliTestedBeforePack = true;
-          break;
-        }
+          if (tokens[0] === "export") {
+            if (tokens.slice(1).some((item) => item === "AIDEN_POSTHOG_PROJECT_KEY" || item.startsWith("AIDEN_POSTHOG_PROJECT_KEY="))) {
+              stepExportsPosthogKey = true;
+            }
+            if (tokens.slice(1).includes("AIDEN_DISTRIBUTION_BUILD=1")) {
+              stepExportsDistFlag = true;
+            }
+            continue;
+          }
 
-        if (buildMatch && !stepHasPosthogKey) {
-          if (!testMatch || buildMatch.index < testMatch.index) {
+          if (!segment.unconditional) continue;
+
+          const hasPosthogKey =
+            stepEnvHasPosthogKey ||
+            stepExportsPosthogKey ||
+            assignments.some((item) => item.startsWith("AIDEN_POSTHOG_PROJECT_KEY="));
+          const hasDistFlag =
+            stepEnvHasDistFlag ||
+            stepExportsDistFlag ||
+            assignments.includes("AIDEN_DISTRIBUTION_BUILD=1");
+
+          if (extractNpmRunScriptName(tokens) === "test:cli") {
+            if (hasPosthogKey) {
+              throw new Error(
+                `Workflow "${workflowName}" job "${jobId}" must run CLI tests without AIDEN_POSTHOG_PROJECT_KEY before packing packages/cli`,
+              );
+            }
             keylessBuilt = true;
-          }
-        }
-        if (testMatch) {
-          if (stepHasPosthogKey) {
-            throw new Error(
-              `Workflow "${workflowName}" job "${jobId}" must run CLI tests without AIDEN_POSTHOG_PROJECT_KEY before packing packages/cli`,
-            );
-          }
-          if (keylessBuilt) {
             cliTestedBeforePack = true;
-            break;
+            continue;
+          }
+
+          if (isCliDistCommand(tokens)) {
+            keylessBuilt = false;
+            cliTestedBeforePack = false;
+            continue;
+          }
+
+          if (isCliBuildCommand(tokens)) {
+            if (hasPosthogKey || hasDistFlag) {
+              keylessBuilt = false;
+              cliTestedBeforePack = false;
+            } else {
+              keylessBuilt = true;
+            }
+            continue;
+          }
+
+          if (isCliTestCommand(tokens)) {
+            if (hasPosthogKey) {
+              throw new Error(
+                `Workflow "${workflowName}" job "${jobId}" must run CLI tests without AIDEN_POSTHOG_PROJECT_KEY before packing packages/cli`,
+              );
+            }
+            if (keylessBuilt) {
+              cliTestedBeforePack = true;
+            }
           }
         }
       }
@@ -1531,7 +2029,7 @@ function isCoveredScriptAlias(scriptName, {
 function validateRootManifestScripts({
   registry,
   packageManifest,
-  workflows,
+  invokedWorkflowScripts,
   visitedScripts,
   workflowCoverage,
   coveredTestFiles,
@@ -1573,7 +2071,7 @@ function validateRootManifestScripts({
   const staleManualScripts = [...manualScripts]
     .filter((scriptName) =>
       coveredScripts.has(scriptName) ||
-      workflowInvokesScript(workflows, scriptName) ||
+      invokedWorkflowScripts.has(scriptName) ||
       isCoveredScriptAlias(scriptName, aliasOptions),
     )
     .sort();
@@ -1718,7 +2216,14 @@ export function validateRegistry({
 
   // The serial graph only proves the files it reaches; a test file that no
   // script names would otherwise never run. Compare the files on disk instead.
-  const workflowCoverage = collectWorkflowScriptCoverage(registry, packageManifest, workflows, root);
+  const workflowDocs = parseWorkflowDocuments(workflows);
+  const invokedWorkflowScripts = collectInvokedWorkflowNpmScripts(workflowDocs);
+  const workflowCoverage = collectWorkflowScriptCoverage(
+    registry,
+    packageManifest,
+    invokedWorkflowScripts,
+    root,
+  );
   const workflowFiles = workflowCoverage.files;
   const manualFiles = manualTestFiles(registry, root);
   const staleManual = [...manualFiles].filter((file) => sourceFiles.has(file) || workflowFiles.has(file)).sort();
@@ -1738,7 +2243,7 @@ export function validateRegistry({
   const rootScripts = validateRootManifestScripts({
     registry,
     packageManifest,
-    workflows,
+    invokedWorkflowScripts,
     visitedScripts: new Set(source.visited),
     workflowCoverage,
     coveredTestFiles,
@@ -1753,13 +2258,13 @@ export function validateRegistry({
   });
   const iosUi = validateIosUiTests({
     discoveredIosUi,
-    workflows,
+    workflowDocs,
     registry,
   });
   const cliFiles = validateCliInventory({
     cliManifest,
     discoveredCliFiles,
-    workflows,
+    workflowDocs,
   });
 
   return {

@@ -92,12 +92,14 @@ cancelling CI never cancels a release. Runner capacity can still cause queueing.
   the `pretest:serial`/`test:serial` graph belongs to exactly one lane. New files
   require explicit assignment; unknown shell commands, environment changes, test
   flags and root `pretest`/`posttest` hooks fail the inventory check rather than
-  silently dropping or duplicating coverage. `validateRegistry()` in
-  `scripts/ci-test-registry.mjs` runs static multi-ecosystem manifest discovery
-  on Ubuntu in `jobs.policy` without requiring macOS runners or Xcode:
+  silently dropping or duplicating coverage. `scripts/ci-test-registry.mjs` loads
+  `yaml` lazily so `jobs.changes` (`ci-changes.mjs`, `ci-select-tests.mjs`) stays
+  dependency-free before `npm ci`, while `validateRegistry()` runs static
+  multi-ecosystem manifest discovery on Ubuntu in `jobs.policy` without requiring
+  macOS runners or Xcode:
   - **JS/TS test files and root scripts**: every `*.test.*` file under `main/`,
     `renderer/` and `scripts/` must be reachable from the serial graph, from a
-    `workflowScripts` entry (npm scripts a workflow invokes directly via
+    `workflowScripts` entry (npm scripts a non-failure workflow step executes via
     `npm run <script>`), or from the `manual` allowlist with a reason; every root
     `package.json` `test:*` script and `build:native` must be covered by the
     serial graph, `workflowScripts`, a covered local alias, or `manualScripts`.
@@ -107,9 +109,10 @@ cancelling CI never cancels a release. Runner capacity can still cause queueing.
     `test:form-fill:native`) or be allowlisted in `manualSwiftTargets` with a
     reason.
   - **iOS UI tests (`ios/AidenOnTheGoUITests/*.swift`)**: every `XCTestCase`
-    subclass and zero-argument `func test*()` method must be selected by an
-    `-only-testing:AidenOnTheGoUITests/...` flag in `ci.yml` or listed in
-    `manualIosUiTests` with a reason.
+    subclass (including cross-file `extension` methods) and zero-argument
+    `func test*()` method must be selected identically in `jobs.ios` and
+    `jobs.ios-27` via `-only-testing:AidenOnTheGoUITests/...` flags in `ci.yml`
+    or listed in `manualIosUiTests` with a reason.
   - **Headless CLI (`packages/cli/tests/*.test.mjs`)**: every CLI test file on
     disk (excluding `fixtures/`) must appear in `packages/cli/package.json`
     `scripts.test`, and any workflow packing `./packages/cli`

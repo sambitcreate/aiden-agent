@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { readdir, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { copyFile, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { URL } from "node:url";
 import { parse } from "yaml";
@@ -8,7 +11,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { AREA_NAMES } from "./ci-changes.mjs";
 import { PLAN_DECISIONS, REQUIRED_JOB_RULES } from "./ci-required.mjs";
-import { readRegistry } from "./ci-test-registry.mjs";
+import { PROJECT_ROOT, readRegistry } from "./ci-test-registry.mjs";
 
 const workflowUrl = new URL("../.github/workflows/ci.yml", import.meta.url);
 const releaseWorkflowUrl = new URL("../.github/workflows/release.yml", import.meta.url);
@@ -679,4 +682,130 @@ test("GitHub issue forms and chooser config are valid YAML matching GitHub's req
     assert.ok(inputCount > 0, `${name}: issue form must contain at least one non-markdown input`);
   }
 });
+
+test("CI scripts executed before npm ci run cleanly in an isolated checkout without node_modules", async () => {
+  const { jobs } = parse(await readFile(workflowUrl, "utf8"));
+  const changeNodeScripts = jobs.changes.steps.flatMap((step) =>
+    [...String(step.run ?? "").matchAll(/\bnode\s+(scripts\/[^\s"']+\.mjs)\b/gu)].map((match) => match[1]),
+  );
+  assert.deepEqual(changeNodeScripts, [
+    "scripts/ci-changes.mjs",
+    "scripts/ci-select-tests.mjs",
+  ]);
+  assert.ok(
+    !jobs.changes.steps.some((step) => String(step.run ?? "").includes("npm ci")),
+    "jobs.changes must stay dependency-free for fast changed-area routing",
+  );
+
+  const dependencyFreeJobScripts = new Set();
+  for (const job of Object.values(jobs)) {
+    const steps = job?.steps ?? [];
+    if (steps.some((step) => String(step?.run ?? "").includes("npm ci"))) continue;
+    for (const step of steps) {
+      for (const match of String(step?.run ?? "").matchAll(/\bnode\s+(scripts\/[^\s"']+\.mjs)\b/gu)) {
+        dependencyFreeJobScripts.add(match[1]);
+      }
+    }
+  }
+  assert.ok(dependencyFreeJobScripts.size >= 5);
+
+  const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-pre-npm-ci-"));
+  const worktreeDir = path.join(tmpRoot, "repo");
+  const githubOutputPath = path.join(tmpRoot, "github-output.txt");
+  const stepSummaryPath = path.join(tmpRoot, "step-summary.md");
+
+  try {
+    const addWorktree = spawnSync("git", ["worktree", "add", "--detach", worktreeDir, "HEAD"], {
+      cwd: PROJECT_ROOT,
+      encoding: "utf8",
+    });
+    assert.equal(addWorktree.status, 0, addWorktree.stderr);
+
+    // Sync working-tree manifests and scripts into the detached worktree so uncommitted changes are tested.
+    await copyFile(path.join(PROJECT_ROOT, "package.json"), path.join(worktreeDir, "package.json"));
+    for (const entry of await readdir(path.join(PROJECT_ROOT, "scripts"), { withFileTypes: true })) {
+      if (!entry.isFile() || !/\.(?:mjs|cjs|js|json)$/u.test(entry.name)) continue;
+      await copyFile(
+        path.join(PROJECT_ROOT, "scripts", entry.name),
+        path.join(worktreeDir, "scripts", entry.name),
+      );
+    }
+
+    assert.equal(existsSync(path.join(tmpRoot, "node_modules")), false);
+    assert.equal(existsSync(path.join(worktreeDir, "node_modules")), false);
+    await writeFile(githubOutputPath, "");
+    await writeFile(stepSummaryPath, "");
+
+    const headSha = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: worktreeDir,
+      encoding: "utf8",
+    }).stdout.trim();
+    const parentRes = spawnSync("git", ["rev-parse", "HEAD~1"], {
+      cwd: worktreeDir,
+      encoding: "utf8",
+    });
+    const baseSha = parentRes.status === 0 ? parentRes.stdout.trim() : headSha;
+
+    const env = {
+      ...process.env,
+      NODE_PATH: "",
+      GITHUB_EVENT_NAME: "pull_request",
+      FORCE_FULL: "false",
+      BASE_SHA: baseSha,
+      HEAD_SHA: headSha,
+      GITHUB_OUTPUT: githubOutputPath,
+      GITHUB_STEP_SUMMARY: stepSummaryPath,
+    };
+
+    for (const scriptPath of [...dependencyFreeJobScripts].sort()) {
+      const imported = spawnSync(
+        process.execPath,
+        ["--input-type=module", "-e", "await import(process.env.AIDEN_IMPORT_TARGET);"],
+        {
+          cwd: worktreeDir,
+          env: { ...env, AIDEN_IMPORT_TARGET: `./${scriptPath}` },
+          encoding: "utf8",
+        },
+      );
+      assert.equal(
+        imported.status,
+        0,
+        `Expected ${scriptPath} to import without node_modules:\n${imported.stdout}\n${imported.stderr}`,
+      );
+    }
+
+    for (const command of [
+      ...changeNodeScripts.map((scriptPath) => [scriptPath]),
+      ["scripts/ci-e2e-shards.mjs", "1/3", "--list"],
+    ]) {
+      const result = spawnSync(process.execPath, command, {
+        cwd: worktreeDir,
+        env,
+        encoding: "utf8",
+      });
+      assert.equal(
+        result.status,
+        0,
+        `Expected node ${command.join(" ")} to succeed without node_modules:\n${result.stdout}\n${result.stderr}`,
+      );
+    }
+
+    const selection = JSON.parse(
+      await readFile(path.join(worktreeDir, "ci-test-selection.json"), "utf8"),
+    );
+    assert.ok(isPlainObject(selection.unit));
+    assert.ok(isPlainObject(selection.e2e));
+    assert.ok(isPlainObject(selection.macE2E));
+    const githubOutput = await readFile(githubOutputPath, "utf8");
+    assert.match(githubOutput, /^desktop=(?:true|false)$/mu);
+    assert.match(githubOutput, /^mac_e2e=(?:true|false)$/mu);
+  } finally {
+    spawnSync("git", ["worktree", "remove", "--force", worktreeDir], {
+      cwd: PROJECT_ROOT,
+      encoding: "utf8",
+    });
+    await rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
 
