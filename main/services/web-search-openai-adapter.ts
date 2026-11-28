@@ -1,10 +1,19 @@
 /** OpenAI Responses API web-search adapter (API-key or explicit bound-auth mode). */
 
-import { isRecord, normalizeWebSearchSourceUrl } from "./web-search-adapter-kit.js";
+import {
+  codePointLength,
+  hasWebSearchControlCharacter,
+  isRecord,
+  normalizeWebSearchSourceUrl,
+  utf8ByteLength,
+} from "./web-search-adapter-kit.js";
 import {
   createWebSearchJsonAdapter,
+  createWebSearchResultCollector,
+  extractWebSearchApiKeyCredential,
+  freezeWebSearchJsonRequest,
+  isValidWebSearchResultCount,
   normalizeWebSearchJsonInput,
-  normalizeWebSearchApiKey,
   requireWebSearchApiKey,
   type WebSearchJsonAdapterOptions,
   type WebSearchJsonAdapterDefinition,
@@ -26,44 +35,14 @@ export interface OpenAIWebSearchApiKeyCredential {
 
 export type OpenAIWebSearchCredential = OpenAIWebSearchApiKeyCredential | string;
 
-function validMaximumResults(maximumResults: number): boolean {
-  return Number.isSafeInteger(maximumResults) && maximumResults >= 1 && maximumResults <= 10;
-}
-
-function credentialValue(value: unknown): string {
-  if (typeof value === "string") return normalizeWebSearchApiKey("openai", value);
-  if (isRecord(value) && value.mode === "api-key" && typeof value.apiKey === "string") {
-    return normalizeWebSearchApiKey("openai", value.apiKey);
-  }
-  throw webSearchError("auth", "openai");
-}
-
-function requestContract(
-  body: string,
-  headers: Readonly<Record<string, string>>,
-): WebSearchJsonRequestContract {
-  return Object.freeze({
-    url: OPENAI_WEB_SEARCH_ENDPOINT,
-    init: Object.freeze({
-      method: "POST" as const,
-      redirect: "error" as const,
-      credentials: "omit" as const,
-      cache: "no-store" as const,
-      referrerPolicy: "no-referrer" as const,
-      headers: Object.freeze({ ...headers }),
-      body,
-    }),
-  });
-}
-
 function modelId(value: unknown): string {
   if (typeof value !== "string") throw webSearchError("config", "openai");
   const normalized = value.trim();
   if (
     !normalized ||
-    /\p{Cc}/u.test(normalized) ||
-    Array.from(normalized).length > 256 ||
-    new TextEncoder().encode(normalized).byteLength > 1_024
+    hasWebSearchControlCharacter(normalized) ||
+    codePointLength(normalized) > 256 ||
+    utf8ByteLength(normalized) > 1_024
   ) {
     throw webSearchError("config", "openai");
   }
@@ -85,7 +64,7 @@ function verifiedExistingAuth(value: WebSearchResolvedExistingAuth | undefined):
   ) {
     throw webSearchError("config", "openai");
   }
-  const apiKey = credentialValue(value.credential);
+  const apiKey = extractWebSearchApiKeyCredential("openai", value.credential);
   const headers = value.headers;
   const keys = Object.keys(headers).sort();
   if (
@@ -122,7 +101,7 @@ function buildRequestValues(
   ) {
     throw webSearchError("config", "openai");
   }
-  const apiKey = bound?.apiKey ?? credentialValue(credential);
+  const apiKey = bound?.apiKey ?? extractWebSearchApiKeyCredential("openai", credential);
   const selectedModel = bound?.modelId ?? OPENAI_WEB_SEARCH_MODEL;
   const body = JSON.stringify({
     model: selectedModel,
@@ -131,14 +110,16 @@ function buildRequestValues(
     include: ["web_search_call.action.sources"],
     store: false,
   });
-  return requestContract(
-    body,
-    bound?.headers ?? {
+  return freezeWebSearchJsonRequest({
+    url: OPENAI_WEB_SEARCH_ENDPOINT,
+    method: "POST",
+    headers: bound?.headers ?? {
       Accept: "application/json",
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
-  );
+    body,
+  });
 }
 
 /** Build the fixed-origin OpenAI request without performing I/O. */
@@ -206,30 +187,14 @@ export function parseOpenAIWebSearchResponse(
   payload: unknown,
   maximumResults: number,
 ): { results: readonly WebSearchJsonRawResult[] } | undefined {
-  if (!validMaximumResults(maximumResults) || !isRecord(payload)) return undefined;
+  if (!isValidWebSearchResultCount(maximumResults) || !isRecord(payload)) return undefined;
   const output = payload.output;
   if (!Array.isArray(output)) return undefined;
 
   let webSearchCallSeen = false;
-  const results: WebSearchJsonRawResult[] = [];
-  const seen = new Set<string>();
+  const collector = createWebSearchResultCollector({ backfillEmptyText: true });
   const add = (value: unknown, text = "") => {
-    const result = sourceResult(value, results.length, text);
-    if (!result || typeof result.url !== "string") return;
-    if (seen.has(result.url)) {
-      const previous = results.findIndex((entry) => entry.url === result.url);
-      if (
-        previous >= 0 &&
-        (results[previous]?.text === undefined || results[previous]?.text === "") &&
-        typeof result.text === "string" &&
-        result.text.length > 0
-      ) {
-        results[previous] = { ...results[previous], text: result.text };
-      }
-      return;
-    }
-    seen.add(result.url);
-    results.push(result);
+    collector.add(sourceResult(value, collector.size, text));
   };
 
   for (const item of output) {
@@ -260,7 +225,7 @@ export function parseOpenAIWebSearchResponse(
   }
 
   if (!webSearchCallSeen) return undefined;
-  return { results: results.slice(0, maximumResults) };
+  return collector.results(maximumResults);
 }
 
 const OPENAI_DEFINITION: WebSearchJsonAdapterDefinition = Object.freeze({

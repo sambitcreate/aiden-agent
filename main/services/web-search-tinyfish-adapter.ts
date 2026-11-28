@@ -1,9 +1,12 @@
 /** TinyFish Search API adapter (API-key mode only). */
 
-import { isRecord, normalizeWebSearchSourceUrl } from "./web-search-adapter-kit.js";
+import { isRecord } from "./web-search-adapter-kit.js";
 import {
+  collectUniqueWebSearchResults,
   createWebSearchJsonAdapter,
-  normalizeWebSearchApiKey,
+  extractWebSearchApiKeyCredential,
+  freezeWebSearchJsonRequest,
+  isValidWebSearchResultCount,
   normalizeWebSearchJsonInput,
   requireWebSearchApiKey,
   type WebSearchJsonAdapterDefinition,
@@ -25,40 +28,23 @@ export interface TinyFishWebSearchApiKeyCredential {
 
 export type TinyFishWebSearchCredential = TinyFishWebSearchApiKeyCredential | string;
 
-function credentialValue(value: unknown): string {
-  if (typeof value === "string") return normalizeWebSearchApiKey("tinyfish", value);
-  if (isRecord(value) && value.mode === "api-key" && typeof value.apiKey === "string") {
-    return normalizeWebSearchApiKey("tinyfish", value.apiKey);
-  }
-  throw webSearchError("auth", "tinyfish");
-}
-
-function requestContract(query: string, apiKey: string): WebSearchJsonRequestContract {
-  const url = new URL(TINYFISH_WEB_SEARCH_ENDPOINT);
-  url.searchParams.set("query", query);
-  return Object.freeze({
-    url: url.toString(),
-    init: Object.freeze({
-      method: "GET" as const,
-      redirect: "error" as const,
-      credentials: "omit" as const,
-      cache: "no-store" as const,
-      referrerPolicy: "no-referrer" as const,
-      headers: Object.freeze({
-        Accept: "application/json",
-        "X-API-Key": apiKey,
-      }),
-    }),
-  });
-}
-
 function buildRequestValues(
   queryValue: unknown,
   numResultsValue: unknown,
   credential: unknown,
 ): WebSearchJsonRequestContract {
   const { query } = normalizeWebSearchJsonInput("tinyfish", queryValue, numResultsValue);
-  return requestContract(query, credentialValue(credential));
+  const apiKey = extractWebSearchApiKeyCredential("tinyfish", credential);
+  const url = new URL(TINYFISH_WEB_SEARCH_ENDPOINT);
+  url.searchParams.set("query", query);
+  return freezeWebSearchJsonRequest({
+    url: url.toString(),
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      "X-API-Key": apiKey,
+    },
+  });
 }
 
 /** Build the fixed-origin TinyFish Search request without performing I/O. */
@@ -76,30 +62,17 @@ export function parseTinyFishWebSearchResponse(
   maximumResults: number,
 ): { results: readonly WebSearchJsonRawResult[] } | undefined {
   if (
-    !Number.isSafeInteger(maximumResults) ||
-    maximumResults < 1 ||
-    maximumResults > 10 ||
+    !isValidWebSearchResultCount(maximumResults) ||
     !isRecord(payload) ||
     !Array.isArray(payload.results)
   ) {
     return undefined;
   }
 
-  const results: WebSearchJsonRawResult[] = [];
-  const seen = new Set<string>();
-  for (const item of payload.results) {
-    if (!isRecord(item)) continue;
-    const url = normalizeWebSearchSourceUrl(item.url);
-    if (!url || seen.has(url)) continue;
-    seen.add(url);
-    results.push({
-      title: item.title,
-      url,
-      text: item.snippet,
-    });
-    if (results.length >= maximumResults) break;
-  }
-  return { results };
+  return collectUniqueWebSearchResults(payload.results, maximumResults, (item) => ({
+    title: item.title,
+    text: item.snippet,
+  }));
 }
 
 const TINYFISH_DEFINITION: WebSearchJsonAdapterDefinition = Object.freeze({

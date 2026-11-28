@@ -1,9 +1,12 @@
 /** Parallel Search REST API adapter (API-key mode only). */
 
-import { isRecord, normalizeWebSearchSourceUrl } from "./web-search-adapter-kit.js";
+import { isRecord } from "./web-search-adapter-kit.js";
 import {
+  collectUniqueWebSearchResults,
   createWebSearchJsonAdapter,
-  normalizeWebSearchApiKey,
+  extractWebSearchApiKeyCredential,
+  freezeWebSearchJsonRequest,
+  isValidWebSearchResultCount,
   normalizeWebSearchJsonInput,
   requireWebSearchApiKey,
   type WebSearchJsonAdapterDefinition,
@@ -24,44 +27,6 @@ export interface ParallelWebSearchApiKeyCredential {
 
 export type ParallelWebSearchCredential = ParallelWebSearchApiKeyCredential | string;
 
-function credentialValue(value: unknown): string {
-  if (typeof value === "string") return normalizeWebSearchApiKey("parallel", value);
-  if (isRecord(value) && value.mode === "api-key" && typeof value.apiKey === "string") {
-    return normalizeWebSearchApiKey("parallel", value.apiKey);
-  }
-  throw webSearchError("auth", "parallel");
-}
-
-function requestContract(
-  query: string,
-  numResults: number,
-  apiKey: string,
-): WebSearchJsonRequestContract {
-  const body = JSON.stringify({
-    objective: query,
-    search_queries: [query],
-    advanced_settings: {
-      max_results: numResults,
-    },
-  });
-  return Object.freeze({
-    url: PARALLEL_WEB_SEARCH_ENDPOINT,
-    init: Object.freeze({
-      method: "POST" as const,
-      redirect: "error" as const,
-      credentials: "omit" as const,
-      cache: "no-store" as const,
-      referrerPolicy: "no-referrer" as const,
-      headers: Object.freeze({
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-      }),
-      body,
-    }),
-  });
-}
-
 function buildRequestValues(
   queryValue: unknown,
   numResultsValue: unknown,
@@ -72,7 +37,23 @@ function buildRequestValues(
     queryValue,
     numResultsValue,
   );
-  return requestContract(query, numResults, credentialValue(credential));
+  const apiKey = extractWebSearchApiKeyCredential("parallel", credential);
+  return freezeWebSearchJsonRequest({
+    url: PARALLEL_WEB_SEARCH_ENDPOINT,
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+    },
+    body: JSON.stringify({
+      objective: query,
+      search_queries: [query],
+      advanced_settings: {
+        max_results: numResults,
+      },
+    }),
+  });
 }
 
 /** Build the fixed-origin Parallel REST request without performing I/O. */
@@ -97,30 +78,17 @@ export function parseParallelWebSearchResponse(
   maximumResults: number,
 ): { results: readonly WebSearchJsonRawResult[] } | undefined {
   if (
-    !Number.isSafeInteger(maximumResults) ||
-    maximumResults < 1 ||
-    maximumResults > 10 ||
+    !isValidWebSearchResultCount(maximumResults) ||
     !isRecord(payload) ||
     !Array.isArray(payload.results)
   ) {
     return undefined;
   }
 
-  const results: WebSearchJsonRawResult[] = [];
-  const seen = new Set<string>();
-  for (const item of payload.results) {
-    if (!isRecord(item)) continue;
-    const url = normalizeWebSearchSourceUrl(item.url);
-    if (!url || seen.has(url)) continue;
-    seen.add(url);
-    results.push({
-      title: item.title,
-      url,
-      text: excerptsText(item.excerpts),
-    });
-    if (results.length >= maximumResults) break;
-  }
-  return { results };
+  return collectUniqueWebSearchResults(payload.results, maximumResults, (item) => ({
+    title: item.title,
+    text: excerptsText(item.excerpts),
+  }));
 }
 
 const PARALLEL_DEFINITION: WebSearchJsonAdapterDefinition = Object.freeze({

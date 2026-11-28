@@ -1,9 +1,12 @@
 /** Search1API Search endpoint adapter (API-key mode only). */
 
-import { isRecord, normalizeWebSearchSourceUrl } from "./web-search-adapter-kit.js";
+import { isRecord } from "./web-search-adapter-kit.js";
 import {
+  collectUniqueWebSearchResults,
   createWebSearchJsonAdapter,
-  normalizeWebSearchApiKey,
+  extractWebSearchApiKeyCredential,
+  freezeWebSearchJsonRequest,
+  isValidWebSearchResultCount,
   normalizeWebSearchJsonInput,
   requireWebSearchApiKey,
   type WebSearchJsonAdapterDefinition,
@@ -24,33 +27,6 @@ export interface Search1APIWebSearchApiKeyCredential {
 
 export type Search1APIWebSearchCredential = Search1APIWebSearchApiKeyCredential | string;
 
-function credentialValue(value: unknown): string {
-  if (typeof value === "string") return normalizeWebSearchApiKey("search1api", value);
-  if (isRecord(value) && value.mode === "api-key" && typeof value.apiKey === "string") {
-    return normalizeWebSearchApiKey("search1api", value.apiKey);
-  }
-  throw webSearchError("auth", "search1api");
-}
-
-function requestContract(body: string, apiKey: string): WebSearchJsonRequestContract {
-  return Object.freeze({
-    url: SEARCH1API_WEB_SEARCH_ENDPOINT,
-    init: Object.freeze({
-      method: "POST" as const,
-      redirect: "error" as const,
-      credentials: "omit" as const,
-      cache: "no-store" as const,
-      referrerPolicy: "no-referrer" as const,
-      headers: Object.freeze({
-        Accept: "application/json",
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      }),
-      body,
-    }),
-  });
-}
-
 function buildRequestValues(
   queryValue: unknown,
   numResultsValue: unknown,
@@ -61,14 +37,23 @@ function buildRequestValues(
     queryValue,
     numResultsValue,
   );
-  const body = JSON.stringify({
-    query,
-    max_results: numResults,
-    // Deep Search is a separate paid content operation. This adapter only
-    // handles the model-facing bounded search request.
-    crawl_results: 0,
+  const apiKey = extractWebSearchApiKeyCredential("search1api", credential);
+  return freezeWebSearchJsonRequest({
+    url: SEARCH1API_WEB_SEARCH_ENDPOINT,
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      query,
+      max_results: numResults,
+      // Deep Search is a separate paid content operation. This adapter only
+      // handles the model-facing bounded search request.
+      crawl_results: 0,
+    }),
   });
-  return requestContract(body, credentialValue(credential));
 }
 
 /** Build the fixed-origin Search1API request without performing I/O. */
@@ -86,30 +71,22 @@ export function parseSearch1APIWebSearchResponse(
   maximumResults: number,
 ): { results: readonly WebSearchJsonRawResult[] } | undefined {
   if (
-    !Number.isSafeInteger(maximumResults) ||
-    maximumResults < 1 ||
-    maximumResults > 10 ||
+    !isValidWebSearchResultCount(maximumResults) ||
     !isRecord(payload) ||
     !Array.isArray(payload.results)
   ) {
     return undefined;
   }
 
-  const results: WebSearchJsonRawResult[] = [];
-  const seen = new Set<string>();
-  for (const item of payload.results) {
-    if (!isRecord(item)) continue;
-    const url = normalizeWebSearchSourceUrl(item.link);
-    if (!url || seen.has(url)) continue;
-    seen.add(url);
-    results.push({
+  return collectUniqueWebSearchResults(
+    payload.results,
+    maximumResults,
+    (item) => ({
       title: item.title,
-      url,
       text: item.snippet ?? item.content,
-    });
-    if (results.length >= maximumResults) break;
-  }
-  return { results };
+    }),
+    (item) => item.link,
+  );
 }
 
 const SEARCH1API_DEFINITION: WebSearchJsonAdapterDefinition = Object.freeze({

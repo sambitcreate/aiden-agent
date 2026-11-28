@@ -1,9 +1,12 @@
 /** Valyu hosted web-search adapter (API-key mode only). */
 
-import { isRecord, normalizeWebSearchSourceUrl } from "./web-search-adapter-kit.js";
+import { isRecord } from "./web-search-adapter-kit.js";
 import {
+  collectUniqueWebSearchResults,
   createWebSearchJsonAdapter,
-  normalizeWebSearchApiKey,
+  extractWebSearchApiKeyCredential,
+  freezeWebSearchJsonRequest,
+  isValidWebSearchResultCount,
   normalizeWebSearchJsonInput,
   type WebSearchJsonAdapterDefinition,
   type WebSearchJsonAdapterOptions,
@@ -24,51 +27,29 @@ export interface ValyuWebSearchApiKeyCredential {
 
 export type ValyuWebSearchCredential = ValyuWebSearchApiKeyCredential | string;
 
-function credentialValue(value: unknown): string {
-  if (typeof value === "string") return normalizeWebSearchApiKey("valyu", value);
-  if (isRecord(value) && value.mode === "api-key" && typeof value.apiKey === "string") {
-    return normalizeWebSearchApiKey("valyu", value.apiKey);
-  }
-  throw webSearchError("auth", "valyu");
-}
-
-function requestContract(
-  query: string,
-  numResults: number,
-  apiKey: string,
-): WebSearchJsonRequestContract {
-  const body = JSON.stringify({
-    query,
-    max_num_results: numResults,
-    // Keep this adapter on public web sources; the Valyu default also searches
-    // proprietary sources and can incur a different cost profile.
-    search_type: "web",
-  });
-  return Object.freeze({
-    url: VALYU_WEB_SEARCH_ENDPOINT,
-    init: Object.freeze({
-      method: "POST" as const,
-      redirect: "error" as const,
-      credentials: "omit" as const,
-      cache: "no-store" as const,
-      referrerPolicy: "no-referrer" as const,
-      headers: Object.freeze({
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        "X-API-Key": apiKey,
-      }),
-      body,
-    }),
-  });
-}
-
 function buildRequestValues(
   queryValue: unknown,
   numResultsValue: unknown,
   credential: ValyuWebSearchCredential,
 ): WebSearchJsonRequestContract {
   const { query, numResults } = normalizeWebSearchJsonInput("valyu", queryValue, numResultsValue);
-  return requestContract(query, numResults, credentialValue(credential));
+  const apiKey = extractWebSearchApiKeyCredential("valyu", credential);
+  return freezeWebSearchJsonRequest({
+    url: VALYU_WEB_SEARCH_ENDPOINT,
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-API-Key": apiKey,
+    },
+    body: JSON.stringify({
+      query,
+      max_num_results: numResults,
+      // Keep this adapter on public web sources; the Valyu default also searches
+      // proprietary sources and can incur a different cost profile.
+      search_type: "web",
+    }),
+  });
 }
 
 /** Build the fixed-origin Valyu request without performing I/O. */
@@ -86,9 +67,7 @@ export function parseValyuWebSearchResponse(
   maximumResults: number,
 ): { results: readonly WebSearchJsonRawResult[] } | undefined {
   if (
-    !Number.isSafeInteger(maximumResults) ||
-    maximumResults < 1 ||
-    maximumResults > 10 ||
+    !isValidWebSearchResultCount(maximumResults) ||
     !isRecord(payload) ||
     payload.success !== true ||
     !Array.isArray(payload.results)
@@ -96,23 +75,16 @@ export function parseValyuWebSearchResponse(
     return undefined;
   }
 
-  const results: WebSearchJsonRawResult[] = [];
-  const seen = new Set<string>();
-  for (const item of payload.results) {
-    if (!isRecord(item)) continue;
-    const url = normalizeWebSearchSourceUrl(item.url);
-    if (!url || seen.has(url) || typeof item.title !== "string") continue;
+  return collectUniqueWebSearchResults(payload.results, maximumResults, (item) => {
+    if (typeof item.title !== "string") return undefined;
     const text =
       typeof item.content === "string"
         ? item.content
         : typeof item.description === "string"
           ? item.description
           : "";
-    seen.add(url);
-    results.push({ title: item.title, url, text });
-    if (results.length >= maximumResults) break;
-  }
-  return { results };
+    return { title: item.title, text };
+  });
 }
 
 const VALYU_DEFINITION: WebSearchJsonAdapterDefinition = Object.freeze({

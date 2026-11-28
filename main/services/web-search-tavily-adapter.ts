@@ -1,9 +1,12 @@
 /** Tavily Search API adapter (API-key mode only). */
 
-import { isRecord, normalizeWebSearchSourceUrl } from "./web-search-adapter-kit.js";
+import { isRecord } from "./web-search-adapter-kit.js";
 import {
+  collectUniqueWebSearchResults,
   createWebSearchJsonAdapter,
-  normalizeWebSearchApiKey,
+  extractWebSearchApiKeyCredential,
+  freezeWebSearchJsonRequest,
+  isValidWebSearchResultCount,
   normalizeWebSearchJsonInput,
   requireWebSearchApiKey,
   type WebSearchJsonAdapterDefinition,
@@ -12,7 +15,6 @@ import {
   type WebSearchJsonRequestContract,
 } from "./web-search-json-adapter.js";
 import type { WebSearchAdapter, WebSearchAdapterRequest } from "./web-search-provider-registry.js";
-import { webSearchError } from "./web-search-core.js";
 
 export const TAVILY_WEB_SEARCH_ORIGIN = "https://api.tavily.com";
 export const TAVILY_WEB_SEARCH_ENDPOINT = `${TAVILY_WEB_SEARCH_ORIGIN}/search`;
@@ -24,45 +26,27 @@ export interface TavilyWebSearchApiKeyCredential {
 
 export type TavilyWebSearchCredential = TavilyWebSearchApiKeyCredential | string;
 
-function credentialValue(value: unknown): string {
-  if (typeof value === "string") return normalizeWebSearchApiKey("tavily", value);
-  if (isRecord(value) && value.mode === "api-key" && typeof value.apiKey === "string") {
-    return normalizeWebSearchApiKey("tavily", value.apiKey);
-  }
-  throw webSearchError("auth", "tavily");
-}
-
-function requestContract(body: string, apiKey: string): WebSearchJsonRequestContract {
-  return Object.freeze({
-    url: TAVILY_WEB_SEARCH_ENDPOINT,
-    init: Object.freeze({
-      method: "POST" as const,
-      redirect: "error" as const,
-      credentials: "omit" as const,
-      cache: "no-store" as const,
-      referrerPolicy: "no-referrer" as const,
-      headers: Object.freeze({
-        Accept: "application/json",
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      }),
-      body,
-    }),
-  });
-}
-
 function buildRequestValues(
   queryValue: unknown,
   numResultsValue: unknown,
   credential: unknown,
 ): WebSearchJsonRequestContract {
   const { query, numResults } = normalizeWebSearchJsonInput("tavily", queryValue, numResultsValue);
-  const body = JSON.stringify({
-    query,
-    search_depth: "basic",
-    max_results: numResults,
+  const apiKey = extractWebSearchApiKeyCredential("tavily", credential);
+  return freezeWebSearchJsonRequest({
+    url: TAVILY_WEB_SEARCH_ENDPOINT,
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      query,
+      search_depth: "basic",
+      max_results: numResults,
+    }),
   });
-  return requestContract(body, credentialValue(credential));
 }
 
 /** Build the fixed-origin Tavily request without performing I/O. */
@@ -79,26 +63,18 @@ export function parseTavilyWebSearchResponse(
   payload: unknown,
   maximumResults: number,
 ): { results: readonly WebSearchJsonRawResult[] } | undefined {
-  if (!Number.isSafeInteger(maximumResults) || maximumResults < 1 || maximumResults > 10) {
+  if (
+    !isValidWebSearchResultCount(maximumResults) ||
+    !isRecord(payload) ||
+    !Array.isArray(payload.results)
+  ) {
     return undefined;
   }
-  if (!isRecord(payload) || !Array.isArray(payload.results)) return undefined;
 
-  const results: WebSearchJsonRawResult[] = [];
-  const seen = new Set<string>();
-  for (const item of payload.results) {
-    if (!isRecord(item)) continue;
-    const url = normalizeWebSearchSourceUrl(item.url);
-    if (!url || seen.has(url)) continue;
-    seen.add(url);
-    results.push({
-      title: item.title,
-      url,
-      text: item.content ?? item.raw_content,
-    });
-    if (results.length >= maximumResults) break;
-  }
-  return { results };
+  return collectUniqueWebSearchResults(payload.results, maximumResults, (item) => ({
+    title: item.title,
+    text: item.content ?? item.raw_content,
+  }));
 }
 
 const TAVILY_DEFINITION: WebSearchJsonAdapterDefinition = Object.freeze({

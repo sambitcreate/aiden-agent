@@ -1,9 +1,12 @@
 /** AnySearch hosted web-search adapter (anonymous or API-key mode). */
 
-import { isRecord, normalizeWebSearchSourceUrl } from "./web-search-adapter-kit.js";
+import { isRecord } from "./web-search-adapter-kit.js";
 import {
+  collectUniqueWebSearchResults,
   createWebSearchJsonAdapter,
-  normalizeWebSearchApiKey,
+  extractWebSearchApiKeyCredential,
+  freezeWebSearchJsonRequest,
+  isValidWebSearchResultCount,
   normalizeWebSearchJsonInput,
   type WebSearchJsonAdapterDefinition,
   type WebSearchJsonAdapterOptions,
@@ -38,39 +41,6 @@ function credentialMode(value: unknown): "anonymous" | "api-key" {
   throw webSearchError("auth", "anysearch");
 }
 
-function credentialValue(value: unknown): string {
-  if (typeof value === "string") return normalizeWebSearchApiKey("anysearch", value);
-  if (isRecord(value) && value.mode === "api-key" && typeof value.apiKey === "string") {
-    return normalizeWebSearchApiKey("anysearch", value.apiKey);
-  }
-  throw webSearchError("auth", "anysearch");
-}
-
-function requestContract(
-  query: string,
-  numResults: number,
-  credential: AnySearchWebSearchCredential,
-): WebSearchJsonRequestContract {
-  const mode = credentialMode(credential);
-  const body = JSON.stringify({ query, max_results: numResults });
-  return Object.freeze({
-    url: ANYSEARCH_WEB_SEARCH_ENDPOINT,
-    init: Object.freeze({
-      method: "POST" as const,
-      redirect: "error" as const,
-      credentials: "omit" as const,
-      cache: "no-store" as const,
-      referrerPolicy: "no-referrer" as const,
-      headers: Object.freeze({
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        ...(mode === "api-key" ? { Authorization: `Bearer ${credentialValue(credential)}` } : {}),
-      }),
-      body,
-    }),
-  });
-}
-
 function buildRequestValues(
   queryValue: unknown,
   numResultsValue: unknown,
@@ -81,7 +51,19 @@ function buildRequestValues(
     queryValue,
     numResultsValue,
   );
-  return requestContract(query, numResults, credential);
+  const mode = credentialMode(credential);
+  return freezeWebSearchJsonRequest({
+    url: ANYSEARCH_WEB_SEARCH_ENDPOINT,
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      ...(mode === "api-key"
+        ? { Authorization: `Bearer ${extractWebSearchApiKeyCredential("anysearch", credential)}` }
+        : {}),
+    },
+    body: JSON.stringify({ query, max_results: numResults }),
+  });
 }
 
 /** Build the fixed-origin AnySearch request without performing I/O. */
@@ -103,9 +85,7 @@ export function parseAnySearchWebSearchResponse(
   maximumResults: number,
 ): { results: readonly WebSearchJsonRawResult[] } | undefined {
   if (
-    !Number.isSafeInteger(maximumResults) ||
-    maximumResults < 1 ||
-    maximumResults > 10 ||
+    !isValidWebSearchResultCount(maximumResults) ||
     !isRecord(payload) ||
     payload.code !== 0 ||
     !isRecord(payload.data) ||
@@ -115,21 +95,13 @@ export function parseAnySearchWebSearchResponse(
     return undefined;
   }
 
-  const results: WebSearchJsonRawResult[] = [];
-  const seen = new Set<string>();
-  for (const item of payload.data.results) {
-    if (!isRecord(item)) continue;
-    const url = normalizeWebSearchSourceUrl(item.url);
-    if (!url || seen.has(url)) continue;
-    if (typeof item.title !== "string" || typeof item.snippet !== "string") continue;
+  return collectUniqueWebSearchResults(payload.data.results, maximumResults, (item) => {
+    if (typeof item.title !== "string" || typeof item.snippet !== "string") return undefined;
     if (item.content !== undefined && item.content !== null && typeof item.content !== "string") {
-      continue;
+      return undefined;
     }
-    seen.add(url);
-    results.push({ title: item.title, url, text: item.snippet });
-    if (results.length >= maximumResults) break;
-  }
-  return { results };
+    return { title: item.title, text: item.snippet };
+  });
 }
 
 const ANYSEARCH_DEFINITION: WebSearchJsonAdapterDefinition = Object.freeze({

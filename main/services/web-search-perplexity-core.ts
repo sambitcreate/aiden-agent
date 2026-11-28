@@ -5,6 +5,25 @@
  * diagnostics remain untrusted input and are never used as an error message.
  */
 
+import {
+  WEB_SEARCH_RESULTS_MAX_COUNT,
+  boundWebSearchText,
+  createWebSearchCoreError,
+  decodeWebSearchBody,
+  isRecord,
+  isValidWebSearchResultCount,
+  mapWebSearchCoreHttpError,
+  mapWebSearchCoreTransportError,
+  parseWebSearchMediaType,
+  requireWebSearchCoreApiKey,
+  requireWebSearchCoreQuery,
+  requireWebSearchCoreResultCount,
+  validateWebSearchResultUrl,
+  webSearchBodyByteLength,
+  type WebSearchCoreErrorCategory,
+  type WebSearchCoreErrorContract,
+} from "./web-search-adapter-kit.js";
+
 export const PERPLEXITY_ORIGIN = "https://api.perplexity.ai";
 export const PERPLEXITY_ENDPOINT = `${PERPLEXITY_ORIGIN}/chat/completions`;
 export const PERPLEXITY_MODEL = "sonar";
@@ -14,12 +33,7 @@ export const MAX_PERPLEXITY_RESULT_TITLE_BYTES = 512;
 export const MAX_PERPLEXITY_RESULT_URL_BYTES = 2_048;
 export const MAX_PERPLEXITY_RESULT_TEXT_BYTES = 4_096;
 
-const MAX_QUERY_CHARACTERS = 2_000;
-const MAX_API_KEY_CHARACTERS = 4_096;
-const MAX_API_KEY_BYTES = 8 * 1_024;
-const MAX_RESULTS = 10;
-const CONTROL_CHARACTERS = /\p{Cc}/u;
-const CONTROL_CHARACTERS_GLOBAL = /\p{Cc}/gu;
+const PERPLEXITY_LABEL = "Perplexity";
 
 export interface PerplexityRequestContract {
   url: typeof PERPLEXITY_ENDPOINT;
@@ -39,23 +53,9 @@ export interface PerplexityApiKeyCredential {
   readonly apiKey: string;
 }
 
-export type PerplexityErrorCategory =
-  | "invalid_request"
-  | "authentication"
-  | "rate_limit"
-  | "upstream"
-  | "network"
-  | "timeout"
-  | "cancelled"
-  | "policy"
-  | "invalid_response";
+export type PerplexityErrorCategory = WebSearchCoreErrorCategory;
 
-export interface PerplexityErrorContract {
-  providerId: "perplexity";
-  category: PerplexityErrorCategory;
-  fallbackEligible: boolean;
-  message: string;
-}
+export type PerplexityErrorContract = WebSearchCoreErrorContract<"perplexity">;
 
 export interface PerplexityResult {
   title: string;
@@ -81,89 +81,8 @@ export interface PerplexityResponseContract {
 
 type JsonRecord = Record<string, unknown>;
 
-function codePointLength(value: string): number {
-  return Array.from(value).length;
-}
-
-function utf8ByteLength(value: string): number {
-  return new TextEncoder().encode(value).byteLength;
-}
-
-function responseBytes(body: string | Uint8Array): number {
-  return typeof body === "string" ? utf8ByteLength(body) : body.byteLength;
-}
-
-function sliceUtf8(value: string, maximum: number): string {
-  if (utf8ByteLength(value) <= maximum) return value;
-  let result = "";
-  let used = 0;
-  for (const character of value) {
-    const bytes = utf8ByteLength(character);
-    if (used + bytes > maximum) break;
-    result += character;
-    used += bytes;
-  }
-  return result;
-}
-
 function closedError(category: PerplexityErrorCategory): PerplexityErrorContract {
-  const fallbackEligible =
-    category === "rate_limit" ||
-    category === "upstream" ||
-    category === "network" ||
-    category === "timeout" ||
-    category === "invalid_response";
-  const messages: Record<PerplexityErrorCategory, string> = {
-    invalid_request: "Perplexity rejected the search request.",
-    authentication: "Perplexity authentication failed.",
-    rate_limit: "Perplexity search is temporarily rate limited.",
-    upstream: "Perplexity search is temporarily unavailable.",
-    network: "Perplexity search could not reach the provider.",
-    timeout: "Perplexity search timed out.",
-    cancelled: "Perplexity search was cancelled.",
-    policy: "Perplexity search was blocked by the network policy.",
-    invalid_response: "Perplexity returned an invalid response.",
-  };
-  return Object.freeze({
-    providerId: "perplexity",
-    category,
-    fallbackEligible,
-    message: messages[category],
-  });
-}
-
-function normalizedQuery(value: unknown): string {
-  if (typeof value !== "string" || CONTROL_CHARACTERS.test(value)) {
-    throw new Error(closedError("invalid_request").message);
-  }
-  const query = value.trim();
-  if (!query || codePointLength(query) > MAX_QUERY_CHARACTERS) {
-    throw new Error(closedError("invalid_request").message);
-  }
-  return query;
-}
-
-function normalizedResultCount(value: number | undefined): number {
-  const count = value ?? 5;
-  if (!Number.isSafeInteger(count) || count < 1 || count > MAX_RESULTS) {
-    throw new Error(closedError("invalid_request").message);
-  }
-  return count;
-}
-
-function normalizedApiKey(value: unknown): string {
-  if (typeof value !== "string" || CONTROL_CHARACTERS.test(value)) {
-    throw new Error(closedError("authentication").message);
-  }
-  const key = value.trim();
-  if (
-    !key ||
-    codePointLength(key) > MAX_API_KEY_CHARACTERS ||
-    utf8ByteLength(key) > MAX_API_KEY_BYTES
-  ) {
-    throw new Error(closedError("authentication").message);
-  }
-  return key;
+  return createWebSearchCoreError("perplexity", PERPLEXITY_LABEL, category);
 }
 
 /** Build the fixed-origin Perplexity Sonar chat-completions request. */
@@ -172,24 +91,24 @@ export function buildPerplexityRequest(
   numResultsValue: number | undefined,
   apiKeyValue: string | PerplexityApiKeyCredential,
 ): PerplexityRequestContract {
-  const query = normalizedQuery(queryValue);
+  const query = requireWebSearchCoreQuery(queryValue, "perplexity", PERPLEXITY_LABEL);
   // Validate the requested projection bound even though Sonar's chat
   // completions route does not expose a result-count field.
-  normalizedResultCount(numResultsValue);
+  requireWebSearchCoreResultCount(numResultsValue, "perplexity", PERPLEXITY_LABEL);
   const rawApiKey =
     typeof apiKeyValue === "string"
       ? apiKeyValue
       : apiKeyValue?.mode === "api-key"
         ? apiKeyValue.apiKey
         : undefined;
-  const apiKey = normalizedApiKey(rawApiKey);
+  const apiKey = requireWebSearchCoreApiKey(rawApiKey, "perplexity", PERPLEXITY_LABEL);
   const body = JSON.stringify({
     model: PERPLEXITY_MODEL,
     messages: [{ role: "user", content: query }],
     max_tokens: 1_024,
     return_related_questions: false,
   });
-  if (responseBytes(body) > MAX_PERPLEXITY_REQUEST_BYTES) {
+  if (webSearchBodyByteLength(body) > MAX_PERPLEXITY_REQUEST_BYTES) {
     throw new Error(closedError("invalid_request").message);
   }
   return Object.freeze({
@@ -211,65 +130,11 @@ export function buildPerplexityRequest(
 }
 
 export function perplexityHttpError(status: unknown): PerplexityErrorContract {
-  if (typeof status !== "number" || !Number.isSafeInteger(status)) {
-    return closedError("invalid_response");
-  }
-  if (status < 100 || status > 599) return closedError("invalid_response");
-  if (status >= 300 && status < 400) return closedError("policy");
-  if (status === 401 || status === 403) return closedError("authentication");
-  if (status === 408) return closedError("timeout");
-  if (status === 429) return closedError("rate_limit");
-  if (status >= 400 && status < 500) return closedError("invalid_request");
-  if (status >= 500) return closedError("upstream");
-  return closedError("invalid_response");
+  return mapWebSearchCoreHttpError("perplexity", PERPLEXITY_LABEL, status);
 }
 
 export function perplexityTransportError(kind: unknown): PerplexityErrorContract {
-  if (kind === "redirect") return closedError("policy");
-  if (kind === "network" || kind === "timeout" || kind === "cancelled") {
-    return closedError(kind);
-  }
-  return closedError("invalid_response");
-}
-
-function isRecord(value: unknown): value is JsonRecord {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function decodeResponseBody(body: unknown): string | undefined {
-  if (typeof body !== "string" && !(body instanceof Uint8Array)) return undefined;
-  if (responseBytes(body) > MAX_PERPLEXITY_RESPONSE_BYTES) return undefined;
-  if (typeof body === "string") return body;
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(body);
-  } catch {
-    return undefined;
-  }
-}
-
-function safeResultUrl(value: unknown): string | undefined {
-  if (typeof value !== "string" || CONTROL_CHARACTERS.test(value)) return undefined;
-  const url = value.trim();
-  if (!url || utf8ByteLength(url) > MAX_PERPLEXITY_RESULT_URL_BYTES) return undefined;
-  try {
-    const parsed = new URL(url);
-    if (
-      (parsed.protocol !== "https:" && parsed.protocol !== "http:") ||
-      parsed.username ||
-      parsed.password
-    ) {
-      return undefined;
-    }
-  } catch {
-    return undefined;
-  }
-  return url;
-}
-
-function boundedText(value: unknown, maximum: number): string {
-  if (typeof value !== "string") return "";
-  const normalized = value.replace(CONTROL_CHARACTERS_GLOBAL, " ").replace(/\s+/gu, " ").trim();
-  return sliceUtf8(normalized, maximum);
+  return mapWebSearchCoreTransportError("perplexity", PERPLEXITY_LABEL, kind);
 }
 
 function textValue(value: JsonRecord): string {
@@ -282,7 +147,7 @@ function textValue(value: JsonRecord): string {
 function titleValue(value: JsonRecord, index: number): string {
   for (const key of ["title", "name"]) {
     if (typeof value[key] === "string" && (value[key] as string).trim()) {
-      return boundedText(value[key], MAX_PERPLEXITY_RESULT_TITLE_BYTES);
+      return boundWebSearchText(value[key], MAX_PERPLEXITY_RESULT_TITLE_BYTES);
     }
   }
   return `Source ${index + 1}`;
@@ -297,13 +162,16 @@ function addResult(
 ): void {
   const record = typeof value === "string" ? { url: value } : isRecord(value) ? value : undefined;
   if (!record) return;
-  const url = safeResultUrl(record.url ?? record.link ?? record.source);
+  const url = validateWebSearchResultUrl(
+    record.url ?? record.link ?? record.source,
+    MAX_PERPLEXITY_RESULT_URL_BYTES,
+  );
   if (!url || seen.has(url) || results.length >= maximumResults) return;
   seen.add(url);
   results.push({
     title: titleValue(record, index),
     url,
-    text: boundedText(textValue(record), MAX_PERPLEXITY_RESULT_TEXT_BYTES),
+    text: boundWebSearchText(textValue(record), MAX_PERPLEXITY_RESULT_TEXT_BYTES),
   });
 }
 
@@ -331,9 +199,9 @@ function parsePayload(payload: unknown, maximumResults: number): PerplexityResul
 /** Parse one bounded Perplexity response into attributed source evidence. */
 export function parsePerplexityResponse(
   response: PerplexityResponseContract,
-  maximumResults = MAX_RESULTS,
+  maximumResults = WEB_SEARCH_RESULTS_MAX_COUNT,
 ): PerplexityParseOutcome {
-  if (!Number.isSafeInteger(maximumResults) || maximumResults < 1 || maximumResults > MAX_RESULTS) {
+  if (!isValidWebSearchResultCount(maximumResults)) {
     return { ok: false, error: closedError("invalid_request") };
   }
   if (
@@ -344,14 +212,11 @@ export function parsePerplexityResponse(
   ) {
     return { ok: false, error: perplexityHttpError(response?.status) };
   }
-  const mediaType =
-    typeof response.contentType === "string"
-      ? response.contentType.split(";", 1)[0]?.trim().toLowerCase()
-      : undefined;
+  const mediaType = parseWebSearchMediaType(response.contentType);
   if (mediaType !== undefined && mediaType !== "application/json") {
     return { ok: false, error: closedError("invalid_response") };
   }
-  const body = decodeResponseBody(response?.body);
+  const body = decodeWebSearchBody(response?.body, MAX_PERPLEXITY_RESPONSE_BYTES);
   if (body === undefined) return { ok: false, error: closedError("invalid_response") };
   let payload: unknown;
   try {
