@@ -1,7 +1,7 @@
 import * as React from "react";
 
 export function useSubagentSelectionRestoreRunRepair(
-  restoreRunIdRef: React.MutableRefObject<string | null>,
+  restoreRunIdRef: React.RefObject<string | null>,
   selectedRunId: string | null,
   runs: readonly { runId: string }[],
 ): void {

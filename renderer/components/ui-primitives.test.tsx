@@ -4,6 +4,23 @@ import { afterEach, test } from "node:test";
 import * as React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
+  Button,
+  Command,
+  CommandInput,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  Input,
+  Label,
+  Select,
+  SelectTrigger,
+  SelectValue,
+  Separator,
+  Switch,
+  Textarea,
+} from "./ui";
+import {
   Checkbox,
   DataTable,
   Disclosure,
@@ -151,4 +168,70 @@ test("Stat and Kbd present their content accessibly", () => {
   assert.ok(screen.getByText("Total"));
   assert.ok(screen.getByText(/12%/u));
   assert.equal(screen.getByText("⌘K").tagName, "KBD");
+});
+
+test("shared UI primitives attach direct React 19 refs and compose Radix asChild triggers", async () => {
+  const buttonRef = React.createRef<HTMLButtonElement>();
+  const linkRef = React.createRef<HTMLAnchorElement>();
+  const menuTriggerRef = React.createRef<HTMLButtonElement>();
+  const inputRef = React.createRef<HTMLInputElement>();
+  const textareaRef = React.createRef<HTMLTextAreaElement>();
+  const separatorRef = React.createRef<HTMLDivElement>();
+  const labelRef = React.createRef<HTMLLabelElement>();
+  const switchRef = React.createRef<HTMLButtonElement>();
+  const selectTriggerRef = React.createRef<HTMLButtonElement>();
+  const commandInputRef = React.createRef<HTMLInputElement>();
+  let picked = false;
+
+  render(
+    <div>
+      <Button ref={buttonRef}>Plain action</Button>
+      <Button asChild>
+        <a ref={linkRef} href="#target">
+          Slotted link
+        </a>
+      </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button ref={menuTriggerRef}>Menu trigger</Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <DropdownMenuItem onSelect={() => { picked = true; }}>
+            First item
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <Label ref={labelRef} htmlFor="name-field">Name</Label>
+      <Input id="name-field" ref={inputRef} defaultValue="Ada" />
+      <Textarea ref={textareaRef} aria-label="Notes" defaultValue="Hello" />
+      <Separator ref={separatorRef} />
+      <Switch ref={switchRef} aria-label="Notifications" />
+      <Select defaultValue="one">
+        <SelectTrigger ref={selectTriggerRef} aria-label="Choice">
+          <SelectValue />
+        </SelectTrigger>
+      </Select>
+      <Command>
+        <CommandInput ref={commandInputRef} placeholder="Search commands" />
+      </Command>
+    </div>,
+  );
+
+  assert.equal(buttonRef.current, screen.getByRole("button", { name: "Plain action" }));
+  assert.equal(linkRef.current, screen.getByRole("link", { name: "Slotted link" }));
+  assert.equal(linkRef.current?.getAttribute("data-slot"), "button");
+  const trigger = screen.getByRole("button", { name: "Menu trigger" });
+  assert.equal(menuTriggerRef.current, trigger);
+  fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+  const item = await screen.findByRole("menuitem", { name: "First item" });
+  fireEvent.click(item);
+  assert.equal(picked, true);
+
+  assert.equal(labelRef.current?.tagName, "LABEL");
+  assert.equal(inputRef.current, screen.getByLabelText("Name"));
+  assert.equal(textareaRef.current, screen.getByLabelText("Notes"));
+  assert.equal(separatorRef.current?.getAttribute("data-orientation"), "horizontal");
+  assert.equal(switchRef.current, screen.getByRole("switch", { name: "Notifications" }));
+  assert.equal(selectTriggerRef.current, screen.getByRole("combobox", { name: "Choice" }));
+  assert.equal(commandInputRef.current, screen.getByPlaceholderText("Search commands"));
 });

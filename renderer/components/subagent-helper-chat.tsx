@@ -109,6 +109,7 @@ export interface SubagentHelperChatProps {
   contextUsage?: SubagentContextUsageV1;
   now?: number;
   className?: string;
+  ref?: React.Ref<HTMLHeadingElement>;
 }
 
 /**
@@ -244,33 +245,30 @@ const HelperMessage = React.memo(HelperMessageView, sameHelperMessage);
  * One helper's own conversation: what it was asked, what it said and the
  * steps it took, in the main chat's message style.
  */
-export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentHelperChatProps>(
-  function SubagentHelperChat(
-    {
-      run,
-      transcript,
-      presentation,
-      approval = null,
-      onFocusMainApproval,
-      onStop,
-      stopPending = false,
-      stopError = null,
-      onAskRetry,
-      expanded = false,
-      onExpand,
-      onBack,
-      onClose,
-      waitingOnMain = null,
-      onReturnToMain,
-      hasActiveHelpers = false,
-      refreshError = null,
-      onRetryRefresh,
-      contextUsage,
-      now = Date.now(),
-      className,
-    },
-    headingRef,
-  ) {
+export function SubagentHelperChat({
+  run,
+  transcript,
+  presentation,
+  approval = null,
+  onFocusMainApproval,
+  onStop,
+  stopPending = false,
+  stopError = null,
+  onAskRetry,
+  expanded = false,
+  onExpand,
+  onBack,
+  onClose,
+  waitingOnMain = null,
+  onReturnToMain,
+  hasActiveHelpers = false,
+  refreshError = null,
+  onRetryRefresh,
+  contextUsage,
+  now = Date.now(),
+  className,
+  ref: headingRef,
+}: SubagentHelperChatProps) {
     const headingId = React.useId();
     const detailsId = React.useId();
     const scrollRef = React.useRef<HTMLDivElement | null>(null);
@@ -762,5 +760,4 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
         </footer>
       </article>
     );
-  },
-);
+}

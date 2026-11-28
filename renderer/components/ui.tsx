@@ -68,6 +68,7 @@ export function TooltipProvider(props: React.ComponentProps<typeof TooltipPrimit
 }
 
 type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
+  ref?: React.Ref<HTMLButtonElement>;
   variant?:
     | "filled"
     | "muted"
@@ -84,19 +85,17 @@ type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   pressFeedback?: boolean;
 };
 
-export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  {
-    className,
-    variant = "filled",
-    size = "medium",
-    iconOnly,
-    asChild,
-    pressFeedback = false,
-    type = "button",
-    ...props
-  },
+export function Button({
+  className,
+  variant = "filled",
+  size = "medium",
+  iconOnly,
+  asChild,
+  pressFeedback = false,
+  type = "button",
   ref,
-) {
+  ...props
+}: ButtonProps) {
   const Component = asChild ? Slot.Root : "button";
   return (
     <Component
@@ -138,12 +137,13 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
       {...props}
     />
   );
-});
+}
 
-export const Input = React.forwardRef<
-  HTMLInputElement,
-  React.InputHTMLAttributes<HTMLInputElement>
->(function Input({ className, ...props }, ref) {
+export function Input({
+  className,
+  ref,
+  ...props
+}: React.InputHTMLAttributes<HTMLInputElement> & { ref?: React.Ref<HTMLInputElement> }) {
   return (
     <input
       ref={ref}
@@ -154,16 +154,14 @@ export const Input = React.forwardRef<
       {...props}
     />
   );
-});
+}
 
 type TextareaProps = React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
+  ref?: React.Ref<HTMLTextAreaElement>;
   density?: "default" | "compact";
 };
 
-export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(function Textarea(
-  { className, density = "default", ...props },
-  ref,
-) {
+export function Textarea({ className, density = "default", ref, ...props }: TextareaProps) {
   return (
     <textarea
       ref={ref}
@@ -175,7 +173,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(fun
       {...props}
     />
   );
-});
+}
 
 type TextProps = React.HTMLAttributes<HTMLElement> & {
   ref?: React.Ref<HTMLElement>;
@@ -324,10 +322,12 @@ export function Status({
   );
 }
 
-export const Separator = React.forwardRef<
-  React.ElementRef<typeof SeparatorPrimitive.Root>,
-  React.ComponentPropsWithoutRef<typeof SeparatorPrimitive.Root>
->(function Separator({ className, orientation = "horizontal", ...props }, ref) {
+export function Separator({
+  className,
+  orientation = "horizontal",
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof SeparatorPrimitive.Root>) {
   return (
     <SeparatorPrimitive.Root
       ref={ref}
@@ -340,12 +340,13 @@ export const Separator = React.forwardRef<
       {...props}
     />
   );
-});
+}
 
-export const Label = React.forwardRef<
-  React.ElementRef<typeof LabelPrimitive.Root>,
-  React.ComponentPropsWithoutRef<typeof LabelPrimitive.Root>
->(function Label({ className, ...props }, ref) {
+export function Label({
+  className,
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof LabelPrimitive.Root>) {
   return (
     <LabelPrimitive.Root
       ref={ref}
@@ -353,7 +354,7 @@ export const Label = React.forwardRef<
       {...props}
     />
   );
-});
+}
 
 export function FieldSet({
   title,
@@ -1722,7 +1723,7 @@ type DialogProps = React.PropsWithChildren<{
 }>;
 
 /** What had focus when a dialog opened, so closing can return there. */
-function useOpener(open: boolean): React.MutableRefObject<HTMLElement | null> {
+function useOpener(open: boolean): React.RefObject<HTMLElement | null> {
   const openerRef = React.useRef<HTMLElement | null>(null);
   React.useLayoutEffect(() => {
     if (!open) return;
@@ -1986,10 +1987,13 @@ export function DropdownMenu(props: React.ComponentProps<typeof DropdownMenuPrim
   return <DropdownMenuPrimitive.Root {...props} {...useRootLayer(props, "menu")} />;
 }
 export const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
-export const DropdownMenuContent = React.forwardRef<
-  React.ElementRef<typeof DropdownMenuPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>
->(function Content({ className, sideOffset = 6, onCloseAutoFocus, ...props }, ref) {
+export function DropdownMenuContent({
+  className,
+  sideOffset = 6,
+  onCloseAutoFocus,
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof DropdownMenuPrimitive.Content>) {
   const liveGuard = useLiveGuardAttributes(props);
   return (
     <DropdownMenuPrimitive.Portal>
@@ -2017,7 +2021,7 @@ export const DropdownMenuContent = React.forwardRef<
       />
     </DropdownMenuPrimitive.Portal>
   );
-});
+}
 export const DropdownMenuLabel = ({
   className,
   ...props
@@ -2033,13 +2037,16 @@ export const DropdownMenuSeparator = ({
 }: React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Separator>) => (
   <DropdownMenuPrimitive.Separator className={cn("my-1 h-px bg-separator", className)} {...props} />
 );
-export const DropdownMenuItem = React.forwardRef<
-  React.ElementRef<typeof DropdownMenuPrimitive.Item>,
-  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Item> & {
-    icon?: string;
-    color?: string;
-  }
->(function Item({ className, icon: _icon, color, ...props }, ref) {
+export function DropdownMenuItem({
+  className,
+  icon: _icon,
+  color,
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof DropdownMenuPrimitive.Item> & {
+  icon?: string;
+  color?: string;
+}) {
   return (
     <DropdownMenuPrimitive.Item
       ref={ref}
@@ -2050,7 +2057,7 @@ export const DropdownMenuItem = React.forwardRef<
       {...props}
     />
   );
-});
+}
 // A submenu row: its trigger highlights while the submenu is open, and its
 // chevron points the way the submenu opens.
 const menuSubTriggerClass = cn(
@@ -2059,21 +2066,26 @@ const menuSubTriggerClass = cn(
 );
 const menuSubChevron = <ChevronRight aria-hidden="true" className="ml-auto size-3.5 shrink-0 text-tertiary" />;
 export const DropdownMenuSub = DropdownMenuPrimitive.Sub;
-export const DropdownMenuSubTrigger = React.forwardRef<
-  React.ElementRef<typeof DropdownMenuPrimitive.SubTrigger>,
-  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubTrigger> & { icon?: string }
->(function SubTrigger({ className, icon: _icon, children, ...props }, ref) {
+export function DropdownMenuSubTrigger({
+  className,
+  icon: _icon,
+  children,
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof DropdownMenuPrimitive.SubTrigger> & { icon?: string }) {
   return (
     <DropdownMenuPrimitive.SubTrigger ref={ref} className={cn(menuSubTriggerClass, className)} {...props}>
       {children}
       {menuSubChevron}
     </DropdownMenuPrimitive.SubTrigger>
   );
-});
-export const DropdownMenuSubContent = React.forwardRef<
-  React.ElementRef<typeof DropdownMenuPrimitive.SubContent>,
-  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubContent>
->(function SubContent({ className, sideOffset = 4, ...props }, ref) {
+}
+export function DropdownMenuSubContent({
+  className,
+  sideOffset = 4,
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof DropdownMenuPrimitive.SubContent>) {
   const liveGuard = useLiveGuardAttributes(props);
   return (
     <DropdownMenuPrimitive.Portal>
@@ -2091,11 +2103,14 @@ export const DropdownMenuSubContent = React.forwardRef<
       />
     </DropdownMenuPrimitive.Portal>
   );
-});
-export const DropdownMenuCheckboxItem = React.forwardRef<
-  React.ElementRef<typeof DropdownMenuPrimitive.CheckboxItem>,
-  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.CheckboxItem> & { sublabel?: string }
->(function CheckboxItem({ className, children, sublabel, ...props }, ref) {
+}
+export function DropdownMenuCheckboxItem({
+  className,
+  children,
+  sublabel,
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof DropdownMenuPrimitive.CheckboxItem> & { sublabel?: string }) {
   return (
     <DropdownMenuPrimitive.CheckboxItem
       ref={ref}
@@ -2117,13 +2132,15 @@ export const DropdownMenuCheckboxItem = React.forwardRef<
       </span>
     </DropdownMenuPrimitive.CheckboxItem>
   );
-});
+}
 export const DropdownMenuRadioGroup = DropdownMenuPrimitive.RadioGroup;
 /** Single-choice menu row; the check mark and `aria-checked` carry selection. */
-export const DropdownMenuRadioItem = React.forwardRef<
-  React.ElementRef<typeof DropdownMenuPrimitive.RadioItem>,
-  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.RadioItem>
->(function RadioItem({ className, children, ...props }, ref) {
+export function DropdownMenuRadioItem({
+  className,
+  children,
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof DropdownMenuPrimitive.RadioItem>) {
   return (
     <DropdownMenuPrimitive.RadioItem
       ref={ref}
@@ -2138,7 +2155,7 @@ export const DropdownMenuRadioItem = React.forwardRef<
       {children}
     </DropdownMenuPrimitive.RadioItem>
   );
-});
+}
 
 export const CustomDropdownMenu = DropdownMenu;
 export const CustomDropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
@@ -2148,10 +2165,14 @@ export function Popover(props: React.ComponentProps<typeof PopoverPrimitive.Root
   return <PopoverPrimitive.Root {...props} {...useRootLayer(props, "popover")} />;
 }
 export const PopoverTrigger = PopoverPrimitive.Trigger;
-export const PopoverContent = React.forwardRef<
-  React.ElementRef<typeof PopoverPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
->(function PopoverContent({ className, sideOffset = 6, onEscapeKeyDown, children, ...props }, ref) {
+export function PopoverContent({
+  className,
+  sideOffset = 6,
+  onEscapeKeyDown,
+  children,
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof PopoverPrimitive.Content>) {
   const liveGuard = useLiveGuardAttributes(props);
   return (
     <PopoverPrimitive.Portal>
@@ -2172,7 +2193,7 @@ export const PopoverContent = React.forwardRef<
       </PopoverPrimitive.Content>
     </PopoverPrimitive.Portal>
   );
-});
+}
 
 const SurfaceCoveredContext = React.createContext(false);
 
@@ -2261,10 +2282,12 @@ export function HoverCard({
   return <HoverCardPrimitive.Root {...props} open={shown} onOpenChange={change} />;
 }
 export const HoverCardTrigger = HoverCardPrimitive.Trigger;
-export const HoverCardContent = React.forwardRef<
-  React.ElementRef<typeof HoverCardPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof HoverCardPrimitive.Content>
->(function HoverCardContent({ className, sideOffset = 8, ...props }, ref) {
+export function HoverCardContent({
+  className,
+  sideOffset = 8,
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof HoverCardPrimitive.Content>) {
   const liveGuard = useLiveGuardAttributes(props);
   if (useSurfaceCovered()) return null;
   return (
@@ -2283,7 +2306,7 @@ export const HoverCardContent = React.forwardRef<
       />
     </HoverCardPrimitive.Portal>
   );
-});
+}
 
 export function ContextMenu(props: React.ComponentProps<typeof ContextMenuPrimitive.Root>) {
   // A context menu opens only from its trigger, so it has no `open` prop to control.
@@ -2291,10 +2314,11 @@ export function ContextMenu(props: React.ComponentProps<typeof ContextMenuPrimit
   return <ContextMenuPrimitive.Root {...props} onOpenChange={onOpenChange} />;
 }
 export const ContextMenuTrigger = ContextMenuPrimitive.Trigger;
-export const ContextMenuContent = React.forwardRef<
-  React.ElementRef<typeof ContextMenuPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Content>
->(function ContextContent({ className, ...props }, ref) {
+export function ContextMenuContent({
+  className,
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof ContextMenuPrimitive.Content>) {
   const liveGuard = useLiveGuardAttributes(props);
   return (
     <ContextMenuPrimitive.Portal>
@@ -2311,20 +2335,23 @@ export const ContextMenuContent = React.forwardRef<
       />
     </ContextMenuPrimitive.Portal>
   );
-});
+}
 export const ContextMenuSeparator = ({
   className,
   ...props
 }: React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Separator>) => (
   <ContextMenuPrimitive.Separator className={cn("my-1 h-px bg-separator", className)} {...props} />
 );
-export const ContextMenuItem = React.forwardRef<
-  React.ElementRef<typeof ContextMenuPrimitive.Item>,
-  React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Item> & {
-    icon?: string;
-    color?: string;
-  }
->(function ContextItem({ className, icon: _icon, color, ...props }, ref) {
+export function ContextMenuItem({
+  className,
+  icon: _icon,
+  color,
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof ContextMenuPrimitive.Item> & {
+  icon?: string;
+  color?: string;
+}) {
   return (
     <ContextMenuPrimitive.Item
       ref={ref}
@@ -2335,24 +2362,29 @@ export const ContextMenuItem = React.forwardRef<
       {...props}
     />
   );
-});
+}
 
 export const ContextMenuSub = ContextMenuPrimitive.Sub;
-export const ContextMenuSubTrigger = React.forwardRef<
-  React.ElementRef<typeof ContextMenuPrimitive.SubTrigger>,
-  React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.SubTrigger> & { icon?: string }
->(function ContextSubTrigger({ className, icon: _icon, children, ...props }, ref) {
+export function ContextMenuSubTrigger({
+  className,
+  icon: _icon,
+  children,
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof ContextMenuPrimitive.SubTrigger> & { icon?: string }) {
   return (
     <ContextMenuPrimitive.SubTrigger ref={ref} className={cn(menuSubTriggerClass, className)} {...props}>
       {children}
       {menuSubChevron}
     </ContextMenuPrimitive.SubTrigger>
   );
-});
-export const ContextMenuSubContent = React.forwardRef<
-  React.ElementRef<typeof ContextMenuPrimitive.SubContent>,
-  React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.SubContent>
->(function ContextSubContent({ className, sideOffset = 4, ...props }, ref) {
+}
+export function ContextMenuSubContent({
+  className,
+  sideOffset = 4,
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof ContextMenuPrimitive.SubContent>) {
   const liveGuard = useLiveGuardAttributes(props);
   return (
     <ContextMenuPrimitive.Portal>
@@ -2370,15 +2402,16 @@ export const ContextMenuSubContent = React.forwardRef<
       />
     </ContextMenuPrimitive.Portal>
   );
-});
+}
 
 export function Select(props: React.ComponentProps<typeof SelectPrimitive.Root>) {
   return <SelectPrimitive.Root {...props} {...useRootLayer(props, "menu")} />;
 }
-export const SelectValue = React.forwardRef<
-  React.ElementRef<typeof SelectPrimitive.Value>,
-  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Value>
->(function SelectValue({ className, ...props }, ref) {
+export function SelectValue({
+  className,
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof SelectPrimitive.Value>) {
   return (
     <SelectPrimitive.Value
       ref={ref}
@@ -2386,11 +2419,14 @@ export const SelectValue = React.forwardRef<
       {...props}
     />
   );
-});
-export const SelectTrigger = React.forwardRef<
-  React.ElementRef<typeof SelectPrimitive.Trigger>,
-  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger> & { size?: "small" }
->(function SelectTrigger({ className, children, size, ...props }, ref) {
+}
+export function SelectTrigger({
+  className,
+  children,
+  size,
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof SelectPrimitive.Trigger> & { size?: "small" }) {
   return (
     <SelectPrimitive.Trigger
       ref={ref}
@@ -2407,11 +2443,14 @@ export const SelectTrigger = React.forwardRef<
       </SelectPrimitive.Icon>
     </SelectPrimitive.Trigger>
   );
-});
-export const SelectContent = React.forwardRef<
-  React.ElementRef<typeof SelectPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>
->(function SelectContent({ className, children, position = "popper", ...props }, ref) {
+}
+export function SelectContent({
+  className,
+  children,
+  position = "popper",
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof SelectPrimitive.Content>) {
   const liveGuard = useLiveGuardAttributes(props);
   return (
     <SelectPrimitive.Portal>
@@ -2431,11 +2470,13 @@ export const SelectContent = React.forwardRef<
       </SelectPrimitive.Content>
     </SelectPrimitive.Portal>
   );
-});
-export const SelectItem = React.forwardRef<
-  React.ElementRef<typeof SelectPrimitive.Item>,
-  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item>
->(function SelectItem({ className, children, ...props }, ref) {
+}
+export function SelectItem({
+  className,
+  children,
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof SelectPrimitive.Item>) {
   return (
     <SelectPrimitive.Item ref={ref} className={cn(menuItemClass, "pl-7", className)} {...props}>
       <span className="absolute left-2">
@@ -2446,12 +2487,13 @@ export const SelectItem = React.forwardRef<
       <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
     </SelectPrimitive.Item>
   );
-});
+}
 
-export const Switch = React.forwardRef<
-  React.ElementRef<typeof SwitchPrimitive.Root>,
-  React.ComponentPropsWithoutRef<typeof SwitchPrimitive.Root>
->(function Switch({ className, ...props }, ref) {
+export function Switch({
+  className,
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof SwitchPrimitive.Root>) {
   return (
     <SwitchPrimitive.Root
       ref={ref}
@@ -2464,13 +2506,15 @@ export const Switch = React.forwardRef<
       <SwitchPrimitive.Thumb className="pointer-events-none block size-5 shrink-0 translate-x-0.5 rounded-full bg-white shadow-control transition-[background-color,transform] duration-(--motion-duration) ease-standard data-[state=checked]:translate-x-[18px] data-[state=checked]:bg-fill-accent-foreground" />
     </SwitchPrimitive.Root>
   );
-});
-export const RadioGroup = React.forwardRef<
-  React.ElementRef<typeof RadioGroupPrimitive.Root>,
-  React.ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Root> & {
-    orientation?: "horizontal" | "vertical";
-  }
->(function RadioGroup({ className, orientation, ...props }, ref) {
+}
+export function RadioGroup({
+  className,
+  orientation,
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof RadioGroupPrimitive.Root> & {
+  orientation?: "horizontal" | "vertical";
+}) {
   return (
     <RadioGroupPrimitive.Root
       ref={ref}
@@ -2478,11 +2522,12 @@ export const RadioGroup = React.forwardRef<
       {...props}
     />
   );
-});
-export const RadioGroupItem = React.forwardRef<
-  React.ElementRef<typeof RadioGroupPrimitive.Item>,
-  React.ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Item>
->(function RadioGroupItem({ className, ...props }, ref) {
+}
+export function RadioGroupItem({
+  className,
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof RadioGroupPrimitive.Item>) {
   return (
     <RadioGroupPrimitive.Item
       ref={ref}
@@ -2495,12 +2540,13 @@ export const RadioGroupItem = React.forwardRef<
       <RadioGroupPrimitive.Indicator className="size-1.5 rounded-full bg-fill-accent-foreground" />
     </RadioGroupPrimitive.Item>
   );
-});
+}
 
-export const Command = React.forwardRef<
-  React.ElementRef<typeof CommandPrimitive>,
-  React.ComponentPropsWithoutRef<typeof CommandPrimitive>
->(function Command({ className, ...props }, ref) {
+export function Command({
+  className,
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof CommandPrimitive>) {
   return (
     <CommandPrimitive
       ref={ref}
@@ -2508,14 +2554,17 @@ export const Command = React.forwardRef<
       {...props}
     />
   );
-});
-export const CommandInput = React.forwardRef<
-  React.ElementRef<typeof CommandPrimitive.Input>,
-  React.ComponentPropsWithoutRef<typeof CommandPrimitive.Input> & {
-    containerClassName?: string;
-    showSeparator?: boolean;
-  }
->(function CommandInput({ className, containerClassName, showSeparator = true, ...props }, ref) {
+}
+export function CommandInput({
+  className,
+  containerClassName,
+  showSeparator = true,
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof CommandPrimitive.Input> & {
+  containerClassName?: string;
+  showSeparator?: boolean;
+}) {
   return (
     <div
       className={cn(
@@ -2535,11 +2584,12 @@ export const CommandInput = React.forwardRef<
       />
     </div>
   );
-});
-export const CommandList = React.forwardRef<
-  React.ElementRef<typeof CommandPrimitive.List>,
-  React.ComponentPropsWithoutRef<typeof CommandPrimitive.List>
->(function CommandList({ className, ...props }, ref) {
+}
+export function CommandList({
+  className,
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof CommandPrimitive.List>) {
   return (
     <CommandPrimitive.List
       ref={ref}
@@ -2550,7 +2600,7 @@ export const CommandList = React.forwardRef<
       {...props}
     />
   );
-});
+}
 export const CommandEmpty = ({
   className,
   ...props
@@ -2561,10 +2611,11 @@ export const CommandEmpty = ({
   />
 );
 /** A labelled run of command items; the heading names the group for assistive tech. */
-export const CommandGroup = React.forwardRef<
-  React.ElementRef<typeof CommandPrimitive.Group>,
-  React.ComponentPropsWithoutRef<typeof CommandPrimitive.Group>
->(function CommandGroup({ className, ...props }, ref) {
+export function CommandGroup({
+  className,
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof CommandPrimitive.Group>) {
   return (
     <CommandPrimitive.Group
       ref={ref}
@@ -2575,11 +2626,12 @@ export const CommandGroup = React.forwardRef<
       {...props}
     />
   );
-});
-export const CommandItem = React.forwardRef<
-  React.ElementRef<typeof CommandPrimitive.Item>,
-  React.ComponentPropsWithoutRef<typeof CommandPrimitive.Item>
->(function CommandItem({ className, ...props }, ref) {
+}
+export function CommandItem({
+  className,
+  ref,
+  ...props
+}: React.ComponentPropsWithRef<typeof CommandPrimitive.Item>) {
   return (
     <CommandPrimitive.Item
       ref={ref}
@@ -2590,7 +2642,7 @@ export const CommandItem = React.forwardRef<
       {...props}
     />
   );
-});
+}
 export const CommandSeparator = ({
   className,
   ...props

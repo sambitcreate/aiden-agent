@@ -14,7 +14,7 @@ import { RichTextView } from "./rich-text-view";
 
 /** What a text item's words need to be rich: its editor's handle and the format bar's hooks. */
 export type CanvasRichText = {
-  editorRef: React.MutableRefObject<RichTextEditorHandle | null>;
+  editorRef: React.RefObject<RichTextEditorHandle | null>;
   /** The editor mounted and took the focus. */
   onReady(): void;
   onSelectionChange(): void;

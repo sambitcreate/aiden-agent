@@ -280,7 +280,7 @@ export function AgentSlider({
           ref={(node) => {
             localThumbRef.current = node;
             if (typeof thumbRef === "function") thumbRef(node);
-            else if (thumbRef) (thumbRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
+            else if (thumbRef) thumbRef.current = node;
           }}
           role="slider"
           tabIndex={0}

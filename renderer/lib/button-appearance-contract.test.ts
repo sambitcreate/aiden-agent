@@ -7,8 +7,8 @@ const styles = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 
 test("shared action buttons use the same squircle for labeled and icon-only actions", () => {
   const buttonSource = uiSource.slice(
-    uiSource.indexOf("export const Button"),
-    uiSource.indexOf("export const Input"),
+    uiSource.indexOf("export function Button"),
+    uiSource.indexOf("export function Input"),
   );
   assert.match(buttonSource, /data-slot="button"/u);
   assert.match(buttonSource, /border-0/u);

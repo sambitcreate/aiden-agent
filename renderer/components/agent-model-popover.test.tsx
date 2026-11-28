@@ -2,14 +2,16 @@ import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import * as React from "react";
-import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { installBotTestIpc } from "../main/bots/test-dom";
 import { mountWithBotRouter } from "../main/bots/test-providers";
+import { agentSliderComposerState, homeStopIndex } from "../lib/agent-slider-view";
 import { useSettings } from "../lib/queries";
 import type { AgentSliderSettings } from "../shared/agent-slider";
 import type { GenerationThinkingLevel } from "../shared/generation-thinking";
 import type { SettingsSection } from "../shared/settings-section";
 import type { AppSettings, Provider } from "../lib/types";
+import { AgentSlider } from "./agent-slider";
 import { AgentModelPopover } from "./agent-model-popover";
 import { Toaster } from "./ui";
 
@@ -331,4 +333,51 @@ test("a stop list where nothing can run leaves the chat in Custom", async () => 
   fireEvent.click(stopTarget(2));
   assert.ok(await screen.findByRole("heading", { name: "Choose a model for C" }));
   assert.ok(screen.getByText("gone was removed"));
+});
+
+test("AgentSlider syncs its thumb element with both object and callback thumbRef props and focuses on track press", () => {
+  const state = agentSliderComposerState(
+    slider,
+    { providers: [acme, locked] },
+    { providerId: "acme", model: "mid-model" },
+  )!;
+  const home = homeStopIndex(slider);
+  const objectRef = React.createRef<HTMLDivElement>();
+  const callbackNodes: Array<HTMLDivElement | null> = [];
+  const view = render(
+    <AgentSlider
+      views={state.views}
+      position={state.position}
+      homeIndex={home}
+      customDetail="Mid Model"
+      onSelectStop={() => undefined}
+      onUnavailableStop={() => undefined}
+      onTypeToSearch={() => undefined}
+      thumbRef={objectRef}
+    />,
+  );
+  const thumb = screen.getByRole("slider", { name: "Agent Slider" });
+  assert.equal(objectRef.current, thumb);
+
+  const track = document.querySelector<HTMLDivElement>("[data-agent-slider-track]")!;
+  fireEvent.pointerDown(track, { button: 0, pointerId: 1, clientX: 20 });
+  assert.equal(document.activeElement, thumb);
+
+  view.rerender(
+    <AgentSlider
+      views={state.views}
+      position={state.position}
+      homeIndex={home}
+      customDetail="Mid Model"
+      onSelectStop={() => undefined}
+      onUnavailableStop={() => undefined}
+      onTypeToSearch={() => undefined}
+      thumbRef={(node) => {
+        callbackNodes.push(node);
+      }}
+    />,
+  );
+  assert.equal(callbackNodes[callbackNodes.length - 1], thumb);
+  view.unmount();
+  assert.equal(callbackNodes[callbackNodes.length - 1], null);
 });

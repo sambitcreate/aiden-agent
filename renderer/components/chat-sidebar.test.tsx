@@ -237,10 +237,10 @@ test("sidebar list items use a fill focus state instead of a focus ring", () => 
 
 test("shared controls use theme fills for text entry and focus states", () => {
   const ui = source("./ui.tsx");
-  const button = between(ui, "export const Button =", "});");
-  const input = between(ui, "export const Input =", "});");
-  const textarea = between(ui, "export const Textarea =", "type TextProps");
-  const selectTrigger = between(ui, "export const SelectTrigger =", "export const SelectContent =");
+  const button = between(ui, "export function Button", "\n\nexport function Input");
+  const input = between(ui, "export function Input", "type TextareaProps");
+  const textarea = between(ui, "export function Textarea", "type TextProps");
+  const selectTrigger = between(ui, "export function SelectTrigger", "export function SelectContent");
   assert.match(button, /focus-visible:bg-list-selection/u);
   assert.match(button, /focus-visible:bg-control-active/u);
   assert.match(button, /focus-visible:bg-fill-accent-hover/u);

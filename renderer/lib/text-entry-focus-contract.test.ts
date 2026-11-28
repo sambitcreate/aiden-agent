@@ -17,8 +17,8 @@ function between(value: string, start: string, end: string): string {
 // Rendered fill/border behavior is covered by settings-unification.spec.ts.
 test("text-entry focus adds no accent border or ring", () => {
   const ui = source("../components/ui.tsx");
-  const input = between(ui, "export const Input =", "type TextareaProps");
-  const textarea = between(ui, "export const Textarea =", "type TextProps");
+  const input = between(ui, "export function Input", "type TextareaProps");
+  const textarea = between(ui, "export function Textarea", "type TextProps");
 
   for (const control of [input, textarea]) {
     assert.doesNotMatch(control, /focus(?:-visible)?:border-focus-ring/u);

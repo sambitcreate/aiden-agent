@@ -60,10 +60,19 @@ function truncate(value: string, maximum: number): string {
 const FONT_FAMILY =
   "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif";
 
-export const ProfileShareCard = React.forwardRef<
-  SVGSVGElement,
-  { name: string; summary: UsageSummary; dark: boolean; accent: string }
->(function ProfileShareCard({ name, summary, dark, accent }, ref) {
+export function ProfileShareCard({
+  name,
+  summary,
+  dark,
+  accent,
+  ref,
+}: {
+  name: string;
+  summary: UsageSummary;
+  dark: boolean;
+  accent: string;
+  ref?: React.Ref<SVGSVGElement>;
+}) {
   const data = React.useMemo(() => buildProfileShareData(name, summary), [name, summary]);
   const displayName = truncate(data.name, 24);
   const colors = palette(dark, accent);
@@ -366,4 +375,4 @@ export const ProfileShareCard = React.forwardRef<
       </text>
     </svg>
   );
-});
+}
