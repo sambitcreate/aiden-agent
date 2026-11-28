@@ -1551,7 +1551,6 @@ class BotLiveProjector {
         return { entries: this.entries, unchanged: true };
       }
       const resolved = await this.resolveEntries(this.cachedBaseEntries);
-      this.hasPendingConnectCard = resolved.some((entry) => entry.type === "connect_card" && entry.status === "pending");
       const unchanged =
         resolved.length === this.entries.length &&
         resolved.every((entry, index) => {
@@ -1569,11 +1568,11 @@ class BotLiveProjector {
     this.cachedEntriesRef = entries;
     this.cachedSubmissionsVersion = this.submissionsVersion;
     this.cachedBaseEntries = projected.entries;
+    this.hasPendingConnectCard = projected.entries.some((entry) => entry.type === "connect_card" && entry.status === "pending");
     this.sharedImagesEntriesRef = entries;
     this.sharedImagesByWireId = projected.sharedImages;
     this.sharedImageBytesCache.clear();
     const resolved = await this.resolveEntries(projected.entries);
-    this.hasPendingConnectCard = resolved.some((entry) => entry.type === "connect_card" && entry.status === "pending");
     return { entries: resolved, unchanged: false };
   }
 

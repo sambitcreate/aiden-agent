@@ -6,11 +6,16 @@ import {
   botSettingsChangeStatusOf,
   type BotSettingsChangeStatus,
 } from "../../../renderer/shared/bot-settings-changes.js";
-import { BOT_PEER_INPUT_KIND, } from "./bot-input-entry.js";
+import {
+  BOT_MESSAGE_INPUT_KIND,
+  BOT_PEER_INPUT_KIND,
+  BOT_PERSON_INPUT_KIND,
+  BOT_ROUTINE_INPUT_KIND,
+  isBotInputEntryKind,
+} from "./bot-input-entry.js";
 import type { BotPlanView } from "../../../renderer/shared/bot-plans.js";
 import type { BotPendingAccessRequest } from "../../../renderer/shared/bot-access-requests.js";
 import { BOT_MESSAGE_LIMITS, BOT_MESSAGE_STATUS_ENTRY_KIND, type BotMessageStatusEntryData } from "../../../renderer/shared/bot-messages.js";
-import { BOT_MESSAGE_INPUT_KIND, isBotInputEntryKind } from "./bot-input-entry.js";
 // Live projection of each Bot's durable conversation to renderer windows
 // (spec §6.5, plan Task 1.4).
 //
@@ -44,9 +49,9 @@ import {
   botSkillProposalStatusOf,
 } from "../../../renderer/shared/bot-skill-proposals.js";
 import { randomUUID } from "node:crypto";
-import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
+import { BACKGROUND_CONTEXT, withCancel, type Context } from "@earendil-works/chord/context";
 import type { AssistantMessage, ImageContent, Message, TextContent, ToolCall } from "@earendil-works/pi-ai";
-import type { Conversation, EntryRecord } from "@earendil-works/pi-durable";
+import type { Conversation, Cursor, EntryRecord, Page } from "@earendil-works/pi-durable";
 import type { ConnectCardEntry, ConnectCardStatus } from "../../../renderer/shared/bot-connections.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../../renderer/shared/ask-user-question.js";
 import {
@@ -1096,6 +1101,99 @@ export function projectBotTranscript(
   return [...settledPrefix, ...tail];
 }
 
+export interface BotEntryPageReader {
+  entries(
+    query: { readonly order?: "ascending" | "descending" },
+    limit: number,
+    cursor: Cursor | undefined,
+    context: Context,
+  ): Promise<Page<EntryRecord, Cursor>>;
+}
+
+const DEFAULT_TURN_SLICE_PAGE_SIZE = 32;
+
+function isTurnOpeningInput(record: EntryRecord): boolean {
+  if (record.kind === BOT_PEER_INPUT_KIND) return true;
+  if (!isBotInputEntryKind(record.kind)) return false;
+  return firstMessage(record)?.role === "user";
+}
+
+function isCandidateVisibleTurnOpening(record: EntryRecord): boolean {
+  if (
+    record.kind !== "pi.user" &&
+    record.kind !== BOT_PERSON_INPUT_KIND &&
+    record.kind !== BOT_ROUTINE_INPUT_KIND
+  ) {
+    return false;
+  }
+  return firstMessage(record)?.role === "user";
+}
+
+function hasVisibleTurnOpening(entries: readonly BotTranscriptEntry[]): boolean {
+  return entries.some((entry) => entry.type === "user" || entry.type === "routine");
+}
+
+/**
+ * Read only the newest active turn's entries in descending order and project
+ * that bounded slice. Stops as soon as the projected slice includes the newest
+ * visible `user` or `routine` opening (after reading any preceding notices up
+ * to the prior input boundary), while respecting active head markers.
+ */
+export async function projectNewestBotTurnEntries(
+  conversation: BotEntryPageReader,
+  options: { pageSize?: number; context?: Context } = {},
+): Promise<BotTranscriptEntry[]> {
+  const pageSize = options.pageSize ?? DEFAULT_TURN_SLICE_PAGE_SIZE;
+  const context = options.context ?? BACKGROUND_CONTEXT;
+  let headMarker: EntryRecord | undefined;
+  let minActiveId: number | undefined;
+  const reverseNonHead: EntryRecord[] = [];
+  let cursor: Cursor | undefined;
+  let sawCandidateUserInput = false;
+
+  const toChronologicalSlice = (): EntryRecord[] => {
+    const ordered: EntryRecord[] = [];
+    if (headMarker) ordered.push(headMarker);
+    for (let i = reverseNonHead.length - 1; i >= 0; i -= 1) {
+      const entry = reverseNonHead[i]!;
+      if (minActiveId !== undefined && Number(entry.id) < minActiveId) continue;
+      ordered.push(entry);
+    }
+    return ordered;
+  };
+
+  for (;;) {
+    const page = await conversation.entries({ order: "descending" }, pageSize, cursor, context);
+    let reachedCutoff = false;
+    for (const entry of page.items) {
+      if (minActiveId !== undefined && Number(entry.id) < minActiveId) {
+        reachedCutoff = true;
+        break;
+      }
+      if (entry.head !== undefined) {
+        if (headMarker === undefined) {
+          headMarker = entry;
+          minActiveId = Number(entry.head);
+        }
+        continue;
+      }
+      if (sawCandidateUserInput && isTurnOpeningInput(entry)) {
+        const projected = projectBotTranscript(toChronologicalSlice());
+        if (hasVisibleTurnOpening(projected)) return projected;
+        sawCandidateUserInput = false;
+      }
+      reverseNonHead.push(entry);
+      if (isCandidateVisibleTurnOpening(entry)) {
+        sawCandidateUserInput = true;
+      }
+    }
+    if (reachedCutoff || !page.next || page.items.length === 0) break;
+    cursor = page.next;
+  }
+
+  return projectBotTranscript(toChronologicalSlice());
+}
+
 /** The in-flight reply text from `pi.live`, or null. A reply heading for `[SILENT]` is never shown. */
 export function livePartialText(docs: Readonly<Record<string, unknown>>): string | null {
   const live = docs["pi.live"] as { generation?: { message?: { content?: unknown } } } | undefined;
@@ -1755,7 +1853,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       feed.baseEntriesRef = entries;
     }
     const resolved = await resolveCards(feed, baseEntries);
-    const stable = !deps.connectCardStatus || !awaitsCardStatus(resolved);
+    const stable = !deps.connectCardStatus || !awaitsCardStatus(baseEntries);
     return { entries: resolved, stable };
   }
 
@@ -2037,7 +2135,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         return;
       }
       if (!alreadyProjectedOnOpen) return;
-      if (!deps.connectCardStatus || !awaitsCardStatus(feed.entries)) return;
+      if (!deps.connectCardStatus || !awaitsCardStatus(feed.baseEntries)) return;
       const conversation = await deps.conversation(feed.botId);
       const view = await conversation.context(BACKGROUND_CONTEXT);
       const baseEntries = projectBotTranscript(view.entries, feed.transcriptCheckpoint);

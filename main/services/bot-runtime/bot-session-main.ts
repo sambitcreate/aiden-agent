@@ -88,7 +88,7 @@ import { toolApprovalRules } from "../tool-approval-rules-main.js";
 import { wireBotAttention } from "./bot-attention.js";
 import { botQuestions } from "./bot-questions-main.js";
 import { botRunStalls, createBotRunWatchdog } from "./bot-run-watchdog.js";
-import { checkBotTurnClaims, projectNewestBotTurnEntries } from "./bot-claim-check.js";
+import { checkBotTurnClaims } from "./bot-claim-check.js";
 import { commitmentReviewExtras } from "../bot-commitments/commitments-main.js";
 import { renderBotLessons } from "../bot-lessons/prompt.js";
 import {
@@ -133,7 +133,7 @@ import { createBotMemoryReview, type BotMemoryAdmission } from "../bot-memory/re
 import { BOT_MEMORY_TOOL_NAME, botMemoryToolEntry, withBotMemoryIngress } from "../bot-memory/tool.js";
 import { BOT_RECALL_TOOL_NAME, botRecallToolEntry } from "../bot-memory/recall.js";
 
-import { createBotLiveProjection, type BotLiveProjection } from "./live-projection.js";
+import { createBotLiveProjection, projectNewestBotTurnEntries, type BotLiveProjection } from "./live-projection.js";
 import { botIngressAllowsTool, botIngressRefusal, botTurnAttended } from "./bot-tool-policy.js";
 import { botSubagentReplyClocks } from "./bot-subagent-reply-clocks.js";
 

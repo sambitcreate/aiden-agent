@@ -18,6 +18,7 @@ import {
   type BotLiveEvent,
   type BotLiveSnapshot,
   type BotPendingQuestion,
+  type BotTranscriptEntry,
 } from "../../../renderer/shared/bot-live.js";
 import type { BotPendingHandoff } from "../../../renderer/shared/bot-handoffs.js";
 import { botTranscriptRows } from "../../../renderer/main/bots/bot-transcript-rows.js";
@@ -1119,6 +1120,58 @@ test("a pending connect card picks up its new status from a frame that only stre
     live.projection.notifyStopping("bot:a");
     await live.service.stop("bot:a");
     unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
+
+test("a durable pending connect card that resolved to connected still re-resolves when status reverts on streaming frames or late subscribe", async () => {
+  let liveStatus: "pending" | "connected" | "needs_access" = "connected";
+  const fauxModels = createFauxModels([slowAnswer()], { tokensPerSecond: 40 });
+  const live = await start(fauxModels, {
+    projection: {
+      connectCardStatus: async (_botId, card) => (card.pluginId === "notion" ? liveStatus : card.status),
+    },
+  });
+  try {
+    const conversation = await live.service.conversation("bot:a");
+    await conversation.submit(
+      {
+        type: "write",
+        entry: { kind: BOT_CONNECT_CARD_ENTRY_KIND, data: { type: "connect_card", pluginId: "notion", reason: "Notes", status: "pending" } },
+      },
+      ctx,
+    );
+    const tape = recorder();
+    const first = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(first.snapshot);
+    const cardStatusOf = (entries: readonly BotTranscriptEntry[] | undefined) => {
+      const card = entries?.find((entry) => entry.type === "connect_card");
+      return card?.type === "connect_card" ? card.card.status : null;
+    };
+    assert.equal(cardStatusOf(tape.view?.entries), "connected");
+
+    // If external state changes while idle and a second window subscribes without an explicit refresh,
+    // ensureProjected re-resolves because baseEntries still holds the durable pending card.
+    liveStatus = "needs_access";
+    const second = await live.projection.subscribe("bot:a", recorder().sink);
+    assert.equal(cardStatusOf(second.snapshot.entries), "needs_access");
+    await waitFor(() => cardStatusOf(tape.view?.entries) === "needs_access", { what: "needs_access pushed to existing subscriber" });
+    second.unsubscribe();
+
+    // Restore to connected, then verify streaming frames (same entries array reference) still re-resolve back to pending.
+    liveStatus = "connected";
+    await live.projection.refresh("bot:a");
+    await waitFor(() => cardStatusOf(tape.view?.entries) === "connected", { what: "connected status restored" });
+
+    await live.service.send("bot:a", { text: "go", requestId: "desk-revert-1" });
+    await waitFor(() => (tape.view?.partial ?? "").length > 0, { what: "a partial reply" });
+    liveStatus = "pending";
+    await waitFor(() => cardStatusOf(tape.view?.entries) === "pending", { what: "reverted pending status during streaming" });
+
+    live.projection.notifyStopping("bot:a");
+    await live.service.stop("bot:a");
+    first.unsubscribe();
   } finally {
     await live.close();
   }

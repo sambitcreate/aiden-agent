@@ -5121,6 +5121,24 @@ test("refreshConnectCards invalidates cached projections after pi.live streaming
         ),
       "the connected card snapshot",
     );
+
+    // If the connection is later disconnected before a new entry commits, a subsequent pi.live frame
+    // still re-resolves the durable pending card back to pending.
+    connected.delete("gmail");
+    await driven.emit(history, "Checking again…");
+    await stream.until(
+      () =>
+        stream.frames.some(
+          (frame) =>
+            frame.type === "entry" &&
+            (frame.payload as any)?.entry?.type === "connect_card" &&
+            (frame.payload as any)?.entry?.status === "pending",
+        ) &&
+        stream.frames.some(
+          (frame) => frame.type === "partial" && (frame.payload as any)?.text === "Checking again…",
+        ),
+      "the reverted pending card update",
+    );
     const seqs = stream.frames.map((frame) => frame.seq);
     assert.deepEqual(seqs, seqs.map((_, idx) => seqs[0]! + idx));
   } finally {
