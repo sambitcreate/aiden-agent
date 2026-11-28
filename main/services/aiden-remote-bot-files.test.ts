@@ -624,3 +624,248 @@ test("Bot revocation during identity inspection drains work before releasing aut
   assert.equal(releases(), 1);
   assert.equal(handles.storedTokenMaterialForTesting().length, 0);
 });
+
+test("Bot file listing revalidates authority twice across batched entries and rejects mid-scan policy or home mutations without issuing or superseding handles", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-boundary-revalidation-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  for (let i = 0; i < 12; i += 1) {
+    await fs.writeFile(path.join(root, `item-${String(i).padStart(2, "0")}.md`), `content-${i}\n`, "utf8");
+  }
+
+  let revalidations = 0;
+  let releases = 0;
+  let pendingMutation: "capability_changed" | "managed_home_changed" | undefined;
+  let controller = new AbortController();
+  const handles = new AidenOpaqueHandleStore({ maxEntries: 12 });
+  const service = new AidenRemoteBotFileService({
+    instanceId: "instance",
+    botAudienceId: "desktop:local",
+    handles,
+    chats: {
+      get: async (id) => ({
+        id,
+        botId: "bot",
+        workspaceId: "home",
+        title: "Bot",
+        messages: [],
+        createdAt: 1,
+        updatedAt: 1,
+      }),
+    },
+    authority: {
+      admit: async ({ botId, chatId }) => ({
+        authority: authorityFixture({ root, botId, chatId, workspaceId: "home", epoch: "1", botHome: true }),
+        signal: controller.signal,
+        revalidateBeforeEffect: async () => {
+          revalidations += 1;
+          if (pendingMutation) throw new BotRuntimeAuthorityError(pendingMutation);
+        },
+        release: () => { releases += 1; },
+      }),
+    },
+  });
+
+  // 1. Multi-file listing calls revalidateBeforeEffect exactly twice (pre-scan + post-scan)
+  // and issues handles in index order.
+  const initial = await service.list("device-1", "chat-one");
+  assert.equal(revalidations, 2);
+  assert.equal(releases, 1);
+  assert.equal(initial.truncated, false);
+  assert.deepEqual(
+    initial.entries.map((entry) => entry.displayPath),
+    Array.from({ length: 12 }, (_, i) => `item-${String(i).padStart(2, "0")}.md`),
+  );
+  const priorStoredDigests = handles.storedTokenMaterialForTesting();
+  assert.equal(priorStoredDigests.length, 12);
+
+  // 2. Mid-scan policy and managed-home mutations fail post-scan revalidation, drain active
+  // stats, issue zero new handles, and preserve prior listing handles unsuperseded.
+  const originalStat = fsPromises.stat;
+  let active = 0;
+  let mutateDuringIdentityPass: "capability_changed" | "managed_home_changed" | undefined;
+  const visits = new Map<string, number>();
+  fsPromises.stat = (async (...args: Parameters<typeof fsPromises.stat>) => {
+    const target = String(args[0]);
+    if (!target.startsWith(root) || !target.endsWith(".md")) return originalStat(...args);
+    const visit = (visits.get(target) ?? 0) + 1;
+    visits.set(target, visit);
+    active += 1;
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (mutateDuringIdentityPass && visit === 2 && !pendingMutation) {
+        pendingMutation = mutateDuringIdentityPass;
+      }
+      return await originalStat(...args);
+    } finally {
+      active -= 1;
+    }
+  }) as typeof fsPromises.stat;
+  syncBuiltinESMExports();
+  t.after(() => {
+    fsPromises.stat = originalStat;
+    syncBuiltinESMExports();
+  });
+
+  for (const classification of ["capability_changed", "managed_home_changed"] as const) {
+    visits.clear();
+    revalidations = 0;
+    pendingMutation = undefined;
+    mutateDuringIdentityPass = classification;
+    const emptyHandles = new AidenOpaqueHandleStore();
+    const freshService = new AidenRemoteBotFileService({
+      instanceId: "instance",
+      botAudienceId: "desktop:local",
+      handles: emptyHandles,
+      chats: {
+        get: async (id) => ({
+          id,
+          botId: "bot",
+          workspaceId: "home",
+          title: "Bot",
+          messages: [],
+          createdAt: 1,
+          updatedAt: 1,
+        }),
+      },
+      authority: {
+        admit: async ({ botId, chatId }) => ({
+          authority: authorityFixture({ root, botId, chatId, workspaceId: "home", epoch: "1", botHome: true }),
+          signal: controller.signal,
+          revalidateBeforeEffect: async () => {
+            revalidations += 1;
+            if (pendingMutation) throw new BotRuntimeAuthorityError(pendingMutation);
+          },
+          release: () => { releases += 1; },
+        }),
+      },
+    });
+    await assert.rejects(
+      () => freshService.list("device-1", "chat-one"),
+      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "operation_stale",
+    );
+    assert.equal(revalidations, 2);
+    assert.equal(active, 0);
+    assert.equal(emptyHandles.storedTokenMaterialForTesting().length, 0);
+
+    // Also verify against `service` (which already holds 12 handles from `initial`):
+    // a failed refresh must not supersede `initial`'s unopened handles.
+    visits.clear();
+    revalidations = 0;
+    pendingMutation = undefined;
+    await assert.rejects(
+      () => service.list("device-1", "chat-one"),
+      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "operation_stale",
+    );
+    assert.equal(revalidations, 2);
+    assert.equal(active, 0);
+    assert.deepEqual(handles.storedTokenMaterialForTesting(), priorStoredDigests);
+    mutateDuringIdentityPass = undefined;
+    pendingMutation = undefined;
+    // Because `initial`'s 12 handles were never superseded, listing another chat for the
+    // same device hits the 12-entry cap instead of reclaiming `initial`'s unopened handles.
+    await assert.rejects(
+      () => service.list("device-1", "chat-two"),
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError &&
+        error.code === "handle_capacity" &&
+        error.status === 429,
+    );
+    assert.equal((await service.read("device-1", "chat-one", initial.entries[0]!.id)).content, "content-0\n");
+  }
+
+  // 3. Mid-scan lease abort with a plain Error (as BotCapabilityLeaseRegistry emits),
+  // even when concurrent files vanish during revocation, rejects with operation_stale
+  // rather than omitting entries, drains active stats, and preserves prior handles.
+  visits.clear();
+  revalidations = 0;
+  controller = new AbortController();
+  let abortWithLeaseError = true;
+  fsPromises.stat = (async (...args: Parameters<typeof fsPromises.stat>) => {
+    const target = String(args[0]);
+    if (!target.startsWith(root) || !target.endsWith(".md")) return originalStat(...args);
+    const visit = (visits.get(target) ?? 0) + 1;
+    visits.set(target, visit);
+    active += 1;
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (abortWithLeaseError && visit === 2) {
+        abortWithLeaseError = false;
+        controller.abort(new Error("Bot access changed while this work was active."));
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      }
+      return await originalStat(...args);
+    } finally {
+      active -= 1;
+    }
+  }) as typeof fsPromises.stat;
+  syncBuiltinESMExports();
+
+  const beforeAbortDigests = handles.storedTokenMaterialForTesting();
+  await assert.rejects(
+    () => service.list("device-1", "chat-one"),
+    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "operation_stale",
+  );
+  assert.equal(revalidations, 1);
+  assert.equal(active, 0);
+  assert.deepEqual(handles.storedTokenMaterialForTesting(), beforeAbortDigests);
+});
+
+test("batched Bot file inspection omits only escaping symlinks, multiply-linked files, and vanished files", async (t) => {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-omissions-"));
+  t.after(() => fs.rm(temporary, { recursive: true, force: true }));
+  const root = path.join(temporary, "managed-home");
+  const outside = path.join(temporary, "outside.txt");
+  await fs.mkdir(root, { recursive: true });
+  await fs.writeFile(outside, "secret\n", "utf8");
+  await fs.writeFile(path.join(root, "a-valid.md"), "alpha\n", "utf8");
+  await fs.symlink(outside, path.join(root, "b-escaped.md"));
+  await fs.link(outside, path.join(root, "c-linked.md"));
+  await fs.writeFile(path.join(root, "d-vanished.md"), "transient\n", "utf8");
+  await fs.writeFile(path.join(root, "e-valid.md"), "omega\n", "utf8");
+
+  const originalRealpath = fsPromises.realpath;
+  const vanishedPath = path.join(root, "d-vanished.md");
+  fsPromises.realpath = (async (...args: Parameters<typeof fsPromises.realpath>) => {
+    if (String(args[0]) === vanishedPath) {
+      await fs.rm(vanishedPath, { force: true });
+    }
+    return originalRealpath(...args);
+  }) as typeof fsPromises.realpath;
+  syncBuiltinESMExports();
+  t.after(() => {
+    fsPromises.realpath = originalRealpath;
+    syncBuiltinESMExports();
+  });
+
+  let revalidations = 0;
+  const service = new AidenRemoteBotFileService({
+    instanceId: "instance",
+    botAudienceId: "desktop:local",
+    chats: {
+      get: async (id) => ({
+        id,
+        botId: "bot",
+        workspaceId: "home",
+        title: "Bot",
+        messages: [],
+        createdAt: 1,
+        updatedAt: 1,
+      }),
+    },
+    authority: {
+      admit: async ({ botId, chatId }) => ({
+        authority: authorityFixture({ root, botId, chatId, workspaceId: "home", epoch: "1", botHome: true }),
+        signal: new AbortController().signal,
+        revalidateBeforeEffect: async () => { revalidations += 1; },
+        release: () => undefined,
+      }),
+    },
+  });
+
+  const index = await service.list("device-1", "chat-one");
+  assert.equal(revalidations, 2);
+  assert.equal(index.truncated, true);
+  assert.deepEqual(index.entries.map((entry) => entry.displayPath), ["a-valid.md", "e-valid.md"]);
+  assert.equal((await service.read("device-1", "chat-one", index.entries[0]!.id)).content, "alpha\n");
+  assert.equal((await service.read("device-1", "chat-one", index.entries[1]!.id)).content, "omega\n");
+});

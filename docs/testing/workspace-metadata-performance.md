@@ -84,3 +84,7 @@ Fresh independent Astra medium caller/blast-radius review cleared the Bot follow
 ## Update — 2026-11-19
 
 Phase 7 of [the prompt cache plan](../plans/prompt-cache-hit-rate.md) retired the Gemini explicit context cache. Gemini turn preparation no longer lists the workspace, so the "Eligible Gemini turn preparation" caller above is gone; Desktop Files, the CLI and the legacy Remote snapshots still share the index. The benchmark keeps its "Gemini index" operation name for comparison with the runs above, and now compares a projection of the index (entries, truncation and skipped directories) instead of the retired snapshot string. The measurements above are the 2026-09-28 record and are unchanged.
+
+## Update — 2026-11-28
+
+`AidenRemoteBotFileService.list` (`main/services/aiden-remote-bot-files.ts`) now passes `index.entries` to a single `mapWorkspaceMetadata` call under `authority.signal` and bounds `authority.revalidateBeforeEffect()` to one pre-scan check before `listWorkspaceFiles` and one post-scan check after `mapWorkspaceMetadata`, superseding prior handles and issuing new handles in index order only after post-scan revalidation succeeds. `AidenRemoteBotFileService.read` and `write` retain per-operation `withResolvedFile` revalidation.
