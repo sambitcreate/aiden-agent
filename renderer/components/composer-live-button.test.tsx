@@ -272,7 +272,6 @@ function DockHarness({
   return (
     <TooltipProvider>
       <AssistantDockPresentation
-        chat={{ approvals: [], decidingApprovalId: null, decideApproval: async () => undefined }}
         live={live}
         hostSupported={hostSupported}
         buttonVisible={buttonVisible}
@@ -398,7 +397,6 @@ test("after setup, a press with missing microphone readiness opens Aiden Live se
   render(
     <TooltipProvider>
       <AssistantDockPresentation
-        chat={{ approvals: [], decidingApprovalId: null, decideApproval: async () => undefined }}
         live={live}
         onOpenSettings={(section) => opened.push(section)}
         useCommand={() => undefined}

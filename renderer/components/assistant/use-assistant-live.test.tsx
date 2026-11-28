@@ -1623,84 +1623,6 @@ test("caption reconciliation updates one interim utterance and finalizes its sta
   assert.equal(captions[1]?.text, "A separate turn");
 });
 
-test("final input receipt sequence advances synchronously at event delivery", async () => {
-  const fixture = await mountHook();
-  await fixture.controller().start();
-  fixture.emit({
-    type: "caption",
-    sessionId: "session-1",
-    direction: "input",
-    text: "Deny",
-    final: true,
-  });
-  assert.equal(
-    fixture.controller().latestVoiceApprovalReceiptId(),
-    1,
-    "an approval arriving before React commits still fences this utterance",
-  );
-  await fixture.unmount();
-});
-
-test("batched finalized utterances retain every approval receipt in FIFO order", async () => {
-  const fixture = await mountHook();
-  await fixture.controller().start();
-  fixture.emitBatch([
-    {
-      type: "caption",
-      sessionId: "session-1",
-      direction: "input",
-      text: "Allow once",
-      final: true,
-    },
-    { type: "turn", sessionId: "session-1", state: "turn_complete" },
-    {
-      type: "caption",
-      sessionId: "session-1",
-      direction: "input",
-      text: "Deny",
-      final: true,
-    },
-    { type: "turn", sessionId: "session-1", state: "turn_complete" },
-  ]);
-  assert.deepEqual(fixture.controller().voiceApprovalReceipts, [
-    { id: 1, text: "Allow once" },
-    { id: 2, text: "Deny" },
-  ]);
-  await fixture.unmount();
-});
-
-test("a pending exact voice approval survives bounded receipt eviction", async () => {
-  const fixture = await mountHook();
-  await fixture.controller().start();
-  fixture.controller().retainVoiceApprovalReceiptsAfter(0);
-  fixture.emitBatch([
-    {
-      type: "caption",
-      sessionId: "session-1",
-      direction: "input",
-      text: "Allow once.",
-      final: true,
-    },
-    { type: "turn", sessionId: "session-1", state: "turn_complete" },
-    ...Array.from({ length: 300 }, (_, index): AssistantLiveRendererEvent[] => [
-      {
-        type: "caption",
-        sessionId: "session-1",
-        direction: "input",
-        text: `noise ${index}`,
-        final: true,
-      },
-      { type: "turn", sessionId: "session-1", state: "turn_complete" },
-    ]).flat(),
-  ]);
-  assert.equal(fixture.controller().voiceApprovalReceipts.length, 256);
-  assert.deepEqual(fixture.controller().voiceApprovalReceipts[0], {
-    id: 1,
-    text: "Allow once.",
-  });
-  await fixture.unmount();
-});
-
 function hearUser(text: string, extra: Partial<Extract<AssistantLiveRendererEvent, { type: "caption" }>> = {}): AssistantLiveRendererEvent {
   return { type: "caption", sessionId: "session-1", direction: "input", text, final: true, ...extra };
 }
@@ -1731,10 +1653,6 @@ test("speech that arrives in pieces is heard as one utterance, so a phrase insid
   fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
   assert.deepEqual(heard, ["Don't allow this"]);
   assert.equal(matchLiveVoicePhrase(heard[0]!), null);
-  assert.deepEqual(
-    fixture.controller().voiceApprovalReceipts.map((receipt) => receipt.text),
-    ["Don't allow this"],
-  );
   await stop();
 });
 
@@ -1971,7 +1889,7 @@ test("talking over Live keeps one utterance through the cut-off reply's leftover
   await stop();
 });
 
-test("words still pending when Live ends are dropped, and an utterance begun before an approval stays fenced", async () => {
+test("words still pending when Live ends are dropped", async () => {
   const ended = await listenToVoiceInput({ utteranceQuietMs: 20 });
   ended.fixture.emit(hearUser("Allow"));
   ended.fixture.emit({
@@ -1981,20 +1899,6 @@ test("words still pending when Live ends are dropped, and an utterance begun bef
   await new Promise((resolve) => setTimeout(resolve, 60));
   assert.deepEqual(ended.heard, []);
   await ended.stop();
-
-  const fenced = await listenToVoiceInput();
-  fenced.fixture.emit(hearUser("Allow"));
-  // An approval prompt appearing now takes this baseline.
-  const baseline = fenced.fixture.controller().latestVoiceApprovalReceiptId();
-  fenced.fixture.emit(hearUser(" once"));
-  fenced.fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
-  const [receipt] = fenced.fixture.controller().voiceApprovalReceipts;
-  assert.equal(receipt?.text, "Allow once");
-  assert.ok(receipt!.id <= baseline, "speech that began before the prompt cannot answer it");
-  fenced.fixture.emit(hearUser("Allow once"));
-  fenced.fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
-  assert.ok(fenced.fixture.controller().voiceApprovalReceipts[1]!.id > baseline);
-  await fenced.stop();
 });
 
 test("caption turns preserve a long response beyond the former fragment cap", () => {

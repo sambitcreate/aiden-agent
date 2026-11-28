@@ -9,14 +9,12 @@ export type AidenLiveMarkState =
   | "thinking"
   | "speaking"
   | "acting"
-  | "approval"
   | "error"
   | "unavailable";
 
 /**
- * Live speaks the Helix family: one braid tuned per state, plus Glance while
- * it waits on an approval. Ready rests on a frozen Calm pose so an idle
- * session costs nothing.
+ * Live speaks the Helix family: one braid tuned per state. Ready rests on a
+ * frozen Calm pose so an idle session costs nothing.
  */
 export function aidenLiveMark(state: AidenLiveMarkState): { mark: ActivityMark; active: boolean } {
   switch (state) {
@@ -28,8 +26,6 @@ export function aidenLiveMark(state: AidenLiveMarkState): { mark: ActivityMark; 
     case "speaking":
     case "acting":
       return { mark: "helix-duplex", active: true };
-    case "approval":
-      return { mark: "glance", active: true };
     case "error":
     case "unavailable":
       return { mark: "helix-flat", active: false };

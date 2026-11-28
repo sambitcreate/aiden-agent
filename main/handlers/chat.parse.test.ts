@@ -100,7 +100,6 @@ test("registered chat:start forwards foreground delegation and the appended turn
         }),
       },
     },
-    "../services/gemini-live/service-main.js": { geminiLiveService: {} },
     "../services/tool-approval-rules-main.js": { toolApprovalRules: {} },
     "../services/analytics/analytics-feature-reports.js": analyticsFeatureReports,
     "../services/analytics/analytics-ids.js": analyticsIds,

@@ -25,7 +25,6 @@ import type {
   LiveDisplaySources,
   LiveDisplaySourceSummary,
 } from "../../shared/assistant-live";
-import { assistantLiveVoiceApprovalDecision } from "./assistant-live-voice-approval";
 import { liveSessionBus } from "../../lib/live-session-bus";
 import { LIVE_UNTRUSTED_VOICE_START, LiveSpeechOnsets } from "../../lib/live-speech-onsets";
 import { LiveTimeStretcher } from "../../lib/live-time-stretch";
@@ -35,11 +34,6 @@ export interface AssistantLiveCaption {
   direction: "input" | "output";
   final: boolean;
   sealed: boolean;
-  text: string;
-}
-
-export interface AssistantLiveVoiceApprovalReceipt {
-  id: number;
   text: string;
 }
 
@@ -61,9 +55,6 @@ export interface AssistantLiveController {
   model: string | null;
   state: AssistantLiveSnapshot["state"];
   captions: readonly AssistantLiveCaption[];
-  voiceApprovalReceipts: readonly AssistantLiveVoiceApprovalReceipt[];
-  latestVoiceApprovalReceiptId(): number;
-  retainVoiceApprovalReceiptsAfter(receiptId: number | null): void;
   error: string | null;
   reconnectRequired: boolean;
   startBlockedReason: string | null;
@@ -674,20 +665,16 @@ export function useAssistantLiveWithDependencies(
   const playerRef = React.useRef<PcmPlayer | null>(null);
   if (!playerRef.current) playerRef.current = dependencies.createPlayer();
   const captionId = React.useRef(0);
-  const voiceApprovalReceiptId = React.useRef(0);
-  const voiceApprovalReceiptRetentionFloor = React.useRef<number | null>(null);
   // Google transcribes the user's speech in pieces ("Don't", " allow", " this").
   // Pieces join into one utterance that is published once, when the user's turn
-  // ends, so a fixed phrase is matched against everything that was said. The
-  // receipt id is taken at the first piece, so an approval shown mid-sentence
-  // still fences words that started before it.
+  // ends, so a fixed phrase is matched against everything that was said.
   //
   // Live's output ends the user's turn only when Live was quiet as the user
   // began. Speech that talks over a reply is followed by that reply's
   // leftovers (a late caption, a last chunk, its turn end), so such an
   // utterance ends only on Google's finished mark or the quiet timer.
   const pendingUtterance = React.useRef<
-    { receiptId: number; startedAt: number; text: string; overReply: boolean } | null
+    { startedAt: number; text: string; overReply: boolean } | null
   >(null);
   /** Bus start mark of the utterance under way, taken on its first input caption, interim or final. */
   const utteranceStartedAt = React.useRef<number | null>(null);
@@ -702,13 +689,6 @@ export function useAssistantLiveWithDependencies(
   /** Whether Live's latest reply is still producing output, including a reply the user cut off. */
   const liveReplyOpen = React.useRef(false);
   const utteranceQuietTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const latestVoiceApprovalReceiptId = React.useCallback(
-    () => voiceApprovalReceiptId.current,
-    [],
-  );
-  const retainVoiceApprovalReceiptsAfter = React.useCallback((receiptId: number | null) => {
-    voiceApprovalReceiptRetentionFloor.current = receiptId;
-  }, []);
   const computerUseGeneration = React.useRef(0);
   const [snapshot, setSnapshot] = React.useState<AssistantLiveSnapshot>({
     available: false,
@@ -749,9 +729,6 @@ export function useAssistantLiveWithDependencies(
     React.useState<AssistantLiveMicrophonePermission>("checking");
   const [busy, setBusy] = React.useState(false);
   const [captions, setCaptions] = React.useState<AssistantLiveCaption[]>([]);
-  const [voiceApprovalReceipts, setVoiceApprovalReceipts] = React.useState<
-    AssistantLiveVoiceApprovalReceipt[]
-  >([]);
   const [error, setError] = React.useState<string | null>(null);
   const [reconnectRequired, setReconnectRequired] = React.useState(false);
   const [computerUseStatus, setComputerUseStatus] = React.useState<ComputerUseStatus | null>(null);
@@ -870,23 +847,6 @@ export function useAssistantLiveWithDependencies(
     if (!pending || !mounted.current) return;
     speechOnsets.retireFinished();
     liveSessionBus.publishVoiceInput(pending.text, pending.startedAt);
-    const receipt = { id: pending.receiptId, text: pending.text };
-    setVoiceApprovalReceipts((current) => {
-      const next = [...current, receipt];
-      const floor = voiceApprovalReceiptRetentionFloor.current;
-      const protectedReceipt =
-        floor === null
-          ? undefined
-          : next.find(
-              (candidate) =>
-                candidate.id > floor &&
-                assistantLiveVoiceApprovalDecision(candidate.text) !== null,
-            );
-      const tail = next.slice(protectedReceipt ? -255 : -256);
-      return protectedReceipt && !tail.some((candidate) => candidate.id === protectedReceipt.id)
-        ? [protectedReceipt, ...tail]
-        : tail;
-    });
   }, [discardUtterance, speechOnsets]);
 
   const continueUtterance = React.useCallback(
@@ -895,7 +855,6 @@ export function useAssistantLiveWithDependencies(
       const text = joinAssistantLiveCaptionFragments(pending?.text ?? "", fragment);
       if (!text) return;
       pendingUtterance.current = {
-        receiptId: pending?.receiptId ?? ++voiceApprovalReceiptId.current,
         startedAt: pending?.startedAt ?? utteranceStartedAt.current ?? LIVE_UNTRUSTED_VOICE_START,
         text,
         overReply: pending ? pending.overReply : liveReplyOpen.current,
@@ -922,7 +881,6 @@ export function useAssistantLiveWithDependencies(
           discardUtterance();
           liveReplyOpen.current = false;
           setCaptions([]);
-          setVoiceApprovalReceipts([]);
           setComputerUseActing(false);
           if (event.snapshot.state !== "closed") {
             setReconnectRequired(true);
@@ -966,12 +924,9 @@ export function useAssistantLiveWithDependencies(
         playerRef.current?.flush();
         setCaptions(sealAssistantLiveCaption);
       } else if (event.type === "caption") {
-        // The receipt id is assigned synchronously at IPC delivery time. React may defer
-        // the caption render, but an immediately following approval notification must
-        // still fence every utterance that began before the prompt.
-        // The bus start mark likewise, taken from when the microphone first
-        // heard this speech: speech begun before an approval armed stays
-        // before its fence however late its caption arrives or ends.
+        // The bus start mark is taken synchronously at IPC delivery time from when
+        // the microphone first heard this speech: speech begun before an approval
+        // armed stays before its fence however late its caption arrives or ends.
         if (event.direction === "input") speechOnsets.heard();
         if (event.direction === "input" && utteranceStartedAt.current === null) {
           // No onset in reach (speech too quiet to measure, or its caption came
@@ -999,7 +954,6 @@ export function useAssistantLiveWithDependencies(
         sessionRef.current = null;
         discardUtterance();
         setCaptions([]);
-        setVoiceApprovalReceipts([]);
         setReconnectRequired(true);
         setError((current) => current ?? "Live disconnected. Nothing restarted automatically.");
         setSnapshot((current) => ({
@@ -1395,7 +1349,6 @@ export function useAssistantLiveWithDependencies(
               if (!activeSnapshot(next)) {
                 setCaptions([]);
                 pendingUtterance.current = null;
-                setVoiceApprovalReceipts([]);
               }
               setError(
                 "Microphone capture stopped because audio could not be sent. Start Live again.",
@@ -1512,7 +1465,6 @@ export function useAssistantLiveWithDependencies(
     setCaptions([]);
     pendingUtterance.current = null;
     liveReplyOpen.current = false;
-    setVoiceApprovalReceipts([]);
     setComputerUseActing(false);
     setMicrophoneMuted(false);
     try {
@@ -1613,7 +1565,6 @@ export function useAssistantLiveWithDependencies(
         if (!activeSnapshot(next)) {
           setCaptions([]);
           pendingUtterance.current = null;
-          setVoiceApprovalReceipts([]);
         }
         setError(null);
       }
@@ -1626,7 +1577,6 @@ export function useAssistantLiveWithDependencies(
           if (!activeSnapshot(reconciled)) {
             setCaptions([]);
             pendingUtterance.current = null;
-            setVoiceApprovalReceipts([]);
           }
           setError(
             activeSnapshot(reconciled)
@@ -1705,9 +1655,6 @@ export function useAssistantLiveWithDependencies(
     model: snapshot.model ?? null,
     state: snapshot.state,
     captions,
-    voiceApprovalReceipts,
-    latestVoiceApprovalReceiptId,
-    retainVoiceApprovalReceiptsAfter,
     error,
     reconnectRequired,
     startBlockedReason:

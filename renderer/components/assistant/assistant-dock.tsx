@@ -1,7 +1,7 @@
 // Aiden's window-level Live control. The composer's Send button starts Live
 // when the draft is empty (renderer/lib/live-launcher.ts); this dock owns the
 // session, the ribbon, setup, and a corner pill that appears only while Live
-// is connecting, stopping, needs an approval, or has disconnected.
+// is connecting, stopping, or has disconnected.
 
 import * as React from "react";
 import { useNavigate, useRouter } from "@tanstack/react-router";
@@ -17,9 +17,7 @@ import {
   AssistantLiveSetupDialog,
   assistantLiveMarkState,
 } from "./assistant-live";
-import { AssistantComputerUseApproval } from "./assistant-computer-use-approval";
 import { useAssistantLive, type AssistantLiveController } from "./use-assistant-live";
-import type { AssistantLiveApprovals } from "./use-assistant-live-approvals";
 import { liveActivity, type LiveActivity } from "../../lib/live-activity";
 import type { AidenLivePreferences } from "../../shared/aiden-live-settings";
 import { LiveRibbon } from "./live-ribbon";
@@ -28,12 +26,6 @@ import { liveCornerClearance, measureChatComposer } from "./use-live-ribbon-plac
 import { useAidenLivePreferences, type AidenLivePreferencesPatch } from "./use-aiden-live-preferences";
 import { useLiveChatVoiceApprovals } from "./use-live-chat-voice-approvals";
 import { isEscapeKey } from "../../lib/dismiss-key";
-
-const SESSION_ACTIONS: AssistantLiveApprovals = {
-  approvals: [],
-  decidingApprovalId: null,
-  decideApproval: async () => undefined,
-};
 
 const DEFAULT_RIBBON_PREFERENCES: Pick<AidenLivePreferences, "voice" | "speed" | "ribbonColors"> = {
   voice: "Puck",
@@ -60,7 +52,6 @@ const TRIGGER_LABEL: Record<AidenLiveMarkState, string> = {
   thinking: "Thinking",
   speaking: "Speaking",
   acting: "Working",
-  approval: "Approve",
   error: "Disconnected",
 };
 
@@ -115,7 +106,6 @@ export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): Reac
   );
   return (
     <AssistantDockPresentation
-      chat={SESSION_ACTIONS}
       live={live}
       rightInset={rightInset}
       enabled={enabled}
@@ -130,7 +120,6 @@ export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): Reac
 }
 
 export function AssistantDockPresentation({
-  chat,
   live,
   rightInset = 0,
   enabled = true,
@@ -142,7 +131,6 @@ export function AssistantDockPresentation({
   preferences = DEFAULT_RIBBON_PREFERENCES,
   onPreferencesChange = () => undefined,
 }: {
-  chat: AssistantLiveApprovals;
   live: AssistantLiveController;
   rightInset?: number;
   /** Settings → Voice & Speech → Aiden Live. Off renders nothing and ignores the Live command. */
@@ -165,12 +153,10 @@ export function AssistantDockPresentation({
   const [stopRevealed, setStopRevealed] = React.useState(false);
   const [setupCompleted, setSetupCompleted] = React.useState(storedSetupComplete);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
-  const liveApproval = chat.approvals.find((approval) => approval.toolName === "computer_use");
-  const approvalPending = Boolean(liveApproval);
-  const markState = assistantLiveMarkState(live, approvalPending);
+  const markState = assistantLiveMarkState(live);
   // Saying goodbye, or Live's end_session tool, ends the session, but never
-  // while the ribbon's request or the Computer Use approval waits on the user.
-  useLiveVoiceEnding(live, { answerPending: () => approvalPending || markState === "approval" });
+  // while the ribbon's request waits on the user.
+  useLiveVoiceEnding(live);
 
   React.useEffect(() => {
     if (!live.active) setStopRevealed(false);
@@ -193,9 +179,9 @@ export function AssistantDockPresentation({
   }, [enabled, active, busy, setupOpen, setSetupOpen, stop]);
 
   React.useEffect(() => {
-    if (approvalPending || live.error) setHudOpen(true);
+    if (live.error) setHudOpen(true);
     else if (!live.active) setHudOpen(false);
-  }, [approvalPending, live.active, live.error]);
+  }, [live.active, live.error]);
 
   React.useEffect(() => {
     if (!live.active || !live.microphoneActive || setupCompleted) return;
@@ -286,9 +272,9 @@ export function AssistantDockPresentation({
   React.useEffect(() => () => liveLauncher.publish(LIVE_LAUNCH_IDLE, null), []);
 
   // The idle pill moved into the composer's Send button. The corner pill
-  // shows only while there is a session starting or stopping, a pending
-  // approval, or an error to see and stop.
-  const sessionVisible = live.active || live.busy || closing || Boolean(live.error) || approvalPending;
+  // shows only while there is a session starting or stopping, or an error to
+  // see and stop.
+  const sessionVisible = live.active || live.busy || closing || Boolean(live.error);
   const dockRef = React.useRef<HTMLDivElement>(null);
   // The chat column keeps no lane for the pill, so it rises above the composer it would cover.
   const cornerClearance = useLiveCornerClearance(dockRef, live.visible && enabled && !live.active && sessionVisible);
@@ -307,13 +293,6 @@ export function AssistantDockPresentation({
   // control can target "Listening" or "Disconnected" by what it shows.
   const accessibleName = action.toLowerCase().includes(label.toLowerCase()) ? action : `${label}, ${action}`;
 
-  const approvalPrompt = liveApproval ? (
-    <AssistantComputerUseApproval
-      prompt={liveApproval}
-      deciding={chat.decidingApprovalId === liveApproval.approvalId}
-    />
-  ) : null;
-
   return (
     <>
       {live.active ? (
@@ -323,9 +302,7 @@ export function AssistantDockPresentation({
           activity={activity}
           preferences={preferences}
           onPreferencesChange={onPreferencesChange}
-        >
-          {approvalPrompt}
-        </LiveRibbon>
+        />
       ) : null}
       <div
         ref={dockRef}
@@ -336,9 +313,7 @@ export function AssistantDockPresentation({
         }}
       >
         {!live.active && live.error && (hudOpen || live.screenActive) ? (
-          <AssistantLiveHud live={live} markState={markState}>
-            {approvalPrompt}
-          </AssistantLiveHud>
+          <AssistantLiveHud live={live} markState={markState} />
         ) : null}
         {!live.active && sessionVisible ? (
           <button
@@ -361,7 +336,6 @@ export function AssistantDockPresentation({
               )}
             </span>
             <span className="aiden-live-trigger-label">{label}</span>
-            {approvalPending ? <span className="aiden-live-trigger-badge" aria-hidden="true" /> : null}
           </button>
         ) : null}
         {live.active ? null : (
