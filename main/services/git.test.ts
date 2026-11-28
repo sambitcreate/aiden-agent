@@ -9,6 +9,7 @@ import test from "node:test";
 import { captureAnalyticsEvents } from "./analytics/test-support.js";
 import { promisify } from "node:util";
 import {
+  createGitWorkspaceSummaryReader,
   GitManagedWorktreeDeleteError,
   GitService,
   GitServiceError,
@@ -70,6 +71,101 @@ async function createRepository(t: test.TestContext): Promise<string> {
   await git(repository, ["commit", "-m", "Initial commit"]);
   return repository;
 }
+
+test("a workspace summary names the repository root, and only a clean answer says a folder is not a repository", async (t) => {
+  const service = new GitService({ cacheTtlMs: 0 });
+  const repository = await createRepository(t);
+  const canonicalRepository = await fs.realpath(repository);
+  const subfolder = path.join(repository, "packages", "web");
+  await fs.mkdir(subfolder, { recursive: true });
+  await fs.writeFile(path.join(repository, "NOTES.md"), "draft\n", "utf8");
+
+  const top = await service.workspaceSummary(repository);
+  const nested = await service.workspaceSummary(subfolder);
+  assert.equal(top.root, canonicalRepository);
+  assert.equal(nested.root, canonicalRepository, "folders in one repository share its root");
+  assert.equal(nested.info.isRepo, true);
+  assert.equal(nested.info.branch, "main");
+  assert.equal(nested.info.uncommitted, 1);
+
+  const plain = await temporaryDirectory(t);
+  assert.deepEqual(await service.workspaceSummary(plain), { root: await fs.realpath(plain), info: { isRepo: false } });
+
+  await assert.rejects(service.workspaceSummary(path.join(plain, "missing")), "a missing folder is a failure, not a non-repository");
+
+  const corrupt = path.join(await temporaryDirectory(t), "corrupt");
+  await fs.mkdir(corrupt);
+  await fs.writeFile(path.join(corrupt, ".git"), "gitdir: /nonexistent/aiden-corrupt-repository\n", "utf8");
+  await assert.rejects(service.workspaceSummary(corrupt), "a broken repository is a failure, not a non-repository");
+
+  await git(repository, ["checkout", "--detach"]);
+  const detached = await service.workspaceSummary(repository);
+  assert.equal(detached.info.isRepo, true);
+  assert.equal(detached.info.detached, true);
+});
+
+test("the workspace summary reader lets a slow git status finish that an ordinary read gives up on", async (t) => {
+  const repository = await createRepository(t);
+  const root = path.dirname(repository);
+  const started = path.join(root, "status-started");
+  const release = path.join(root, "status-release");
+  const wrapper = path.join(root, "git-slow-status.mjs");
+  // `git status` waits, in real time, until the test releases it; everything else is real Git.
+  await fs.writeFile(
+    wrapper,
+    [
+      "#!/usr/bin/env node",
+      "import { existsSync, writeFileSync } from 'node:fs';",
+      "import { spawnSync } from 'node:child_process';",
+      "const args = process.argv.slice(2);",
+      "const run = () => {",
+      "  const result = spawnSync('git', args, { env: process.env, stdio: 'inherit' });",
+      "  if (result.error) throw result.error;",
+      "  process.exit(result.status ?? 1);",
+      "};",
+      "if (args[0] === 'status') {",
+      `  writeFileSync(${JSON.stringify(started)}, 'started\\n');`,
+      `  const poll = setInterval(() => { if (existsSync(${JSON.stringify(release)})) { clearInterval(poll); run(); } }, 10);`,
+      "} else run();",
+      "",
+    ].join("\n"),
+    { mode: 0o700 },
+  );
+  const waitForStatus = async () => {
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      try {
+        await fs.access(started);
+        await fs.rm(started);
+        return;
+      } catch {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    }
+    throw new Error("git status never started");
+  };
+
+  // Git's time limits run on the mocked clock, so ten seconds pass at once.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+
+  const ordinary = new GitService({ cacheTtlMs: 0, gitBinary: wrapper }).info(repository);
+  await waitForStatus();
+  t.mock.timers.tick(10_000);
+  await assert.rejects(
+    ordinary,
+    (error) => error instanceof GitServiceError && error.code === "timeout",
+    "an ordinary read keeps its short limit",
+  );
+
+  const summary = createGitWorkspaceSummaryReader({ gitBinary: wrapper })(repository);
+  await waitForStatus();
+  t.mock.timers.tick(10_000);
+  await fs.writeFile(release, "go\n", "utf8");
+  const read = await summary;
+  assert.equal(read.root, await fs.realpath(repository));
+  assert.equal(read.info.isRepo, true);
+  assert.equal(read.info.branch, "main");
+});
 
 test("unpushed commits count what no remote holds, and an unreadable branch is never zero", async (t) => {
   const repository = await createRepository(t);

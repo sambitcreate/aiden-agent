@@ -45,7 +45,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors
 
 /**
  * Profile → Memory (`bot-memory-v1`): what the Bot remembers about the person ("About you")
- * and its own notes, each with a usage meter, Edit and Delete, plus Erase memory.
+ * and its own notes, each with a usage meter, Edit and Delete, plus Forget all.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

@@ -328,6 +328,8 @@ enum AidenBotSessionCopy {
     static func pausedTitle(_ name: String) -> String { "\(name) is paused." }
     static func pausedDetail(_ name: String) -> String { "\(name) won’t reply or run routines until you resume it." }
     static func pausedPlaceholder(_ name: String) -> String { "\(name) is paused" }
+    /// The composer placeholder when nothing holds it, naming the Bot it messages.
+    static func composerPlaceholder(name: String) -> String { "Message \(name)" }
 
     // Revision 42 (`bot:issues`), shared with desktop and Android.
     static let issueNeedsYou = "Needs you"

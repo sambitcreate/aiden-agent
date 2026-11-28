@@ -5202,7 +5202,7 @@ class AidenChatTest {
             val model = harness.open(forkSource.id, forkSource)
             model.fork("assistant-1", AidenChatForkPosition.AFTER)
             withTimeout(5_000) { model.isForking.first { !it } }
-            assertEquals("This chat is busy on your Mac. Try forking again in a moment.", model.presentedError.value)
+            assertEquals("This chat is busy on your computer. Try forking again in a moment.", model.presentedError.value)
             assertNull(model.forkNavigation.value)
 
             // Same source revision, same cut: only the key may differ.

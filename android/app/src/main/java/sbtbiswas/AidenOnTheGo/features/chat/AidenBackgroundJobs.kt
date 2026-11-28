@@ -95,7 +95,7 @@ fun AidenBackgroundJobsSheet(
             }
             Spacer(Modifier.size(14.dp))
             Text(
-                "These run on your Mac. Open an address in a browser there.",
+                "These run on your computer. Open an address in a browser there.",
                 style = MaterialTheme.typography.bodySmall,
                 color = palette.secondary
             )

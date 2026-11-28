@@ -1347,7 +1347,7 @@ class AidenBotSessionControllerTest {
         val controller = AidenBotSessionController(interruptedSession.botId, transport, backgroundScope)
         controller.refetch()
         assertFalse(controller.resume())
-        assertEquals("Aiden couldn’t reach your Mac. Try again.", controller.state.value.actionError)
+        assertEquals("Aiden couldn’t reach your computer. Try again.", controller.state.value.actionError)
         assertTrue(controller.resume())
         assertNotEquals(keys[0], keys[1])
     }
@@ -2544,7 +2544,7 @@ class AidenBotSessionControllerTest {
         transport.resumeGate!!.complete(Unit)
         assertFalse(resuming.await())
         assertTrue(controller.state.value.isInterrupted)
-        assertEquals("Aiden couldn’t reach your Mac. Try again.", controller.state.value.actionError)
+        assertEquals("Aiden couldn’t reach your computer. Try again.", controller.state.value.actionError)
 
         // Dismiss: gone at once; the Mac's own state frame in between wins over the rollback.
         transport.dismissGate = CompletableDeferred()
@@ -3144,7 +3144,7 @@ class AidenBotSessionControllerTest {
         json.decodeFromJsonElement(ListSerializer(AidenBotSessionEvent.serializer()), handoffFixture.getValue("events"))
     }
 
-    /** Hand-off answers, Finish on your Mac and Resume, recorded with their keys; failures thrown in order. */
+    /** Hand-off answers, Finish on your computer and Resume, recorded with their keys; failures thrown in order. */
     private class HandoffTransport(session: AidenBotSession) : AidenBotSessionTransport by FakeTransport(session) {
         data class Answer(val waitId: String, val request: AidenBotHandoffAnswerRequest, val key: UUID)
         val answers = mutableListOf<Answer>()

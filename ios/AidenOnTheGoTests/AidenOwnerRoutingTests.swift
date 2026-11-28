@@ -1,4 +1,5 @@
 #if DEBUG
+import os
 import XCTest
 @testable import AidenOnTheGo
 
@@ -16,6 +17,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
     """.utf8)
 
     private let responder = AidenDemoResponder()
+    private let haptics = RecordingHaptics()
     private let now = Date(timeIntervalSince1970: 1_793_000_000)
     private var root: URL!
     private var cache: AidenChatCache!
@@ -48,6 +50,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
         coordinator = AidenDemoHosts.coordinator(
             installations: installations,
             responder: responder,
+            haptics: haptics,
             machinePreferences: AidenMachinePreferencesStore(defaults: AidenDemoHosts.isolatedDefaults())
         )
         scheduler = AidenHostConnectScheduler(
@@ -68,6 +71,14 @@ final class AidenOwnerRoutingTests: XCTestCase {
     }
 
     // MARK: Fixtures
+
+    private final class RecordingHaptics: AidenHapticEmitting {
+        private(set) var played: [AidenHapticEvent] = []
+        func activate(scope: UUID) {}
+        func deactivate(scope: UUID) {}
+        func emit(_ event: AidenHapticEvent, scope: UUID?, dedupeKey: String?) { played.append(event) }
+    }
+
 
     private var studio: AidenInstallation { AidenDemoHosts.installation(instanceId: "studio", name: "Studio") }
     private var laptop: AidenInstallation { AidenDemoHosts.installation(instanceId: "laptop", name: "Laptop") }
@@ -360,6 +371,479 @@ final class AidenOwnerRoutingTests: XCTestCase {
         XCTAssertEqual(coordinator.defaultInstanceId, "studio")
     }
 
+    /// The laptop's "default" as the phone shows it.
+    private func shownDefault() throws -> AidenWorkspace? {
+        try connection("laptop").workspaces.first { $0.id == "default" }
+    }
+
+    /// The machine answers a save with the fields it was sent, on top of the
+    /// workspace it listed, under a new revision for each answer. A save that
+    /// renames the workspace fails when `failingRenames` is set, and `name`
+    /// is the name the machine already has.
+    private func answerWorkspaceSaves(failingRenames: Bool = false, name: String = "Laptop project") {
+        responder.reply(instanceId: "laptop", method: "PATCH", path: "/workspaces/default") { _, body in
+            Self.savedWorkspace(body, failingRenames: failingRenames, name: name)
+        }
+    }
+
+    private nonisolated static func savedWorkspace(_ body: Data?, failingRenames: Bool, name: String) -> (status: Int, json: Data) {
+        let sent = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+        if failingRenames, sent["name"] != nil {
+            let failure: [String: Any] = ["error": ["code": "internal_error", "message": "No.", "requestId": "r", "retryable": false]]
+            return (500, try! JSONSerialization.data(withJSONObject: failure))
+        }
+        let saved: [String: Any] = [
+            "id": "default",
+            "name": sent["name"] as? String ?? name,
+            "permission": sent["permission"] as? String ?? "ask",
+            "memoryEnabled": sent["memoryEnabled"] as? Bool ?? true,
+            "hasFolder": true, "isManagedWorktree": false, "noWorkspace": false,
+            "createdAt": "2026-11-05T09:00:00.000Z", "updatedAt": "2026-11-05T09:00:01.000Z",
+            "revision": "rev_" + (body ?? Data()).base64EncodedString(),
+        ]
+        return (200, try! JSONSerialization.data(withJSONObject: saved, options: [.sortedKeys]))
+    }
+
+    /// Saves go to the machine one at a time in the order they were made, each
+    /// sent on the revision the one before it got back, and a newer edit still
+    /// shows while an older save's answer lands.
+    func testQueuedWorkspaceSavesLandInOrder() async throws {
+        let workspace = try await laptopsDefault()
+        answerWorkspaceSaves()
+        let owner = try coordinator.ownerContext(for: "laptop")
+        let releaseFirst = responder.hold(instanceId: "laptop", path: "/workspaces/default")
+        let first = try XCTUnwrap(coordinator.enqueueWorkspaceSave(workspace, permission: .full, on: owner))
+        try await waitUntil("the first save is on its way") { requests("laptop").contains("PATCH /workspaces/default") }
+
+        let releaseSecond = responder.hold(instanceId: "laptop", path: "/workspaces/default")
+        let shown = try XCTUnwrap(try shownDefault())
+        let second = try XCTUnwrap(coordinator.enqueueWorkspaceSave(shown, permission: AidenWorkspacePermission.none, on: owner))
+        let third = try XCTUnwrap(coordinator.enqueueWorkspaceSave(shown, name: "Renamed", on: owner))
+        XCTAssertEqual(try shownDefault()?.permission, AidenWorkspacePermission.none)
+        XCTAssertEqual(try shownDefault()?.name, "Renamed")
+        XCTAssertEqual(requests("laptop").filter { $0 == "PATCH /workspaces/default" }.count, 1)
+
+        releaseFirst()
+        let firstOutcome = await first.value
+        let landed = try XCTUnwrap(firstOutcome.value)
+        XCTAssertEqual(landed.permission, .full)
+        // The first answer doesn't undo the edits made after it.
+        XCTAssertEqual(try shownDefault()?.permission, AidenWorkspacePermission.none)
+        XCTAssertEqual(try shownDefault()?.name, "Renamed")
+
+        try await waitUntil("the second save is on its way") {
+            requests("laptop").filter { $0 == "PATCH /workspaces/default" }.count == 2
+        }
+        releaseSecond()
+        let thirdOutcome = await third.value
+        let secondOutcome = await second.value
+        let last = try XCTUnwrap(thirdOutcome.value)
+        XCTAssertEqual(secondOutcome.value, last)
+
+        XCTAssertEqual(responder.revisionsSent(instanceId: "laptop"), [
+            "PATCH /workspaces/default workspace_revision_7",
+            "PATCH /workspaces/default \(landed.revision)",
+        ])
+        XCTAssertEqual(last.name, "Renamed")
+        XCTAssertEqual(last.permission, AidenWorkspacePermission.none)
+        XCTAssertEqual(try shownDefault(), last)
+    }
+
+    /// A list read while a save is on its way, or an older list read after it
+    /// landed, doesn't put the old name back, and only what the machine
+    /// confirmed is kept on the phone.
+    func testAStaleListDoesNotUndoANewerEdit() async throws {
+        let workspace = try await laptopsDefault()
+        answerWorkspaceSaves()
+        let owner = try coordinator.ownerContext(for: "laptop")
+        let release = responder.hold(instanceId: "laptop", path: "/workspaces/default")
+        let save = try XCTUnwrap(coordinator.enqueueWorkspaceSave(workspace, name: "Renamed", on: owner))
+        try await waitUntil("the save is on its way") { requests("laptop").contains("PATCH /workspaces/default") }
+
+        try await connection("laptop").refreshWorkspacesForPoll()
+        XCTAssertEqual(try shownDefault()?.name, "Renamed")
+        let cachedWhileOnItsWay = await coordinator.chatCache.loadWorkspaces(instanceId: "laptop")
+        XCTAssertNotEqual(cachedWhileOnItsWay?.first { $0.id == "default" }?.name, "Renamed")
+
+        release()
+        let saveOutcome = await save.value
+        XCTAssertEqual(saveOutcome.value?.name, "Renamed")
+        // The machine's list from before the save, read again.
+        try await connection("laptop").refreshWorkspacesForPoll()
+        XCTAssertEqual(try shownDefault()?.name, "Renamed")
+        try await waitUntil("the saved name is kept on the phone") {
+            await self.coordinator.chatCache.loadWorkspaces(instanceId: "laptop")?.first { $0.id == "default" }?.name == "Renamed"
+        }
+    }
+
+    /// A save that fails falls back to what the machine last confirmed, keeps
+    /// the newer edit queued behind it, and leaves its notice up after the
+    /// newer edit lands.
+    func testAFailedSaveRollsBackUnderANewerEditAndKeepsItsNotice() async throws {
+        let workspace = try await laptopsDefault()
+        answerWorkspaceSaves(failingRenames: true)
+        let owner = try coordinator.ownerContext(for: "laptop")
+        let release = responder.hold(instanceId: "laptop", path: "/workspaces/default")
+        let rename = try XCTUnwrap(coordinator.enqueueWorkspaceSave(workspace, name: "Renamed", on: owner))
+        try await waitUntil("the rename is on its way") { requests("laptop").contains("PATCH /workspaces/default") }
+        let permission = try XCTUnwrap(coordinator.enqueueWorkspaceSave(try XCTUnwrap(try shownDefault()), permission: .full, on: owner))
+
+        release()
+        guard case .failure = await rename.value else { return XCTFail("The rename landed") }
+        let permissionOutcome = await permission.value
+        XCTAssertEqual(permissionOutcome.value?.permission, .full)
+
+        XCTAssertEqual(try shownDefault()?.name, "Laptop project")
+        XCTAssertEqual(try shownDefault()?.permission, .full)
+        let notice = try XCTUnwrap(coordinator.workspaceSaveNotices[id("default", on: "laptop")])
+        XCTAssertTrue(notice.hasPrefix("Couldn’t save this workspace on Laptop."), notice)
+        XCTAssertNil(coordinator.presentedError)
+        coordinator.dismissWorkspaceSaveNotice(id("default", on: "laptop"))
+        XCTAssertNil(coordinator.workspaceSaveNotices[id("default", on: "laptop")])
+    }
+
+    /// A save whose answer was lost but which the machine's list shows landed
+    /// counts as saved, and the next save goes on the revision it landed at.
+    func testASaveThatLandedUnansweredChainsTheNextOne() async throws {
+        let workspace = try await laptopsDefault()
+        // The rename landed, so the machine answers the next save with it.
+        answerWorkspaceSaves(failingRenames: true, name: "Renamed")
+        var landed = workspaceObject("default", name: "Renamed")
+        landed["revision"] = "rev_landed"
+        let owner = try coordinator.ownerContext(for: "laptop")
+        let release = responder.hold(instanceId: "laptop", path: "/workspaces/default")
+        let rename = try XCTUnwrap(coordinator.enqueueWorkspaceSave(workspace, name: "Renamed", on: owner))
+        try await waitUntil("the rename is on its way") { requests("laptop").contains("PATCH /workspaces/default") }
+        listWorkspaces([landed], on: "laptop")
+        let permission = try XCTUnwrap(coordinator.enqueueWorkspaceSave(try XCTUnwrap(try shownDefault()), permission: .full, on: owner))
+
+        release()
+        let renameOutcome = await rename.value
+        XCTAssertEqual(renameOutcome.value?.revision, "rev_landed")
+        let permissionOutcome = await permission.value
+        XCTAssertEqual(permissionOutcome.value?.permission, .full)
+
+        XCTAssertEqual(responder.revisionsSent(instanceId: "laptop").last, "PATCH /workspaces/default rev_landed")
+        XCTAssertNil(coordinator.workspaceSaveNotices[id("default", on: "laptop")])
+        XCTAssertEqual(try shownDefault()?.name, "Renamed")
+    }
+
+    /// Remove waits for a save still on its way, hides the workspace
+    /// meanwhile, then removes it as that save left it. The removal carrying
+    /// the save's answered revision proves it left after that answer.
+    func testRemoveWaitsForASaveOnItsWay() async throws {
+        let workspace = try await laptopsDefault()
+        answerWorkspaceSaves()
+        responder.reply(instanceId: "laptop", method: "DELETE", path: "/workspaces/default", status: 204, json: Data())
+        let owner = try coordinator.ownerContext(for: "laptop")
+        let release = responder.hold(instanceId: "laptop", path: "/workspaces/default")
+        let save = try XCTUnwrap(coordinator.enqueueWorkspaceSave(workspace, name: "Renamed", on: owner))
+        try await waitUntil("the save is on its way") { requests("laptop").contains("PATCH /workspaces/default") }
+
+        let shown = try XCTUnwrap(try shownDefault())
+        let removal = Task { await coordinator.removeWorkspaceOutcome(shown, on: owner) }
+        try await waitUntil("the removal shows as pending") {
+            coordinator.workspacesBeingRemoved.contains(id("default", on: "laptop"))
+        }
+        XCTAssertNil(try shownDefault())
+        XCTAssertEqual(requests("laptop").filter { $0 == "DELETE /workspaces/default" }.count, 0)
+
+        release()
+        let saveOutcome = await save.value
+        let saved = try XCTUnwrap(saveOutcome.value)
+        guard case .success = await removal.value else { return XCTFail("Not removed") }
+        XCTAssertEqual(responder.revisionsSent(instanceId: "laptop"), [
+            "PATCH /workspaces/default workspace_revision_7",
+            "DELETE /workspaces/default \(saved.revision)",
+        ])
+        XCTAssertTrue(coordinator.workspacesBeingRemoved.isEmpty)
+    }
+
+    /// A save made while a removal waits queues behind the removal, never
+    /// beside it: once the machine has removed the workspace, the save has
+    /// nothing left to change and is never sent.
+    func testASaveMadeWhileRemoveWaitsIsNotSentAfterTheRemoval() async throws {
+        let workspace = try await laptopsDefault()
+        answerWorkspaceSaves()
+        responder.reply(instanceId: "laptop", method: "DELETE", path: "/workspaces/default", status: 204, json: Data())
+        let owner = try coordinator.ownerContext(for: "laptop")
+        let release = responder.hold(instanceId: "laptop", path: "/workspaces/default")
+        let first = try XCTUnwrap(coordinator.enqueueWorkspaceSave(workspace, name: "Renamed", on: owner))
+        try await waitUntil("the first save is on its way") { requests("laptop").contains("PATCH /workspaces/default") }
+        let toRemove = try XCTUnwrap(try shownDefault())
+        let removal = Task { await coordinator.removeWorkspaceOutcome(toRemove, on: owner) }
+        try await waitUntil("the removal is queued") {
+            coordinator.workspacesBeingRemoved.contains(id("default", on: "laptop"))
+        }
+        let late = try XCTUnwrap(coordinator.enqueueWorkspaceSave(toRemove, permission: .full, on: owner))
+        XCTAssertNil(try shownDefault())
+        // The machine's list after the removal no longer has it.
+        listWorkspaces([workspaceObject("other", name: "Other")], on: "laptop")
+
+        release()
+        let firstOutcome = await first.value
+        let saved = try XCTUnwrap(firstOutcome.value)
+        guard case .success = await removal.value else { return XCTFail("Not removed") }
+        guard case .stale = await late.value else { return XCTFail("The late save went out") }
+
+        XCTAssertEqual(responder.revisionsSent(instanceId: "laptop"), [
+            "PATCH /workspaces/default workspace_revision_7",
+            "DELETE /workspaces/default \(saved.revision)",
+        ])
+        XCTAssertNil(try shownDefault())
+        XCTAssertNil(coordinator.workspaceSaveNotices[id("default", on: "laptop")])
+        // A save from a sheet still open on the removed workspace sends nothing.
+        XCTAssertNil(coordinator.enqueueWorkspaceSave(toRemove, name: "Again", on: owner))
+        XCTAssertEqual(requests("laptop").filter { $0 == "PATCH /workspaces/default" }.count, 1)
+    }
+
+    /// The machine seeds a new "default" when its last workspace goes. Saves
+    /// to that workspace are sent, though one with its id was just removed.
+    func testAWorkspaceListedAgainAfterItsRemovalTakesSaves() async throws {
+        let workspace = try await laptopsDefault()
+        answerWorkspaceSaves()
+        responder.reply(instanceId: "laptop", method: "DELETE", path: "/workspaces/default", status: 204, json: Data())
+        var reseeded = workspaceObject("default", name: "Default")
+        reseeded["revision"] = "rev_reseeded"
+        listWorkspaces([reseeded], on: "laptop")
+        let owner = try coordinator.ownerContext(for: "laptop")
+
+        guard case .success = await coordinator.removeWorkspaceOutcome(workspace, on: owner) else { return XCTFail("Not removed") }
+        let again = try XCTUnwrap(try shownDefault())
+        XCTAssertEqual(again.revision, "rev_reseeded")
+
+        let save = try XCTUnwrap(coordinator.enqueueWorkspaceSave(again, permission: .full, on: owner))
+        let outcome = await save.value
+        XCTAssertEqual(outcome.value?.permission, .full)
+        XCTAssertEqual(responder.revisionsSent(instanceId: "laptop"), [
+            "DELETE /workspaces/default workspace_revision_7",
+            "PATCH /workspaces/default rev_reseeded",
+        ])
+        XCTAssertEqual(try shownDefault()?.permission, .full)
+    }
+
+    /// A list read while the removal waits can already hold the machine's
+    /// new "default". When the list can't be read back after the removal, that
+    /// new copy stays, because only the copy the removal named is gone.
+    func testARemovalWithoutAListKeepsAReplacementAListReadInstalled() async throws {
+        let workspace = try await laptopsDefault()
+        answerWorkspaceSaves()
+        responder.reply(instanceId: "laptop", method: "DELETE", path: "/workspaces/default", status: 204, json: Data())
+        let owner = try coordinator.ownerContext(for: "laptop")
+        let release = responder.hold(instanceId: "laptop", path: "/workspaces/default")
+        let removal = Task { await coordinator.removeWorkspaceOutcome(workspace, on: owner) }
+        try await waitUntil("the removal is on its way") { requests("laptop").contains("DELETE /workspaces/default") }
+
+        var reseeded = workspaceObject("default", name: "Default")
+        reseeded["revision"] = "rev_reseeded"
+        listWorkspaces([reseeded], on: "laptop")
+        try await connection("laptop").refreshWorkspacesForPoll()
+        responder.reply(instanceId: "laptop", path: "/workspaces", status: 500, json: serverFailure)
+
+        release()
+        guard case .success = await removal.value else { return XCTFail("Not removed") }
+        let again = try XCTUnwrap(try shownDefault())
+        XCTAssertEqual(again.revision, "rev_reseeded")
+
+        let save = try XCTUnwrap(coordinator.enqueueWorkspaceSave(again, permission: .full, on: owner))
+        let outcome = await save.value
+        XCTAssertEqual(outcome.value?.permission, .full)
+        XCTAssertEqual(responder.revisionsSent(instanceId: "laptop"), [
+            "DELETE /workspaces/default workspace_revision_7",
+            "PATCH /workspaces/default rev_reseeded",
+        ])
+    }
+
+    /// When the machine refuses the removal, the workspace comes back with a
+    /// notice and no alert, and a save made while the removal waited goes
+    /// only after the machine's refusal, on the revision the earlier save got back.
+    func testASaveMadeWhileRemoveWaitsGoesAfterARefusedRemoval() async throws {
+        let workspace = try await laptopsDefault()
+        answerWorkspaceSaves()
+        // The PATCHes the machine had received when it answered the removal.
+        let patchesBeforeTheRefusal = OSAllocatedUnfairLock<Int?>(initialState: nil)
+        let refusal = serverFailure
+        responder.reply(instanceId: "laptop", method: "DELETE", path: "/workspaces/default", answering: { [responder] _, _ in
+            let patches = responder.requests(instanceId: "laptop").filter { $0 == "PATCH /workspaces/default" }.count
+            patchesBeforeTheRefusal.withLock { $0 = patches }
+            return (500, refusal)
+        })
+        let owner = try coordinator.ownerContext(for: "laptop")
+        let release = responder.hold(instanceId: "laptop", path: "/workspaces/default")
+        let first = try XCTUnwrap(coordinator.enqueueWorkspaceSave(workspace, name: "Renamed", on: owner))
+        try await waitUntil("the first save is on its way") { requests("laptop").contains("PATCH /workspaces/default") }
+        let toRemove = try XCTUnwrap(try shownDefault())
+        let removal = Task { await coordinator.removeWorkspaceOutcome(toRemove, on: owner) }
+        try await waitUntil("the removal is queued") {
+            coordinator.workspacesBeingRemoved.contains(id("default", on: "laptop"))
+        }
+        let late = try XCTUnwrap(coordinator.enqueueWorkspaceSave(toRemove, permission: .full, on: owner))
+        // The removal's refusal is held back too.
+        let releaseRefusal = responder.hold(instanceId: "laptop", path: "/workspaces/default")
+
+        release()
+        let firstOutcome = await first.value
+        let saved = try XCTUnwrap(firstOutcome.value)
+        try await waitUntil("the removal is on its way") { requests("laptop").contains("DELETE /workspaces/default") }
+        XCTAssertNil(try shownDefault())
+
+        releaseRefusal()
+        guard case .failure = await removal.value else { return XCTFail("Removed") }
+        // Only the first save had gone when the machine refused the removal.
+        XCTAssertEqual(patchesBeforeTheRefusal.withLock { $0 }, 1)
+        let lateOutcome = await late.value
+        let last = try XCTUnwrap(lateOutcome.value)
+        let notice = try XCTUnwrap(coordinator.workspaceSaveNotices[id("default", on: "laptop")])
+        XCTAssertTrue(notice.hasPrefix("Couldn’t remove this workspace from Laptop."), notice)
+        XCTAssertNil(coordinator.presentedError)
+
+        XCTAssertEqual(responder.revisionsSent(instanceId: "laptop"), [
+            "PATCH /workspaces/default workspace_revision_7",
+            "DELETE /workspaces/default \(saved.revision)",
+            "PATCH /workspaces/default \(saved.revision)",
+        ])
+        XCTAssertEqual(last.permission, .full)
+        XCTAssertEqual(try shownDefault(), last)
+    }
+
+    /// A removal confirmed without the machine's list leaves the other
+    /// workspaces as the machine confirmed them, so another workspace's
+    /// refused rename still falls back, on screen and on the phone.
+    func testARemovalWithoutAListLeavesAnotherWorkspacesEditUnconfirmed() async throws {
+        listWorkspaces([workspaceObject("default", name: "Laptop project"), workspaceObject("other", name: "Other")], on: "laptop")
+        try await connection("laptop").refreshWorkspacesForPoll()
+        let workspaces = try connection("laptop").workspaces
+        let removed = try XCTUnwrap(workspaces.first { $0.id == "default" })
+        let other = try XCTUnwrap(workspaces.first { $0.id == "other" })
+        responder.reply(instanceId: "laptop", method: "PATCH", path: "/workspaces/other", status: 500, json: serverFailure)
+        responder.reply(instanceId: "laptop", method: "DELETE", path: "/workspaces/default", status: 204, json: Data())
+        let owner = try coordinator.ownerContext(for: "laptop")
+        let release = responder.hold(instanceId: "laptop", path: "/workspaces/other")
+        let rename = try XCTUnwrap(coordinator.enqueueWorkspaceSave(other, name: "Renamed", on: owner))
+        try await waitUntil("the rename is on its way") { requests("laptop").contains("PATCH /workspaces/other") }
+        responder.reply(instanceId: "laptop", path: "/workspaces", status: 500, json: serverFailure)
+
+        guard case .success = await coordinator.removeWorkspaceOutcome(removed, on: owner) else { return XCTFail("Not removed") }
+        XCTAssertEqual(try connection("laptop").workspaces.map(\.name), ["Renamed"])
+
+        release()
+        guard case .failure = await rename.value else { return XCTFail("The rename landed") }
+        XCTAssertEqual(try connection("laptop").workspaces.map(\.name), ["Other"])
+        try await waitUntil("only the confirmed copy is kept on the phone") {
+            await self.coordinator.chatCache.loadWorkspaces(instanceId: "laptop")?.map(\.name) == ["Other"]
+        }
+    }
+
+    /// A save's answer that arrives after a newer list doesn't put its older
+    /// copy over the newer one.
+    func testASaveAnswerArrivingAfterANewerListKeepsTheNewerCopy() async throws {
+        try await assertALateAnswerKeepsTheNewerCopy(writtenAt: "2026-11-05T09:00:05.000Z")
+    }
+
+    /// The machine's times are in milliseconds, so the computer's change can
+    /// share the time of the save it followed. Its copy is still kept.
+    func testASaveAnswerSharingTheNewerCopysTimeKeepsTheNewerCopy() async throws {
+        // The time `answerWorkspaceSaves` gives its answers.
+        try await assertALateAnswerKeepsTheNewerCopy(writtenAt: "2026-11-05T09:00:01.000Z")
+    }
+
+    private func assertALateAnswerKeepsTheNewerCopy(writtenAt updatedAt: String) async throws {
+        let workspace = try await laptopsDefault()
+        answerWorkspaceSaves()
+        let owner = try coordinator.ownerContext(for: "laptop")
+        let release = responder.hold(instanceId: "laptop", path: "/workspaces/default")
+        let save = try XCTUnwrap(coordinator.enqueueWorkspaceSave(workspace, permission: .full, on: owner))
+        try await waitUntil("the save is on its way") { requests("laptop").contains("PATCH /workspaces/default") }
+        // The save landed, then the computer renamed the workspace, and the
+        // phone read that list before the save's answer arrived.
+        var newer = workspaceObject("default", name: "Renamed on the computer")
+        newer["permission"] = "full"
+        newer["updatedAt"] = updatedAt
+        newer["revision"] = "rev_newer"
+        listWorkspaces([newer], on: "laptop")
+        try await connection("laptop").refreshWorkspacesForPoll()
+
+        release()
+        let outcome = await save.value
+        XCTAssertEqual(outcome.value?.permission, .full)
+        XCTAssertEqual(try shownDefault()?.name, "Renamed on the computer")
+        XCTAssertEqual(try shownDefault()?.revision, "rev_newer")
+        try await waitUntil("the newer copy is kept on the phone") {
+            await self.coordinator.chatCache.loadWorkspaces(instanceId: "laptop")?.first { $0.id == "default" }?.revision == "rev_newer"
+        }
+    }
+
+    /// A save's answer that arrives after a list without its workspace
+    /// doesn't bring the workspace back.
+    func testASaveAnswerDoesNotBringBackARemovedWorkspace() async throws {
+        let workspace = try await laptopsDefault()
+        answerWorkspaceSaves()
+        let owner = try coordinator.ownerContext(for: "laptop")
+        let release = responder.hold(instanceId: "laptop", path: "/workspaces/default")
+        let save = try XCTUnwrap(coordinator.enqueueWorkspaceSave(workspace, name: "Renamed", on: owner))
+        try await waitUntil("the save is on its way") { requests("laptop").contains("PATCH /workspaces/default") }
+        listWorkspaces([workspaceObject("other", name: "Other")], on: "laptop")
+        try await connection("laptop").refreshWorkspacesForPoll()
+
+        release()
+        _ = await save.value
+        XCTAssertNil(try shownDefault())
+        XCTAssertEqual(try connection("laptop").workspaces.map(\.id), ["other"])
+        try await waitUntil("the phone keeps the list without it") {
+            await self.coordinator.chatCache.loadWorkspaces(instanceId: "laptop")?.map(\.id) == ["other"]
+        }
+    }
+
+    /// Queued saves that fail with the machine offline fall back to the
+    /// confirmed copy, and the phone never keeps the unconfirmed edits.
+    func testQueuedSavesThatFailOfflineAreNeverKept() async throws {
+        let workspace = try await laptopsDefault()
+        try await waitUntil("the confirmed copy is kept on the phone") {
+            await self.coordinator.chatCache.loadWorkspaces(instanceId: "laptop")?.first { $0.id == "default" }?.name == "Laptop project"
+        }
+        let owner = try coordinator.ownerContext(for: "laptop")
+        let release = responder.hold(instanceId: "laptop", path: "/workspaces/default")
+        let rename = try XCTUnwrap(coordinator.enqueueWorkspaceSave(workspace, name: "Renamed", on: owner))
+        try await waitUntil("the rename is on its way") { requests("laptop").contains("PATCH /workspaces/default") }
+        let permission = try XCTUnwrap(coordinator.enqueueWorkspaceSave(try XCTUnwrap(try shownDefault()), permission: .full, on: owner))
+        responder.fail(instanceId: "laptop", path: "*", code: .notConnectedToInternet)
+
+        release()
+        guard case .failure = await rename.value else { return XCTFail("The rename landed") }
+        guard case .failure = await permission.value else { return XCTFail("The permission landed") }
+        XCTAssertEqual(try shownDefault()?.name, "Laptop project")
+        XCTAssertEqual(try shownDefault()?.permission, .ask)
+        let cachedAfter = await coordinator.chatCache.loadWorkspaces(instanceId: "laptop")
+        let cached = try XCTUnwrap(cachedAfter?.first { $0.id == "default" })
+        XCTAssertEqual(cached.name, "Laptop project")
+        XCTAssertEqual(cached.permission, .ask)
+        XCTAssertNotNil(coordinator.workspaceSaveNotices[id("default", on: "laptop")])
+    }
+
+    /// Forgetting a machine mid-save stops its saves without a notice, and
+    /// drops the notices its earlier saves left.
+    func testForgettingAMachineMidSaveEndsItsSavesQuietly() async throws {
+        let workspace = try await laptopsDefault()
+        answerWorkspaceSaves(failingRenames: true)
+        let owner = try coordinator.ownerContext(for: "laptop")
+        guard case .failure = await coordinator.updateWorkspaceOutcome(workspace, name: "Renamed", on: owner) else {
+            return XCTFail("The rename landed")
+        }
+        XCTAssertNotNil(coordinator.workspaceSaveNotices[id("default", on: "laptop")])
+        let release = responder.hold(instanceId: "laptop", path: "/workspaces/default")
+        let save = try XCTUnwrap(coordinator.enqueueWorkspaceSave(try XCTUnwrap(try shownDefault()), permission: .full, on: owner))
+        try await waitUntil("the save is on its way") {
+            requests("laptop").filter { $0 == "PATCH /workspaces/default" }.count == 2
+        }
+
+        guard case .success = await coordinator.removeInstallationOutcome("laptop") else { return XCTFail("Not forgotten") }
+        release()
+        guard case .stale = await save.value else { return XCTFail("The save outlived its pairing") }
+        XCTAssertTrue(coordinator.workspaceSaveNotices.isEmpty)
+        XCTAssertTrue(coordinator.workspacesBeingRemoved.isEmpty)
+        XCTAssertNil(coordinator.enqueueWorkspaceSave(workspace, name: "Again", on: owner))
+    }
+
     func testWorkspaceSettingsRemoveFromTheWorkspacesOwnMachine() async throws {
         let workspace = try await laptopsDefault()
         responder.reply(instanceId: "laptop", method: "DELETE", path: "/workspaces/default", status: 204, json: Data())
@@ -451,6 +935,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
         json(["error": ["code": "internal_error", "message": "No.", "requestId": "r", "retryable": false]])
     }
 
+    /// A failed save says so quietly on the workspace, not in an alert.
     func testAFailedWorkspaceSaveOnAnotherMachineSaysSo() async throws {
         let workspace = try await laptopsDefault()
         responder.reply(instanceId: "laptop", method: "PATCH", path: "/workspaces/default", status: 500, json: serverFailure)
@@ -462,8 +947,30 @@ final class AidenOwnerRoutingTests: XCTestCase {
         )
 
         guard case .failure = outcome else { return XCTFail("Not a failure: \(outcome)") }
-        let message = try XCTUnwrap(coordinator.presentedError)
+        let message = try XCTUnwrap(coordinator.workspaceSaveNotices[id("default", on: "laptop")])
         XCTAssertTrue(message.hasPrefix("Couldn’t save this workspace on Laptop."), message)
+        XCTAssertNil(coordinator.workspaceSaveNotices[id("default", on: "studio")])
+        XCTAssertNil(coordinator.presentedError)
+        XCTAssertTrue(haptics.played.contains(.error))
+        // The rename that showed at once is gone again.
+        XCTAssertEqual(try shownDefault()?.name, "Laptop project")
+    }
+
+    /// A failed save whose machine can't list its workspaces either puts back
+    /// the workspace as it was before the edit showed.
+    func testAFailedWorkspaceSaveWithNoListToSettleOnPutsTheWorkspaceBack() async throws {
+        let workspace = try await laptopsDefault()
+        responder.reply(instanceId: "laptop", method: "PATCH", path: "/workspaces/default", status: 500, json: serverFailure)
+        responder.reply(instanceId: "laptop", path: "/workspaces", status: 500, json: serverFailure)
+
+        let outcome = await coordinator.updateWorkspaceOutcome(
+            workspace,
+            name: "Renamed",
+            on: try coordinator.ownerContext(for: "laptop")
+        )
+
+        guard case .failure = outcome else { return XCTFail("Not a failure: \(outcome)") }
+        XCTAssertEqual(try connection("laptop").workspaces.first { $0.id == "default" }, workspace)
     }
 
     func testAFailedWorkspaceRemoveOnAnotherMachineSaysSo() async throws {
@@ -473,8 +980,12 @@ final class AidenOwnerRoutingTests: XCTestCase {
         let outcome = await coordinator.removeWorkspaceOutcome(workspace, on: try coordinator.ownerContext(for: "laptop"))
 
         guard case .failure = outcome else { return XCTFail("Not a failure: \(outcome)") }
-        let message = try XCTUnwrap(coordinator.presentedError)
+        // A quiet notice on the workspace, which comes back, and no alert.
+        XCTAssertNil(coordinator.presentedError)
+        let message = try XCTUnwrap(coordinator.workspaceSaveNotices[id("default", on: "laptop")])
         XCTAssertTrue(message.hasPrefix("Couldn’t remove this workspace from Laptop."), message)
+        XCTAssertEqual(try shownDefault(), workspace)
+        XCTAssertTrue(coordinator.workspacesBeingRemoved.isEmpty)
     }
 
     // MARK: Bots

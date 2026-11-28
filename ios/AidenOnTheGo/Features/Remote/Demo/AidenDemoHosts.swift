@@ -1,5 +1,6 @@
 #if DEBUG
 import Foundation
+import Synchronization
 
 // Fake machines for the real shell. Nothing here is compiled into Release.
 //
@@ -38,7 +39,7 @@ enum AidenDemoScenario: String, CaseIterable {
 /// Answers every request the demo clients make. Register answers with `reply`,
 /// `fail` and `hold`; an unregistered path is a 404, so no endpoint is invented.
 /// The last registration for a machine, method and path wins.
-final class AidenDemoResponder: @unchecked Sendable {
+final class AidenDemoResponder: Sendable {
     /// Host-name suffix that marks a request as one of ours.
     static let hostSuffix = ".demo.invalid"
     static let apiRoot = "/api/aiden/v1"
@@ -46,12 +47,11 @@ final class AidenDemoResponder: @unchecked Sendable {
     /// Marks a request from `probeSession`.
     private static let probeHeader = "X-Aiden-Demo-Probe"
 
-    private enum Outcome {
+    private enum Outcome: Sendable {
         case reply(status: Int, json: Data)
-        /// An answer that depends on the request, such as a search.
-        case computed(status: Int, json: @Sendable (URL) -> Data)
-        /// An answer that reads the request's body, such as a turn.
-        case answered(status: Int, json: @Sendable (URL, Data) -> Data)
+        /// An answer that depends on the request: its URL (a search), its
+        /// body (an edit) or its `Idempotency-Key` (a retried edit).
+        case computed(@Sendable (_ url: URL, _ body: Data?, _ idempotencyKey: String?) -> (status: Int, json: Data))
         case failure(URLError.Code)
     }
 
@@ -71,22 +71,32 @@ final class AidenDemoResponder: @unchecked Sendable {
         var query: String?
     }
 
-    private final class Hold {
-        var isReleased = false
-        var waiting: [() -> Void] = []
+    /// Everything a registration or a request changes, behind one lock.
+    private struct State {
+        var outcomes: [Route: Outcome] = [:]
+        var delays: [HoldKey: @Sendable () -> TimeInterval] = [:]
+        var holds: [HoldKey: UUID] = [:]
+        /// Parks only the interactive client's requests, the way a session that
+        /// waits for connectivity does with no network.
+        var interactiveHolds: [HoldKey: UUID] = [:]
+        /// The requests parked behind each hold not yet released. A hold
+        /// missing from here has been released.
+        var parked: [UUID: [@Sendable () -> Void]] = [:]
+        /// Fails only the probe client's requests, the way one that doesn't wait does.
+        var probeFailures: [String: URLError.Code] = [:]
+        var log: [String: [String]] = [:]
+        var keyLog: [String: [String]] = [:]
+        var ifMatchLog: [String: [String]] = [:]
     }
 
-    private let lock = NSLock()
-    private var outcomes: [Route: Outcome] = [:]
-    private var delays: [HoldKey: @Sendable () -> TimeInterval] = [:]
-    private var holds: [HoldKey: Hold] = [:]
-    /// Parks only the interactive client's requests, the way a session that
-    /// waits for connectivity does with no network.
-    private var interactiveHolds: [HoldKey: Hold] = [:]
-    /// Fails only the probe client's requests, the way one that doesn't wait does.
-    private var probeFailures: [String: URLError.Code] = [:]
-    private var log: [String: [String]] = [:]
-    private var keyLog: [String: [String]] = [:]
+    /// What `handle` does once it has looked at the state.
+    private enum Next {
+        case fail(URLError.Code)
+        case parked
+        case answer(after: (@Sendable () -> TimeInterval)?)
+    }
+
+    private let state = Mutex(State())
     private let token = UUID().uuidString
 
     /// Pass this to clients. Its requests never leave the process.
@@ -122,10 +132,9 @@ final class AidenDemoResponder: @unchecked Sendable {
     /// `query` answers one exact query string, such as one page of a list, ahead
     /// of the path's other answers.
     func reply(instanceId: String, method: String = "GET", path: String, query: String? = nil, status: Int, json: Data) {
-        lock.lock()
-        defer { lock.unlock() }
         // Only this method's answer is replaced; other methods on the path stay.
-        outcomes[Route(instanceId: instanceId, method: method, path: path, query: query)] = .reply(status: status, json: json)
+        let route = Route(instanceId: instanceId, method: method, path: path, query: query)
+        state.withLock { $0.outcomes[route] = .reply(status: status, json: json) }
     }
 
     /// Answers `path` from the request's URL, for a route that reads a query.
@@ -136,9 +145,30 @@ final class AidenDemoResponder: @unchecked Sendable {
         status: Int,
         json: @escaping @Sendable (URL) -> Data
     ) {
-        lock.lock()
-        defer { lock.unlock() }
-        outcomes[Route(instanceId: instanceId, method: method, path: path)] = .computed(status: status, json: json)
+        reply(instanceId: instanceId, method: method, path: path) { url, _ in (status, json(url)) }
+    }
+
+    /// Answers `path` from the whole request, for a route whose answer, status
+    /// included, depends on what was sent.
+    func reply(
+        instanceId: String,
+        method: String = "GET",
+        path: String,
+        answering answer: @escaping @Sendable (_ url: URL, _ body: Data?) -> (status: Int, json: Data)
+    ) {
+        reply(instanceId: instanceId, method: method, path: path) { url, body, _ in answer(url, body) }
+    }
+
+    /// Answers `path` from the whole request and its `Idempotency-Key`, for a
+    /// route that replays a retried request's first answer.
+    func reply(
+        instanceId: String,
+        method: String = "GET",
+        path: String,
+        answeringKeyed answer: @escaping @Sendable (_ url: URL, _ body: Data?, _ idempotencyKey: String?) -> (status: Int, json: Data)
+    ) {
+        let route = Route(instanceId: instanceId, method: method, path: path)
+        state.withLock { $0.outcomes[route] = .computed(answer) }
     }
 
     /// Answers `path` from the request's URL and body.
@@ -149,80 +179,75 @@ final class AidenDemoResponder: @unchecked Sendable {
         status: Int,
         answer: @escaping @Sendable (URL, Data) -> Data
     ) {
-        lock.lock()
-        defer { lock.unlock() }
-        outcomes[Route(instanceId: instanceId, method: method, path: path)] = .answered(status: status, json: answer)
+        reply(instanceId: instanceId, method: method, path: path, answering: { url, body in
+            (status, answer(url, body ?? Data()))
+        })
     }
 
     /// Fails every method on `path` with a transport error. `path: "*"` takes the
     /// whole machine offline and replaces its earlier answers.
     func fail(instanceId: String, path: String, code: URLError.Code) {
-        lock.lock()
-        defer { lock.unlock() }
-        clearLocked(instanceId: instanceId, path: path)
-        outcomes[Route(instanceId: instanceId, method: "*", path: path)] = .failure(code)
+        state.withLock { state in
+            state.outcomes = state.outcomes.filter { key, _ in
+                guard key.instanceId == instanceId else { return true }
+                return path != "*" && key.path != path
+            }
+            state.outcomes[Route(instanceId: instanceId, method: "*", path: path)] = .failure(code)
+        }
     }
 
     /// Parks requests to `path` until the returned closure is called. Requests
     /// that arrive after the release are answered at once. `query` parks only
     /// one exact query string, such as one page of a list.
     func hold(instanceId: String, path: String, query: String? = nil) -> @Sendable () -> Void {
-        let hold = Hold()
-        lock.lock()
-        holds[HoldKey(instanceId: instanceId, path: path, query: query)] = hold
-        lock.unlock()
-        return { [weak self] in
-            guard let self else { return }
-            self.lock.lock()
-            hold.isReleased = true
-            let waiting = hold.waiting
-            hold.waiting = []
-            self.lock.unlock()
-            waiting.forEach { $0() }
+        let hold = UUID()
+        state.withLock { state in
+            state.holds[HoldKey(instanceId: instanceId, path: path, query: query)] = hold
+            state.parked[hold] = []
         }
+        return { [weak self] in self?.release(hold) }
     }
 
     /// A machine with no network as each client meets it: the probe client's
     /// requests fail at once with `code`, and the interactive client's to the
     /// paths in `parking` wait until the returned closure is called.
     func dropNetwork(instanceId: String, code: URLError.Code, parking paths: [String]) -> @Sendable () -> Void {
-        let hold = Hold()
-        lock.lock()
-        probeFailures[instanceId] = code
-        for path in paths { interactiveHolds[HoldKey(instanceId: instanceId, path: path)] = hold }
-        lock.unlock()
-        return { [weak self] in
-            guard let self else { return }
-            self.lock.lock()
-            hold.isReleased = true
-            let waiting = hold.waiting
-            hold.waiting = []
-            self.lock.unlock()
-            waiting.forEach { $0() }
+        let hold = UUID()
+        state.withLock { state in
+            state.probeFailures[instanceId] = code
+            for path in paths { state.interactiveHolds[HoldKey(instanceId: instanceId, path: path)] = hold }
+            state.parked[hold] = []
         }
+        return { [weak self] in self?.release(hold) }
+    }
+
+    /// Answers the requests parked behind `hold`, outside the lock.
+    private func release(_ hold: UUID) {
+        let waiting = state.withLock { $0.parked.removeValue(forKey: hold) } ?? []
+        waiting.forEach { $0() }
     }
 
     /// Answers each request to `path` once `wait` has passed, which it works
     /// out when the request arrives.
     func delay(instanceId: String, path: String, by wait: @escaping @Sendable () -> TimeInterval) {
-        lock.lock()
-        defer { lock.unlock() }
-        delays[HoldKey(instanceId: instanceId, path: path)] = wait
+        state.withLock { $0.delays[HoldKey(instanceId: instanceId, path: path)] = wait }
     }
 
     /// `"METHOD /path"` for every request the machine received, oldest first.
     /// Query strings are left out so assertions do not depend on page size.
     func requests(instanceId: String) -> [String] {
-        lock.lock()
-        defer { lock.unlock() }
-        return log[instanceId] ?? []
+        state.withLock { $0.log[instanceId] ?? [] }
     }
 
     /// Every `Idempotency-Key` the machine was sent, oldest first.
     func idempotencyKeys(instanceId: String) -> [String] {
-        lock.lock()
-        defer { lock.unlock() }
-        return keyLog[instanceId] ?? []
+        state.withLock { $0.keyLog[instanceId] ?? [] }
+    }
+
+    /// `"METHOD /path If-Match"` for every request that carried a revision,
+    /// oldest first.
+    func revisionsSent(instanceId: String) -> [String] {
+        state.withLock { $0.ifMatchLog[instanceId] ?? [] }
     }
 
     fileprivate func handle(
@@ -237,77 +262,55 @@ final class AidenDemoResponder: @unchecked Sendable {
         let method = request.httpMethod ?? "GET"
         let path = url.path.hasPrefix(Self.apiRoot) ? String(url.path.dropFirst(Self.apiRoot.count)) : url.path
         let body = Self.body(of: request)
-
-        lock.lock()
-        log[instanceId, default: []].append("\(method) \(path)")
-        if let key = request.value(forHTTPHeaderField: "Idempotency-Key") {
-            keyLog[instanceId, default: []].append(key)
-        }
+        let idempotencyKey = request.value(forHTTPHeaderField: "Idempotency-Key")
+        let ifMatch = request.value(forHTTPHeaderField: "If-Match")
         let isProbe = request.value(forHTTPHeaderField: Self.probeHeader) != nil
-        if isProbe, let code = probeFailures[instanceId] {
-            lock.unlock()
+        // Weak, so a request parked behind a hold nobody releases doesn't keep
+        // the responder, and its sessions, alive.
+        let answer: @Sendable () -> Void = { [weak self] in
+            guard let self else { return deliver(.failure(URLError(.cancelled))) }
+            deliver(self.resolve(
+                instanceId: instanceId, method: method, path: path, url: url, body: body, idempotencyKey: idempotencyKey
+            ))
+        }
+
+        let next: Next = state.withLock { state in
+            state.log[instanceId, default: []].append("\(method) \(path)")
+            if let idempotencyKey { state.keyLog[instanceId, default: []].append(idempotencyKey) }
+            if let ifMatch { state.ifMatchLog[instanceId, default: []].append("\(method) \(path) \(ifMatch)") }
+            if isProbe, let code = state.probeFailures[instanceId] { return .fail(code) }
+            let key = HoldKey(instanceId: instanceId, path: path)
+            let hold = state.holds[HoldKey(instanceId: instanceId, path: path, query: url.query)]
+                ?? state.holds[key]
+                ?? (isProbe ? nil : state.interactiveHolds[key])
+            if let hold, state.parked[hold] != nil {
+                state.parked[hold]?.append(answer)
+                return .parked
+            }
+            return .answer(after: state.delays[key])
+        }
+
+        switch next {
+        case .fail(let code):
             deliver(.failure(URLError(code)))
-            return
-        }
-        let holdsQuery = holds[HoldKey(instanceId: instanceId, path: path, query: url.query)]
-        let interactiveHold = isProbe ? nil : interactiveHolds[HoldKey(instanceId: instanceId, path: path)]
-        if let hold = holdsQuery ?? holds[HoldKey(instanceId: instanceId, path: path)] ?? interactiveHold, !hold.isReleased {
-            hold.waiting.append { [self] in
-                deliver(resolve(instanceId: instanceId, method: method, path: path, url: url, body: body))
+        case .parked:
+            break
+        case .answer(let delay):
+            guard let wait = delay?(), wait > 0 else {
+                answer()
+                return
             }
-            lock.unlock()
-            return
-        }
-        let delay = delays[HoldKey(instanceId: instanceId, path: path)]
-        lock.unlock()
-        if let wait = delay?(), wait > 0 {
-            DispatchQueue.global().asyncAfter(deadline: .now() + wait) { [self] in
-                deliver(resolve(instanceId: instanceId, method: method, path: path, url: url, body: body))
+            Task {
+                try? await Task.sleep(for: .seconds(wait))
+                answer()
             }
-            return
-        }
-        deliver(resolve(instanceId: instanceId, method: method, path: path, url: url, body: body))
-    }
-
-    private func resolve(
-        instanceId: String,
-        method: String,
-        path: String,
-        url: URL,
-        body: Data
-    ) -> Result<(HTTPURLResponse, Data), URLError> {
-        if AidenDemoLongChat.isRequested, method == "GET", instanceId == "studio",
-           path == "/chats/\(AidenDemoLongChat.chatId)/messages",
-           let page = AidenDemoLongChat.window(for: url) {
-            return .success((Self.response(url: url, status: 200), page))
-        }
-        lock.lock()
-        let outcome = [
-            Route(instanceId: instanceId, method: method, path: path, query: url.query),
-            Route(instanceId: instanceId, method: method, path: path),
-            Route(instanceId: instanceId, method: "*", path: path),
-            Route(instanceId: instanceId, method: "*", path: "*"),
-        ].lazy.compactMap { self.outcomes[$0] }.first
-        lock.unlock()
-
-        switch outcome {
-        case .failure(let code):
-            return .failure(URLError(code))
-        case .reply(let status, let json):
-            return .success((Self.response(url: url, status: status), json))
-        case .computed(let status, let json):
-            return .success((Self.response(url: url, status: status), json(url)))
-        case .answered(let status, let json):
-            return .success((Self.response(url: url, status: status), json(url, body)))
-        case nil:
-            return .success((Self.response(url: url, status: 404), AidenDemoContent.notFound()))
         }
     }
 
-    /// A request's body. `URLProtocol` usually sees it as a stream.
-    private static func body(of request: URLRequest) -> Data {
+    /// The request's body. URLSession hands a protocol the body as a stream.
+    private static func body(of request: URLRequest) -> Data? {
         if let body = request.httpBody { return body }
-        guard let stream = request.httpBodyStream else { return Data() }
+        guard let stream = request.httpBodyStream else { return nil }
         stream.open()
         defer { stream.close() }
         var body = Data()
@@ -320,6 +323,45 @@ final class AidenDemoResponder: @unchecked Sendable {
         return body
     }
 
+    private func resolve(
+        instanceId: String,
+        method: String,
+        path: String,
+        url: URL,
+        body: Data?,
+        idempotencyKey: String?
+    ) -> Result<(HTTPURLResponse, Data), URLError> {
+        if AidenDemoLongChat.isRequested, method == "GET", instanceId == "studio",
+           path == "/chats/\(AidenDemoLongChat.chatId)/messages",
+           let page = AidenDemoLongChat.window(for: url) {
+            return .success((Self.response(url: url, status: 200), page))
+        }
+        let routes = [
+            Route(instanceId: instanceId, method: method, path: path, query: url.query),
+            Route(instanceId: instanceId, method: method, path: path),
+            Route(instanceId: instanceId, method: "*", path: path),
+            Route(instanceId: instanceId, method: "*", path: "*"),
+        ]
+        let outcome: Outcome? = state.withLock { state in
+            for route in routes {
+                if let outcome = state.outcomes[route] { return outcome }
+            }
+            return nil
+        }
+
+        switch outcome {
+        case .failure(let code):
+            return .failure(URLError(code))
+        case .reply(let status, let json):
+            return .success((Self.response(url: url, status: status), json))
+        case .computed(let answer):
+            let (status, json) = answer(url, body, idempotencyKey)
+            return .success((Self.response(url: url, status: status), json))
+        case nil:
+            return .success((Self.response(url: url, status: 404), AidenDemoContent.notFound()))
+        }
+    }
+
     private static func response(url: URL, status: Int) -> HTTPURLResponse {
         HTTPURLResponse(
             url: url,
@@ -328,44 +370,34 @@ final class AidenDemoResponder: @unchecked Sendable {
             headerFields: ["Content-Type": "application/json"]
         )!
     }
-
-    private func clearLocked(instanceId: String, path: String) {
-        outcomes = outcomes.filter { key, _ in
-            guard key.instanceId == instanceId else { return true }
-            return path != "*" && key.path != path
-        }
-    }
 }
 
+// Foundation's `URLProtocol` is not annotated `Sendable`, yet the loading
+// system creates, starts and stops each instance from its own threads, and the
+// responder answers from wherever a hold or delay ends. The instance's only
+// mutable state sits behind a `Mutex`; `@unchecked` covers the inherited
+// `URLProtocol` storage, which Foundation owns.
 private final class AidenDemoURLProtocol: URLProtocol, @unchecked Sendable {
     private struct WeakResponder {
         weak var value: AidenDemoResponder?
     }
 
-    private static let lock = NSLock()
-    private static var responders: [String: WeakResponder] = [:]
+    private static let responders = Mutex<[String: WeakResponder]>([:])
 
     static func register(_ responder: AidenDemoResponder, token: String) {
-        lock.lock()
-        responders[token] = WeakResponder(value: responder)
-        lock.unlock()
+        responders.withLock { $0[token] = WeakResponder(value: responder) }
     }
 
     static func unregister(token: String) {
-        lock.lock()
-        responders[token] = nil
-        lock.unlock()
+        _ = responders.withLock { $0.removeValue(forKey: token) }
     }
 
     private static func responder(for request: URLRequest) -> AidenDemoResponder? {
         guard let token = request.value(forHTTPHeaderField: AidenDemoResponder.routeHeader) else { return nil }
-        lock.lock()
-        defer { lock.unlock() }
-        return responders[token]?.value
+        return responders.withLock { $0[token]?.value }
     }
 
-    private let stateLock = NSLock()
-    private var isStopped = false
+    private let isStopped = Mutex(false)
 
     override class func canInit(with request: URLRequest) -> Bool {
         request.url?.host?.hasSuffix(AidenDemoResponder.hostSuffix) == true
@@ -379,7 +411,7 @@ private final class AidenDemoURLProtocol: URLProtocol, @unchecked Sendable {
             return
         }
         responder.handle(request) { [weak self] result in
-            guard let self, !self.stopped else { return }
+            guard let self, !self.isStopped.withLock({ $0 }) else { return }
             switch result {
             case .success(let (response, data)):
                 self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -392,15 +424,7 @@ private final class AidenDemoURLProtocol: URLProtocol, @unchecked Sendable {
     }
 
     override func stopLoading() {
-        stateLock.lock()
-        isStopped = true
-        stateLock.unlock()
-    }
-
-    private var stopped: Bool {
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        return isStopped
+        isStopped.withLock { $0 = true }
     }
 }
 
@@ -777,6 +801,13 @@ enum AidenDemoHosts {
             responder.reply(instanceId: id, path: "/bots", status: 200, json: AidenDemoContent.botListJSON())
             responder.reply(instanceId: id, path: botPath, status: 200, json: AidenDemoContent.botDetailJSON())
             responder.reply(instanceId: id, path: "\(botPath)/session", status: 200, json: AidenDemoContent.botSessionJSON())
+            // `bot-memory-v1` is advertised, so the Memory page has something to
+            // read, and each edit changes only what it names.
+            let memory = AidenDemoBotMemory()
+            responder.reply(instanceId: id, path: "\(botPath)/memory", status: 200) { _ in memory.viewJSON() }
+            responder.reply(instanceId: id, method: "POST", path: "\(botPath)/memory/edits") { _, body, key in
+                memory.apply(body, idempotencyKey: key)
+            }
             if AidenDemoBotUX.isRequested {
                 AidenDemoBotUX.register(instanceId: id, botId: AidenDemoContent.botId, responder: responder)
             }
@@ -1066,6 +1097,55 @@ private enum AidenDemoContent {
         data(botSessionObject())
     }
 
+    /// The longest entry the wire allows is 500 characters; this one is close.
+    static let nearLimitMemoryEntry = "Weekly planning notes: keep Monday mornings for deep work, batch "
+        + "meetings on Tuesday and Thursday afternoons, leave Friday after 3 PM free, flag anything that "
+        + "moves a deadline, and ask before booking travel. Mia has swimming on Wednesdays at 5 PM and "
+        + "Leo's school pickup is at 3:15 PM, so nothing goes in those slots. Prefer one summary on "
+        + "Sunday evening over several small reminders, and keep it under ten lines with the three most "
+        + "important items first."
+
+    /// `GET /bots/{botId}/memory`, in the shape of the contract fixture's
+    /// `botMemory`: both groups, one entry near the length limit.
+    private static func botMemoryObject() -> [String: Any] {
+        func group(_ entries: [(id: String, text: String)], limit: Int) -> [String: Any] {
+            [
+                "entries": entries.map { ["id": $0.id, "text": $0.text] },
+                "usedChars": entries.reduce(0) { $0 + $1.text.count },
+                "limitChars": limit,
+                "overBudget": false,
+            ]
+        }
+        return [
+            "botId": botId,
+            "revision": "d3e0a1b2c3d40001",
+            "readable": true,
+            "memory": group([
+                ("a1b2c3d4e5f60718", "Weekly meal plan is vegetarian except Fridays."),
+                ("b2c3d4e5f6071829", nearLimitMemoryEntry),
+            ], limit: 2_200),
+            "user": group([
+                ("0f1e2d3c4b5a6978", "Prefers short answers."),
+                ("1122334455667788", "Has two kids, Mia (8) and Leo (5)."),
+            ], limit: 1_375),
+            "updatedAt": timestamp(Date().addingTimeInterval(-3_600)),
+        ]
+    }
+
+    static func botMemoryJSON() -> Data {
+        data(botMemoryObject())
+    }
+
+    /// A Mac's error body with `code`, as the edit route answers a rejected edit.
+    static func errorJSON(code: String, message: String) -> Data {
+        data(["error": [
+            "code": code,
+            "message": message,
+            "requestId": "request_demo_\(code)",
+            "retryable": false,
+        ]])
+    }
+
     /// One connection of `GET …/session/events`: a snapshot frame, then the end,
     /// so the client reconnects and reads the next one.
     static func botSessionEventsBody(withApproval: Bool) -> Data {
@@ -1246,7 +1326,7 @@ private enum AidenDemoContent {
         }])
     }
 
-    private static func timestamp(_ date: Date) -> String {
+    static func timestamp(_ date: Date) -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: date)
@@ -1255,6 +1335,94 @@ private enum AidenDemoContent {
     private static func data(_ object: Any) -> Data {
         // Every value here is built above from literals, so serialization cannot fail.
         try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    }
+}
+
+/// One demo Bot's memory, which edits change the way a Mac's would: a delete
+/// touches only the entry it names, a rewrite gives that entry a new id, and
+/// Forget all empties both groups. A retried edit (the same `Idempotency-Key`)
+/// gets its first answer again instead of being applied twice. It starts from
+/// the contract-shaped view each launch.
+private final class AidenDemoBotMemory: Sendable {
+    private struct State {
+        var view: AidenBotMemory
+        var edits = 0
+        /// Each successful edit's answer, by `Idempotency-Key`.
+        var answered: [String: Data] = [:]
+    }
+
+    /// `{ok: true, view}`.
+    private struct Answer: Encodable {
+        let ok = true
+        let view: AidenBotMemory
+    }
+
+    private let state: Mutex<State>
+
+    init() {
+        let view = try! JSONDecoder().decode(AidenBotMemory.self, from: AidenDemoContent.botMemoryJSON())
+        state = Mutex(State(view: view))
+    }
+
+    func viewJSON() -> Data {
+        state.withLock { (try? JSONEncoder().encode($0.view)) ?? Data() }
+    }
+
+    /// `POST /bots/{botId}/memory/edits`: `{ok, view}` after the edit, 404
+    /// `memory_entry_not_found` for an entry this view no longer holds, or 422
+    /// for a body that is not an edit. A key that already succeeded replays
+    /// that answer.
+    func apply(_ body: Data?, idempotencyKey: String?) -> (status: Int, json: Data) {
+        state.withLock { state in
+            if let idempotencyKey, let earlier = state.answered[idempotencyKey] {
+                return (200, earlier)
+            }
+            guard let body, let request = try? JSONDecoder().decode(AidenBotMemoryEditRequest.self, from: body) else {
+                return (422, AidenDemoContent.errorJSON(code: "invalid_request", message: "That is not a memory edit."))
+            }
+            guard let edited = state.view.applying(request.edit) else {
+                return (404, AidenDemoContent.errorJSON(
+                    code: "memory_entry_not_found",
+                    message: "That memory changed since it was read."
+                ))
+            }
+            state.edits += 1
+            state.view = AidenBotMemory(
+                botId: edited.botId,
+                // A new revision per edit, still 16 lowercase hex characters.
+                revision: String(format: "d3e0a1b2%08x", state.edits),
+                readable: edited.readable,
+                memory: Self.renumbering(request.edit, in: edited.memory, target: .memory, edits: state.edits),
+                user: Self.renumbering(request.edit, in: edited.user, target: .user, edits: state.edits),
+                updatedAt: AidenRemoteTimestamp(rawValue: AidenDemoContent.timestamp(Date())) ?? edited.updatedAt
+            )
+            let answer = (try? JSONEncoder().encode(Answer(view: state.view))) ?? Data()
+            if let idempotencyKey { state.answered[idempotencyKey] = answer }
+            return (200, answer)
+        }
+    }
+
+    /// A Mac's entry id hashes the entry's text, so a rewritten entry comes
+    /// back under a new id; the others keep theirs.
+    private static func renumbering(
+        _ edit: AidenBotMemoryEdit,
+        in group: AidenBotMemoryGroup,
+        target: AidenBotMemoryTarget,
+        edits: Int
+    ) -> AidenBotMemoryGroup {
+        guard case let .replace(editTarget, entryId, _) = edit, editTarget == target else { return group }
+        let entries = group.entries.map { entry in
+            guard entry.id == entryId,
+                  let renamed = try? AidenBotMemoryEntry(id: String(format: "e1d17ed0%08x", edits), text: entry.text)
+            else { return entry }
+            return renamed
+        }
+        return (try? AidenBotMemoryGroup(
+            entries: entries,
+            usedChars: group.usedChars,
+            limitChars: group.limitChars,
+            overBudget: group.overBudget
+        )) ?? group
     }
 }
 

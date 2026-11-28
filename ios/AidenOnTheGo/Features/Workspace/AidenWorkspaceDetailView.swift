@@ -5,7 +5,6 @@ struct AidenWorkspaceDetailView: View {
     let workspace: AidenWorkspace
     /// The workspace's own machine, which its chats and Settings read and write.
     let owner: AidenRemoteRequestContext
-    let onRemoved: () -> Void
     let onChatUpdated: @MainActor (AidenChat) -> Void
     let onChatRemoved: @MainActor (String) -> Void
     /// Opens a chat the workspace just made, over the workspace.
@@ -15,7 +14,6 @@ struct AidenWorkspaceDetailView: View {
         coordinator: AidenRemoteCoordinator,
         workspace: AidenWorkspace,
         owner: AidenRemoteRequestContext,
-        onRemoved: @escaping () -> Void,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
         onChatRemoved: @escaping @MainActor (String) -> Void = { _ in },
         onOpenChat: @escaping @MainActor (AidenHostObjectID) -> Void
@@ -23,15 +21,19 @@ struct AidenWorkspaceDetailView: View {
         self.coordinator = coordinator
         self.workspace = workspace
         self.owner = owner
-        self.onRemoved = onRemoved
         self.onChatUpdated = onChatUpdated
         self.onChatRemoved = onChatRemoved
         self.onOpenChat = onOpenChat
     }
 
-    @State private var isShowingSettings = false
-    /// What an open Settings sheet saves through, fixed when it opens.
-    @State private var settingsContext: AidenRemoteRequestContext?
+    /// The shell's Settings sheet. It sits above the split/stack switch, so
+    /// a fold or this page's rebuild on a rename neither closes it nor drops
+    /// its edits.
+    @Environment(\.aidenWorkspaceSettings) private var settingsSheet
+
+    private var objectID: AidenHostObjectID {
+        AidenHostObjectID(instanceId: owner.instanceId, deviceId: owner.deviceId, objectId: workspace.id)
+    }
 
     var body: some View {
         AidenWorkspaceChatsView(
@@ -42,14 +44,32 @@ struct AidenWorkspaceDetailView: View {
             onChatRemoved: onChatRemoved,
             onOpenChat: onOpenChat
         )
+        // A save the computer refused says so on the workspace it was for,
+        // over the page so the list doesn't jump when it comes and goes.
+        .overlay(alignment: .top) {
+            if let notice = coordinator.workspaceSaveNotices[objectID] {
+                AidenWorkspaceSaveNoticeRow(message: notice) {
+                    coordinator.dismissWorkspaceSaveNotice(objectID)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+                .background(.bar)
+            }
+        }
         .navigationTitle(workspace.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
                     Button {
-                        settingsContext = Self.settingsContext(owner: owner, coordinator: coordinator)
-                        isShowingSettings = settingsContext != nil
+                        guard let context = Self.settingsContext(owner: owner, coordinator: coordinator) else { return }
+                        settingsSheet?.present(
+                            workspace,
+                            id: objectID,
+                            context: context,
+                            confirmed: coordinator.hosts.connection(for: owner.instanceId)?
+                                .confirmedWorkspaces.first { $0.id == workspace.id }
+                        )
                     } label: {
                         Label("Workspace Settings", systemImage: "gearshape")
                     }
@@ -57,28 +77,6 @@ struct AidenWorkspaceDetailView: View {
                     // A title as well as the symbol, for the side rail's overflow.
                     Label("Workspace menu", systemImage: AidenChromeSymbols.overflowMenu)
                 }
-            }
-        }
-        .sheet(isPresented: $isShowingSettings) {
-            if let settingsContext {
-                AidenWorkspaceSettingsView(
-                    coordinator: coordinator,
-                    workspace: workspace,
-                    context: settingsContext,
-                    onRemoved: {
-                        isShowingSettings = false
-                        onRemoved()
-                    }
-                )
-            }
-        }
-        // A sheet that opened for another machine, or that follows the default
-        // (Git), closes rather than save somewhere new.
-        .onChange(of: owner) { _, _ in isShowingSettings = false }
-        .onChange(of: coordinator.defaultInstanceId) { old, _ in
-            guard let settingsContext else { return }
-            if settingsContext.instanceId == old {
-                isShowingSettings = false
             }
         }
     }

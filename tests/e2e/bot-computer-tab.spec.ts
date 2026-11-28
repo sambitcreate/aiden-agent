@@ -81,7 +81,7 @@ test("a computer that fails to start says why in the status red, not in the empt
   await page.reload();
 
   await page.getByRole("button", { name: "Bots", exact: true }).click();
-  await expect(page.getByPlaceholder("Ask Planner")).toBeVisible();
+  await expect(page.getByPlaceholder("Message Planner")).toBeVisible();
   const panel = page.getByRole("complementary", { name: "Bot panel" });
   await panel.getByRole("tab", { name: "Computer" }).click();
   const alert = panel.getByRole("alert");

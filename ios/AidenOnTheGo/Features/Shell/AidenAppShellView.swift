@@ -115,6 +115,7 @@ final class AidenAppShellParts {
         let search: AidenSearchModel
         let listScroll: AidenListScrollPlaces
         let offlineNotices: AidenOfflineNoticeDismissals
+        let workspaceSettings: AidenWorkspaceSettingsSheet
     }
 
     private var made: Built?
@@ -234,7 +235,8 @@ struct AidenAppShellView: View {
                 chatScreens: chatScreens,
                 search: search,
                 listScroll: AidenListScrollPlaces(),
-                offlineNotices: AidenOfflineNoticeDismissals()
+                offlineNotices: AidenOfflineNoticeDismissals(),
+                workspaceSettings: AidenWorkspaceSettingsSheet()
             )
         }
     }
@@ -331,6 +333,7 @@ struct AidenAppShellView: View {
         // Above every tab's stack, so pushed screens read them too.
         .environment(\.aidenTabsInSideRail, showsVerticalBar)
         .environment(\.aidenOfflineNotices, built.offlineNotices)
+        .environment(\.aidenWorkspaceSettings, built.workspaceSettings)
         .tabBarMinimizeBehavior(horizontalSizeClass == .compact ? .onScrollDown : .automatic)
         .tabViewSearchActivation(.searchTabSelection)
         // Hiding the tab bar leaves the accessory up, under the composer.
@@ -347,6 +350,14 @@ struct AidenAppShellView: View {
         // are the shell's, so the new one opens where the old one was.
         .id(navigation.besideList)
         .aidenNewWorkPresentation(newWork, coordinator: coordinator)
+        // Out here, with its edits, so opening or closing the display or a
+        // rename on the computer (which rebuilds the workspace page) keeps it.
+        .aidenWorkspaceSettingsPresentation(
+            built.workspaceSettings,
+            coordinator: coordinator,
+            source: { [coordinator] id in AidenWorkspaceSettingsSource.current(for: id, on: coordinator) },
+            onRemoved: { [navigation] id in navigation.leave(.workspace(id)) }
+        )
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
             case .runningChats:
@@ -380,6 +391,11 @@ struct AidenAppShellView: View {
         .onChange(of: navigation.snapshot) { _, snapshot in
             navigationStore.save(snapshot)
             chatScreens.pathsChanged()
+            // Settings stay with their workspace's page: a route that took it
+            // off every tab closes them.
+            if let open = built.workspaceSettings.draft, !navigation.holdsWorkspace(open.id) {
+                built.workspaceSettings.close()
+            }
         }
         .onChange(of: navigation.tab == .inbox, initial: true) { _, isOnScreen in
             inboxStore.setInboxVisible(isOnScreen)
@@ -633,7 +649,6 @@ struct AidenAppShellView: View {
             AidenWorkspaceRouteView(
                 coordinator: coordinator,
                 id: id,
-                onRemoved: { navigation.leave(route) },
                 onChatUpdated: { inboxStore.homeModel(for: id.instanceId)?.accept($0) },
                 onChatRemoved: { inboxStore.homeModel(for: id.instanceId)?.removeChat(id: $0) },
                 onOpenChat: { chatID in navigation.push(.chat(chatID), over: route) }

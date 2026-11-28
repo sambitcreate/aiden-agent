@@ -161,7 +161,6 @@ enum AidenWorkspaceRoute {
 struct AidenWorkspaceRouteView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let id: AidenHostObjectID
-    let onRemoved: () -> Void
     let onChatUpdated: @MainActor (AidenChat) -> Void
     let onChatRemoved: @MainActor (String) -> Void
     /// Opens a chat the workspace just made, over the workspace.
@@ -192,7 +191,6 @@ struct AidenWorkspaceRouteView: View {
                 coordinator: coordinator,
                 workspace: workspace,
                 owner: owner,
-                onRemoved: onRemoved,
                 onChatUpdated: onChatUpdated,
                 onChatRemoved: onChatRemoved,
                 onOpenChat: onOpenChat

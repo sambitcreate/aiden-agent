@@ -35,7 +35,7 @@
     <string name="bot_ux_skill_update_title">Update a skill?</string>
     <string name="bot_ux_skill_added">Added skill: %1$s</string>
     <string name="bot_ux_not_added">Not added: %1$s</string>
-    <string name="bot_ux_skill_add_on_mac">This skill is too long to review here. Add it on your Mac.</string>
+    <string name="bot_ux_skill_add_on_mac">This skill is too long to review here. Add it on your computer.</string>
     <string name="bot_ux_lesson_title">I learned something</string>
     <string name="bot_ux_lesson_title_routine">I learned something about %1$s</string>
     <plurals name="bot_ux_lesson_runs">

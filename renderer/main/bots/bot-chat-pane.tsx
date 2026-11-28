@@ -1344,7 +1344,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           hasMessages={snapshot.entries.length > 0}
           historyEntries={composerHistory}
           chatId={`bot:${current.id}`}
-          placeholder={handoff && !noteRefused ? "Add a note and send to mark it done" : `Ask ${current.name}`}
+          placeholder={handoff && !noteRefused ? "Add a note and send to mark it done" : `Message ${current.name}`}
           onSend={(text, attachments) =>
             handoff ? answerHandoffWithNote(handoff, text, attachments) : send(text, attachments)
           }

@@ -72,5 +72,6 @@ See `.memory/bot-chat-activity.md` for the status line, Chat activity and recaps
 - Android has no Generate (Image Playground) option.
 - Phones show no inline file chips: Remote session entries carry no file metadata.
 - Subagents on durable Bots are read-only children. Write, shell, web, MCP and delegation lanes are not ported, and Form Fill is not offered.
-- iOS and Android still use the Title Case first-run copy ("Meet Your First Bot", "Start Chat", "Create My Own"); desktop moved to sentence case.
+- First-run copy is sentence case on all three clients ("Meet your first Bot", "Start chat", "Create my own"); iOS and Android moved in Phase 0 of the iOS new direction (2026-11-24).
+- The Bot chat composer reads "Message {name}" when nothing holds it on desktop (`bot-chat-pane.tsx`, `remote-bot-chat-view.tsx`), iOS and Android ("Message your Bot" with no name on Android).
 - Dead but present: `BotDefinition.archivedAt` in `renderer/shared/bots.ts`, the `includeArchived` query, `bot-archived-file-read-authority.ts`, and the capability `authorityStatus` field.

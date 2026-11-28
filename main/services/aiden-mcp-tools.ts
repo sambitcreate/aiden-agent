@@ -505,9 +505,9 @@ export class AidenMcpToolRunner {
   }
 }
 
-/** The workspaces an outside app may start chats in: the person's named ones. */
+/** The workspaces an outside app may start chats in: the person's named ones. Git is never read for these. */
 async function offeredWorkspaces(services: AidenMcpServices) {
-  const { workspaces } = await services.workspaces.list();
+  const { workspaces } = await services.workspaces.list({ git: false });
   return workspaces.filter((workspace) => workspace.noWorkspace !== true && workspace.id !== ASSISTANT_WORKSPACE_ID);
 }
 

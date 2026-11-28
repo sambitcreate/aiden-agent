@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The empty Bots home on a host advertising `bot-presets-v1`: a paged
-/// carousel of starter Bots, `Start Chat`, and `Create My Own`.
+/// carousel of starter Bots, `Start chat`, and `Create my own`.
 struct AidenBotMeetFirstBotView: View {
     let presets: [AidenBotPreset]
     let isBusy: Bool
@@ -20,7 +20,7 @@ struct AidenBotMeetFirstBotView: View {
 
     var body: some View {
         VStack(spacing: 18) {
-            Text("Meet Your First Bot")
+            Text("Meet your first Bot")
                 .font(.title2.bold())
                 .foregroundStyle(palette.foreground)
                 .accessibilityAddTraits(.isHeader)
@@ -48,7 +48,7 @@ struct AidenBotMeetFirstBotView: View {
                         onStartChat(current)
                     }
                 } label: {
-                    Text(current?.template?.existingBotId == nil ? "Start Chat" : "Open")
+                    Text(current?.template?.existingBotId == nil ? "Start chat" : "Open")
                         .frame(maxWidth: .infinity)
                         .frame(minHeight: 44)
                 }
@@ -58,7 +58,7 @@ struct AidenBotMeetFirstBotView: View {
                 .disabled(isBusy || !canCreate || current == nil)
 
                 Button(action: onCreateOwn) {
-                    Text("Create My Own")
+                    Text("Create my own")
                         .frame(maxWidth: .infinity)
                         .frame(minHeight: 44)
                 }

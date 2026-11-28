@@ -24,6 +24,7 @@ import {
 } from "./managed-worktree-removal-core.js";
 import type { GitBranches, GitInfo, GitWorktree } from "./types.js";
 import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
+import { AIDEN_REMOTE_WORKSPACE_GIT_READ_TIMEOUT_MS } from "./aiden-remote-workspace-git-cache.js";
 import { resolveGitExecutable, resolveGitExecutableMemoized } from "./git-executable.js";
 import { agentCommandEnvironment } from "./agent-command-environment.js";
 import {
@@ -80,6 +81,21 @@ export class GitServiceError extends Error {
   ) {
     super(message);
     this.name = "GitServiceError";
+  }
+}
+
+/** Whether `folder` or any folder above it holds a `.git` file or directory. */
+async function hasGitEntryAtOrAbove(folder: string): Promise<boolean> {
+  for (let current = folder; ; current = path.dirname(current)) {
+    try {
+      await fs.lstat(path.join(current, ".git"));
+      return true;
+    } catch (error) {
+      // An entry Aiden cannot inspect might be a repository; never call it absent.
+      const code = (error as NodeJS.ErrnoException)?.code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") return true;
+    }
+    if (path.dirname(current) === current) return false;
   }
 }
 
@@ -2578,6 +2594,31 @@ export class GitService {
   async info(cwd: string, signal?: AbortSignal): Promise<GitInfo> {
     return this.displayRead(cwd, "info", signal, (repo, owner) =>
       repo ? this.repositoryInfo(repo, owner) : Promise.resolve({ isRepo: false }));
+  }
+
+  /**
+   * The status of a workspace folder together with the repository root it
+   * belongs to, so callers can share one read between folders of the same
+   * repository. Unlike `info`, it reports `isRepo: false` only for a folder Git
+   * says is outside any repository and that has no `.git` entry at or above
+   * it; a missing folder, an unreadable or corrupt repository, or any other
+   * failure throws instead.
+   */
+  async workspaceSummary(cwd: string, signal?: AbortSignal): Promise<{ root: string; info: GitInfo }> {
+    if (signal?.aborted) throw new GitServiceError("aborted", "Git operation was cancelled.");
+    const canonical = await fs.realpath(cwd);
+    const probe = await this.run(canonical, ["rev-parse", "--show-toplevel"], { allowExitCodes: [128], signal });
+    if (probe.exitCode !== 0) {
+      if (/not a git repository/iu.test(probe.stderr) && !(await hasGitEntryAtOrAbove(canonical))) {
+        return { root: canonical, info: { isRepo: false } };
+      }
+      throw new GitServiceError("command_failed", "Git could not read this folder.");
+    }
+    const root = probe.stdout.replace(/\r?\n$/u, "");
+    if (!root) throw new GitServiceError("command_failed", "Git could not read this folder.");
+    const info = await this.info(canonical, signal);
+    if (!info.isRepo) throw new GitServiceError("command_failed", "Git could not read this folder.");
+    return { root, info };
   }
 
   async branches(cwd: string, signal?: AbortSignal): Promise<GitBranches> {
@@ -8686,6 +8727,21 @@ export const gitCachedRepositoryIdentity = (folderPath: string) =>
   gitService.cachedRepositoryIdentity(folderPath);
 export const gitInfo = (folderPath: string, signal?: AbortSignal) =>
   gitService.info(folderPath, signal);
+/**
+ * The Remote workspace Git summary reader. It runs on its own GitService so its
+ * per-command budget is the summary cache's read deadline, not the short
+ * default every interactive read keeps: a large repository whose `git status`
+ * takes longer than that default still gets a summary, and the cache's
+ * deadline signal still stops the whole read.
+ */
+export function createGitWorkspaceSummaryReader(
+  options: Pick<GitServiceOptions, "gitBinary"> = {},
+): (folderPath: string, signal?: AbortSignal) => Promise<{ root: string; info: GitInfo }> {
+  const service = new GitService({ ...options, readTimeoutMs: AIDEN_REMOTE_WORKSPACE_GIT_READ_TIMEOUT_MS });
+  return (folderPath, signal) => service.workspaceSummary(folderPath, signal);
+}
+
+export const gitWorkspaceSummary = createGitWorkspaceSummaryReader();
 export const gitBranches = (folderPath: string, signal?: AbortSignal) =>
   gitService.branches(folderPath, signal);
 export const gitReview = (folderPath: string, signal?: AbortSignal) =>

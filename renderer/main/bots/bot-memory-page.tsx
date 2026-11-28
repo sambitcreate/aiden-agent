@@ -374,12 +374,12 @@ export function BotMemoryContent({
       onView(result.view);
       if (result.ok) {
         setErasing(false);
-        toast.success("Memory erased");
+        toast.success("Memory cleared");
       } else {
-        toast.error(result.message.trim() || "Aiden couldn’t erase this memory.");
+        toast.error(result.message.trim() || "Memory wasn’t cleared. Please try again.");
       }
     } catch (caught) {
-      toast.error(userFacingErrorMessage(caught, "Aiden couldn’t erase this memory."));
+      toast.error(userFacingErrorMessage(caught, "Memory wasn’t cleared. Please try again."));
     } finally {
       setErasingBusy(false);
     }
@@ -407,12 +407,12 @@ export function BotMemoryContent({
             Memory couldn’t be read
           </Text>
           <Text as="p" variant="small" color="secondary" className="mt-0.5">
-            Its files may be damaged. Erasing starts {bot.name}’s memory fresh.
+            Its files may be damaged. Choose Forget all to start {bot.name}’s memory fresh.
           </Text>
         </div>
         <div>
           <Button size="small" variant="destructive" onClick={() => setErasing(true)}>
-            Erase memory
+            Forget all
           </Button>
         </div>
       </Callout>
@@ -443,7 +443,7 @@ export function BotMemoryContent({
         {botMemoryCount(view) > 0 ? (
           <div className="flex justify-center">
             <Button variant="destructive" onClick={() => setErasing(true)}>
-              Erase memory
+              Forget all
             </Button>
           </div>
         ) : null}
@@ -470,9 +470,9 @@ export function BotMemoryContent({
         onOpenChange={(open) => {
           if (!erasingBusy) setErasing(open);
         }}
-        title={`Erase everything ${bot.name} remembers?`}
+        title={`Forget everything ${bot.name} remembers?`}
         description="This can’t be undone."
-        confirmLabel="Erase memory"
+        confirmLabel="Forget all"
         confirmVariant="destructive"
         busy={erasingBusy}
         keepOpenOnConfirm

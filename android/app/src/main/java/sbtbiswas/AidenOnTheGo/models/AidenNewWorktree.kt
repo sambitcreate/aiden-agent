@@ -16,7 +16,7 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteFailurePolicy
 object AidenNewWorktreeCopy {
     const val TOGGLE = "New worktree"
     const val SETTING_UP = "Setting up worktree…"
-    const val HINT = "Your first message starts this chat in its own worktree on your Mac."
+    const val HINT = "Your first message starts this chat in its own worktree on your computer."
     const val NO_LONGER_OFFERED = "New worktree isn’t available for this chat any more, so your message wasn’t sent. Send it again to use the chat’s own folder."
 }
 

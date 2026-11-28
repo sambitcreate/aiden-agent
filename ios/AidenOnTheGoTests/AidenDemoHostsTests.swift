@@ -283,6 +283,94 @@ final class AidenDemoHostsTests: XCTestCase {
         XCTAssertFalse(session.entries.isEmpty)
     }
 
+    func testDemoBotMemoryPageLoadsBothGroupsAndForgetAllEmptiesIt() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
+        let installation = try XCTUnwrap(coordinator.installationStore.activeInstallation)
+        let machine = client(for: installation, responder: responder)
+        let bots = try await machine.bots().bots
+        let bot = try XCTUnwrap(bots.first)
+        let model = AidenBotMemoryModel(botID: bot.id, botName: bot.name, transport: machine)
+
+        let loaded = await model.load()
+
+        XCTAssertTrue(loaded, "The demo Bot's memory did not decode")
+        let memory = try XCTUnwrap(model.memory)
+        XCTAssertTrue(memory.readable)
+        XCTAssertFalse(memory.user.entries.isEmpty)
+        XCTAssertFalse(memory.memory.entries.isEmpty)
+        let longest = memory.memory.entries.map(\.text.count).max() ?? 0
+        XCTAssertGreaterThan(longest, AidenBotMemoryWire.maxEntryLength * 4 / 5, "No entry near the length limit")
+
+        let forgot = await model.erase()
+
+        XCTAssertTrue(forgot)
+        XCTAssertNil(model.errorMessage)
+        XCTAssertEqual(model.memory?.entryCount, 0)
+    }
+
+    func testDemoBotMemoryEditsChangeOnlyTheEntryTheyName() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
+        let installation = try XCTUnwrap(coordinator.installationStore.activeInstallation)
+        let machine = client(for: installation, responder: responder)
+        let bots = try await machine.bots().bots
+        let bot = try XCTUnwrap(bots.first)
+        let model = AidenBotMemoryModel(botID: bot.id, botName: bot.name, transport: machine)
+        _ = await model.load()
+        let start = try XCTUnwrap(model.memory)
+        let removed = try XCTUnwrap(start.user.entries.first)
+        let rewritten = try XCTUnwrap(start.memory.entries.first)
+
+        await model.delete(target: .user, entryId: removed.id)
+        let failure = await model.save(target: .memory, entryId: rewritten.id, text: "Meal plan is vegan on weekdays.")
+
+        XCTAssertNil(model.errorMessage)
+        XCTAssertNil(failure)
+        // A second reader sees the Mac's view, not this page's optimistic one.
+        let reread = try await machine.botMemory(botId: bot.id)
+        XCTAssertEqual(reread.user.entries.map(\.id), start.user.entries.dropFirst().map(\.id))
+        XCTAssertEqual(reread.memory.entries.count, start.memory.entries.count)
+        XCTAssertEqual(reread.memory.entries.first?.text, "Meal plan is vegan on weekdays.")
+        XCTAssertNotEqual(reread.memory.entries.first?.id, rewritten.id, "A rewritten entry gets a new id, as on a Mac")
+        XCTAssertEqual(Array(reread.memory.entries.dropFirst()), Array(start.memory.entries.dropFirst()))
+        XCTAssertNotEqual(reread.revision, start.revision)
+        XCTAssertEqual(model.memory, reread, "The page shows the Mac's answer, new id included")
+
+        await model.delete(target: .user, entryId: removed.id)
+
+        XCTAssertEqual(model.errorMessage, AidenBotMemoryCopy.entryChanged, "A deleted entry can't be deleted twice")
+        XCTAssertEqual(model.memory, reread)
+
+        let stale = await model.save(target: .memory, entryId: rewritten.id, text: "Meal plan is vegan every day.")
+
+        XCTAssertEqual(stale, AidenBotMemoryCopy.entryChanged, "The old id no longer names an entry")
+        XCTAssertEqual(model.memory, reread)
+
+        // A retried request (same key) gets its first answer back and isn't applied again.
+        let second = try XCTUnwrap(reread.memory.entries.dropFirst().first)
+        let key = UUID()
+        let removal = AidenBotMemoryEditRequest(edit: try .removing(target: .memory, entryId: second.id))
+        let first = try await machine.editBotMemory(botId: bot.id, request: removal, idempotencyKey: key)
+        let retried = try await machine.editBotMemory(botId: bot.id, request: removal, idempotencyKey: key)
+        XCTAssertEqual(retried, first)
+        XCTAssertEqual(first.memory.entries.count, reread.memory.entries.count - 1)
+        do {
+            _ = try await machine.editBotMemory(botId: bot.id, request: removal, idempotencyKey: UUID())
+            XCTFail("A new key applies the edit again, and the entry is gone")
+        } catch {
+            XCTAssertEqual(AidenBotMemoryEditFailure(error), .entryNotFound)
+        }
+        _ = await model.load()
+
+        let forgot = await model.erase()
+
+        XCTAssertTrue(forgot)
+        let cleared = try await machine.botMemory(botId: bot.id)
+        XCTAssertEqual(cleared.entryCount, 0)
+        XCTAssertEqual(cleared.user.usedChars + cleared.memory.usedChars, 0)
+    }
+
     func testSettingsScreenCanReadMemorySettings() async throws {
         let responder = AidenDemoResponder()
         let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)

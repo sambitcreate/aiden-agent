@@ -389,7 +389,7 @@ test("Bots that need you or have news sit in the Inbox, open there, and the Bots
 
   // Opening a Bot from its row keeps the Inbox and marks the row as the open page.
   await botRow(asker.id).locator("[data-roving-item]").click();
-  await expect(page.getByPlaceholder("Ask Trip Planner")).toBeVisible();
+  await expect(page.getByPlaceholder("Message Trip Planner")).toBeVisible();
   await expect(sidebar.locator("[data-inbox-view]")).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Bots" })).toHaveCount(0);
   await expect(botRow(asker.id).locator("[data-roving-item]")).toHaveAttribute("aria-current", "page");

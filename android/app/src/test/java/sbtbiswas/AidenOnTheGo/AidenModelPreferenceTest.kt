@@ -93,11 +93,11 @@ class AidenModelPreferenceTest {
         )
         assertEquals("google", resolved.providerId)
         assertEquals(
-            "This chat used Google Antigravity, which runs only on your Mac. Replies from here use Gemini Flash.",
+            "This chat used Google Antigravity, which runs only on your computer. Replies from here use Gemini Flash.",
             AidenChatModelAuthority.macOnlyAgentNotice(chat, inventory, "Gemini Flash")
         )
         assertEquals(
-            "This chat used Google Antigravity, which runs only on your Mac. Choose a model for replies from here.",
+            "This chat used Google Antigravity, which runs only on your computer. Choose a model for replies from here.",
             AidenChatModelAuthority.macOnlyAgentNotice(chat, inventory, null)
         )
         // A chat on a model this phone can use, or a Bot chat, says nothing.

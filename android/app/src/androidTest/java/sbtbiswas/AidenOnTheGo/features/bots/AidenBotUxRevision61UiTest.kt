@@ -137,7 +137,7 @@ class AidenBotUxRevision61UiTest {
         compose.onNodeWithText("Apply").performClick()
         compose.runOnIdle { assertEquals(listOf(AidenBotSettingsChangeDecision.APPLY), settings) }
         // The skill too long to review here says so; only the reviewable one offers Add.
-        compose.onNodeWithText("Add it on your Mac", substring = true).performScrollTo().assertExists()
+        compose.onNodeWithText("Add it on your computer", substring = true).performScrollTo().assertExists()
         capture("bot-entries-more")
     }
 
@@ -158,7 +158,7 @@ class AidenBotUxRevision61UiTest {
         val controller = AidenApprovalSettingsController(scope).apply { bind(remote) }
         compose.setContent { AidenTheme { AidenApprovalSettingsScreen(controller, available = true, onOpenRules = {}, onNavigateBack = {}) } }
         compose.waitUntil(5_000) { controller.state.value.mode != null }
-        compose.onNodeWithText("Auto needs an approval model. Choose one on your Mac.").assertExists()
+        compose.onNodeWithText("Auto needs an approval model. Choose one on your computer.").assertExists()
         compose.onNodeWithText("Auto").assertIsNotEnabled()
         capture("approvals-mode")
     }

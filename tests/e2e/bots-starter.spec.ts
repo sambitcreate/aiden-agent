@@ -92,7 +92,7 @@ test("New bot makes a Bot from just a name and opens its chat, which sends and a
   await name.fill("Chief of Staff");
   await name.press("Enter");
 
-  const composer = page.getByPlaceholder("Ask Chief of Staff");
+  const composer = page.getByPlaceholder("Message Chief of Staff");
   await expect(composer).toBeVisible();
   await expect(create).toBeHidden();
   const made = await aiden.app.evaluate(() => {
@@ -351,7 +351,7 @@ test("onboarding makes the first Bot by itself and its chat opens on its first m
   await onboarding.getByRole("button", { name: "Start using Aiden" }).click();
   await expect(onboarding).toBeHidden();
 
-  const composer = page.getByPlaceholder("Ask Chief");
+  const composer = page.getByPlaceholder("Message Chief");
   await expect(composer).toBeVisible();
   await expect(page.getByText(hello)).toBeVisible();
   // Ready to type the answer in the Bot's chat straight away.

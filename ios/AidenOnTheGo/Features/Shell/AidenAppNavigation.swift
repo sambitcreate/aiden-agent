@@ -433,6 +433,12 @@ final class AidenAppNavigation {
         AidenAppTab.listTabs.contains { path(of: $0).contains { $0 == .bot(id) } }
     }
 
+    /// Whether a list tab's path holds the workspace's page. Its Settings
+    /// sheet stays open while one does (`AidenWorkspaceSettingsSheet`).
+    func holdsWorkspace(_ id: AidenHostObjectID) -> Bool {
+        AidenAppTab.listTabs.contains { path(of: $0).contains(.workspace(id)) }
+    }
+
     var snapshot: AidenAppNavigationSnapshot {
         AidenAppNavigationSnapshot(
             tab: tab,

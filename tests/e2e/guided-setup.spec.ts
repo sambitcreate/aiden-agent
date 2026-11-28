@@ -139,7 +139,7 @@ test("New bot keeps the typed name after a failed create, then creates it with F
   await expect(dialog.getByRole("alert")).toContainText("The test storage is unavailable.");
   await expect(name).toHaveValue("Meal Planner");
   await dialog.getByRole("button", { name: "Create", exact: true }).click();
-  await expect(page.getByPlaceholder("Ask Meal Planner")).toBeVisible();
+  await expect(page.getByPlaceholder("Message Meal Planner")).toBeVisible();
   const { createCalls } = await botCreateE2e(aiden.app);
   expect(createCalls).toBe(2);
 });
@@ -155,7 +155,7 @@ test("New bot from just a name, then disable a tool in the Advanced tab", async 
   // Creating opens the Bot's chat; the request carries the name, the starter
   // instructions (it asks what it is for), no description yet, and Full access
   // by default (no custom selection).
-  await expect(page.getByPlaceholder("Ask Meal Planner")).toBeVisible();
+  await expect(page.getByPlaceholder("Message Meal Planner")).toBeVisible();
   const { creates } = await botCreateE2e(aiden.app);
   expect(creates).toHaveLength(1);
   const created = creates[0];

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Workspace } from "./types.js";
+import { AidenRemoteWorkspaceGitCache, type AidenRemoteWorkspaceGitRead } from "./aiden-remote-workspace-git-cache.js";
 import {
   AidenRemoteWorkspaceService,
   projectAidenRemoteWorkspace,
@@ -30,6 +31,7 @@ function fixture(
   options: {
     idempotency?: AidenIdempotencyLedger;
     persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
+    gitSummaries?: AidenRemoteWorkspaceGitCache;
   } = {},
 ) {
   let workspaces = initial.map((value) => structuredClone(value));
@@ -138,6 +140,96 @@ test("a hidden No workspace folder is marked for phones and ordinary workspaces 
   assert.equal(hidden.hasFolder, true);
   assert.equal(JSON.stringify(hidden).includes("/private/"), false);
   assert.equal("noWorkspace" in projectAidenRemoteWorkspace(workspace({ folderPath: "/code/project" })), false);
+});
+
+/** A Git summary cache whose background reads the test answers by hand. */
+function manualGit() {
+  const reads: Array<{ folder: string; resolve: (read: AidenRemoteWorkspaceGitRead) => void; reject: (error: unknown) => void }> = [];
+  const gitSummaries = new AidenRemoteWorkspaceGitCache({
+    read: (folder) => new Promise((resolve, reject) => { reads.push({ folder, resolve, reject }); }),
+    now: () => 0,
+    schedule: () => () => undefined,
+  });
+  const answer = (folder: string, outcome: AidenRemoteWorkspaceGitRead | Error) => {
+    const index = reads.findIndex((value) => value.folder === folder);
+    assert.ok(index >= 0, `no read of ${folder}`);
+    const [read] = reads.splice(index, 1);
+    if (outcome instanceof Error) read!.reject(outcome);
+    else read!.resolve(outcome);
+  };
+  return { gitSummaries, reads, answer };
+}
+
+const settleReads = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+test("workspace reads answer without waiting on Git, and carry the summary once a background read finishes", async () => {
+  const git = manualGit();
+  const { service } = fixture([
+    workspace({ id: "repo", folderPath: "/private/code/repo" }),
+    workspace({ id: "plain", folderPath: "/private/notes" }),
+    workspace({ id: "folderless" }),
+    workspace({ id: "hidden", folderPath: "/private/app-data/chat-folders/otter", noWorkspace: true }),
+    workspace({ id: "broken", folderPath: "/private/broken" }),
+  ], { gitSummaries: git.gitSummaries });
+
+  // No read has answered, so the first list has no summaries; it does not wait for them.
+  const first = await service.list();
+  assert.equal(first.workspaces.some((value) => "git" in value), false);
+  // Only folders that belong to a workspace a person sees are read.
+  assert.deepEqual(git.reads.map((value) => value.folder).sort(), ["/private/broken", "/private/code/repo", "/private/notes"]);
+
+  git.answer("/private/code/repo", {
+    root: "/private/code/repo",
+    info: {
+      isRepo: true,
+      branch: "feature/mobile",
+      uncommitted: 3,
+      upstream: "origin/feature/mobile",
+      defaultBranch: "main",
+      hasRemote: true,
+      ahead: 2,
+      behind: 1,
+    },
+  });
+  git.answer("/private/notes", { root: "/private/notes", info: { isRepo: false } });
+  git.answer("/private/broken", new Error("fatal: /private/broken is not readable"));
+  await settleReads();
+
+  const { workspaces } = await service.list();
+  const byId = new Map(workspaces.map((value) => [value.id, value]));
+  assert.deepEqual(byId.get("repo")?.git, { isRepo: true, branch: "feature/mobile", uncommitted: 3 });
+  assert.deepEqual(byId.get("plain")?.git, { isRepo: false });
+  for (const id of ["folderless", "hidden", "broken"]) {
+    assert.equal("git" in byId.get(id)!, false, `${id} has no Git summary`);
+  }
+  const serialized = JSON.stringify(workspaces);
+  for (const leak of ["/private/", "origin/", "fatal"]) {
+    assert.equal(serialized.includes(leak), false, `the list leaks ${leak}`);
+  }
+  // The summary is display data: it never moves a workspace's revision.
+  const before = first.workspaces.find((value) => value.id === "repo")!;
+  assert.equal(byId.get("repo")?.revision, before.revision);
+  assert.deepEqual((await service.get("repo")).git, { isRepo: true, branch: "feature/mobile", uncommitted: 3 });
+});
+
+test("MCP's workspace list and workspace creation never start a Git read", async () => {
+  const git = manualGit();
+  const app = fixture([workspace({ id: "repo", folderPath: "/code/repo" })], { gitSummaries: git.gitSummaries });
+
+  const { workspaces } = await app.service.list({ git: false });
+  assert.equal(workspaces.length, 1);
+  assert.equal("git" in workspaces[0]!, false);
+  assert.equal(git.reads.length, 0);
+
+  const created = await app.service.create("device-1", "workspace-create-git-0001", { mode: "scratch" });
+  assert.equal("git" in created, false, "a create answers before any Git read");
+  assert.equal(git.reads.length, 0, "Git never runs inside the durable create");
+});
+
+test("a host without Git summaries lists workspaces as before", async () => {
+  const { service } = fixture([workspace({ folderPath: "/code/project" })]);
+  const { workspaces } = await service.list();
+  assert.equal("git" in workspaces[0]!, false);
 });
 
 test("workspace creates are exact, idempotent per device, and notify Electron once", async () => {

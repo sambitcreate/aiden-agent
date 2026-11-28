@@ -53,7 +53,7 @@ fun aidenBotHandoffOpenHost(url: String): String? {
  * Contract revision 37 (`bot:handoffs`): a step the Bot hands back to the person, "Your turn: …",
  * shown beside the question and approval cards. Done and Skip answer it once, by its wait id; Open
  * opens the page it names in the phone's browser. A sign-in is finished in the Bot's own browser
- * on the Mac, so it offers Finish on your Mac and Skip instead (iOS and desktop parity). A step on
+ * on the Mac, so it offers Finish on your computer and Skip instead (iOS and desktop parity). A step on
  * the Bot's own browser or computer ([AidenBotHandoff.onMac], revision 43) offers Finish on your
  * Mac, Skip and Done.
  */
@@ -63,9 +63,9 @@ fun AidenBotHandoffCard(
     handoff: AidenBotHandoff,
     /** Connected, and nothing for this card is on its way. */
     canAnswer: Boolean,
-    /** Finish on your Mac is on its way. */
+    /** Finish on your computer is on its way. */
     isFinishing: Boolean,
-    /** What the Mac said after Finish on your Mac: whether it brought the Bot's browser forward. */
+    /** What the Mac said after Finish on your computer: whether it brought the Bot's browser forward. */
     macOpened: Boolean?,
     onDone: () -> Unit,
     onSkip: () -> Unit,

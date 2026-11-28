@@ -3388,7 +3388,7 @@ class AidenChatViewModel(
                 projection.answerUnconfirmed(approvalId)
                 handleForeignControlFailure(
                     error,
-                    "The approval response was not confirmed. Check the request on your Mac."
+                    "The approval response was not confirmed. Check the request on your computer."
                 )
             } finally {
                 _isRespondingToApproval.value = false
@@ -3419,7 +3419,7 @@ class AidenChatViewModel(
                 projection.answerUnconfirmed(question.id)
                 handleForeignControlFailure(
                     error,
-                    "The question response was not confirmed. Check the prompt on your Mac."
+                    "The question response was not confirmed. Check the prompt on your computer."
                 )
             } finally {
                 _isRespondingToQuestion.value = false
@@ -3490,7 +3490,7 @@ class AidenChatViewModel(
                     _streamState.value?.isTerminal == true) return@launch
                 if (response.approvalId != approval.id || response.decision != decision) {
                     _answeredApproval.update { line -> line?.takeUnless { it.approvalId == approval.id } }
-                    _presentedError.value = "The approval response was not confirmed. Refreshing the current request from your Mac."
+                    _presentedError.value = "The approval response was not confirmed. Refreshing the current request from your computer."
                     if (_pendingApproval.value == null) restorePendingApproval(streamId, isFallback = true)
                 }
             } catch (e: Exception) {
@@ -3498,7 +3498,7 @@ class AidenChatViewModel(
                 if (e !is CancellationException) _answeredApproval.update { line -> line?.takeUnless { it.approvalId == approval.id } }
                 if (e !is CancellationException && activeClient() === client && activeStreamId == streamId &&
                     _streamState.value?.isTerminal != true) {
-                    _presentedError.value = "The approval response was not confirmed. Refreshing the current request from your Mac."
+                    _presentedError.value = "The approval response was not confirmed. Refreshing the current request from your computer."
                     // An ambiguous write may have succeeded; only the Mac can restore a card.
                     if (_pendingApproval.value == null) restorePendingApproval(streamId, isFallback = true)
                 }
@@ -3548,13 +3548,13 @@ class AidenChatViewModel(
                 if (activeClient() !== client || activeStreamId != streamId ||
                     _streamState.value?.isTerminal == true) return@launch
                 if (response.promptId != question.id) {
-                    _presentedError.value = "The question response was not confirmed. Refreshing the current prompt from your Mac."
+                    _presentedError.value = "The question response was not confirmed. Refreshing the current prompt from your computer."
                     if (_pendingQuestion.value == null) restorePendingQuestion(streamId)
                 }
             } catch (e: Exception) {
                 if (e !is CancellationException && activeClient() === client && activeStreamId == streamId &&
                     _streamState.value?.isTerminal != true) {
-                    _presentedError.value = "The question response was not confirmed. Refreshing the current prompt from your Mac."
+                    _presentedError.value = "The question response was not confirmed. Refreshing the current prompt from your computer."
                     // An ambiguous write may have succeeded; only the Mac can restore a card.
                     if (_pendingQuestion.value == null) restorePendingQuestion(streamId)
                 }

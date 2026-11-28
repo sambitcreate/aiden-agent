@@ -115,7 +115,24 @@ final class AidenHostConnection {
     var connectionState: AidenRemoteConnectionState { lifecycle.connectionState }
     var connectionIssue: AidenConnectionIssue? { lifecycle.connectionIssue }
     private(set) var server: AidenServer?
+    /// The machine's workspaces as this phone shows them: the confirmed list
+    /// with this phone's unanswered Workspace Settings edits on top.
     private(set) var workspaces: [AidenWorkspace] = []
+    /// The workspaces as the machine last described them. Only this is saved
+    /// to disk, and a rollback falls back to it.
+    private(set) var confirmedWorkspaces: [AidenWorkspace] = []
+    /// This phone's unanswered edits for each workspace id, oldest first.
+    /// A reply or a fresh list changes `confirmedWorkspaces` only, so an edit
+    /// stays on top until its own save settles.
+    private var workspaceEdits: [String: [AidenWorkspaceEdit]] = [:]
+    private var nextWorkspaceEditVersion = 0
+    /// For each workspace id, revisions this phone's own saves replaced. A list
+    /// read before a save landed still carries one; it never undoes the save.
+    private var supersededWorkspaceRevisions: [String: Set<String>] = [:]
+    /// Workspaces this phone asked the machine to remove, hidden until the
+    /// machine answers. They stay in the confirmed list, so a refusal shows
+    /// them again as the machine last described them.
+    private var hiddenWorkspaceIds: Set<String> = []
     /// The activation lease every request context carries. A reconnect leaves
     /// it alone, so contexts survive a dropped network. Each arrival of the
     /// selection moves it, so A -> B -> A can't make an old context current
@@ -240,6 +257,10 @@ final class AidenHostConnection {
         cachedClient = nil
         cachedProbeClient = nil
         server = nil
+        workspaceEdits = [:]
+        supersededWorkspaceRevisions = [:]
+        hiddenWorkspaceIds = []
+        confirmedWorkspaces = []
         workspaces = []
     }
 
@@ -322,9 +343,149 @@ final class AidenHostConnection {
         applyWorkspaceSnapshot(workspaces)
     }
 
+    /// The machine's own list: it replaces the confirmed list, and this
+    /// phone's unanswered edits stay on top of it.
     func applyWorkspaceSnapshot(_ workspaces: [AidenWorkspace]) {
-        self.workspaces = workspaces
+        confirmedWorkspaces = keepingOwnSaves(in: workspaces)
+        showWorkspaces()
+    }
+
+    // MARK: Unanswered Workspace Settings edits
+
+    /// Shows an edit on top of the confirmed workspace until
+    /// `settleWorkspaceEdits` drops it. Returns the edit's version.
+    func addWorkspaceEdit(
+        workspaceId: String,
+        name: String?,
+        permission: AidenWorkspacePermission?,
+        memoryEnabled: Bool?
+    ) -> Int {
+        nextWorkspaceEditVersion &+= 1
+        workspaceEdits[workspaceId, default: []].append(AidenWorkspaceEdit(
+            version: nextWorkspaceEditVersion,
+            name: name,
+            permission: permission,
+            memoryEnabled: memoryEnabled
+        ))
+        showWorkspaces()
+        return nextWorkspaceEditVersion
+    }
+
+    /// Drops the edits with these versions, once their save has settled, and
+    /// puts the machine's answer for the workspace into the confirmed list.
+    /// Newer edits of the workspace stay on top.
+    /// `superseding` is the revision the save replaced.
+    /// An answer that arrives after a newer list keeps out of the way: it never
+    /// brings back a workspace that list no longer has, or puts an older copy
+    /// over a newer one (see `answer(_:replaces:superseded:)`).
+    func settleWorkspaceEdits(
+        _ versions: Set<Int>,
+        workspaceId: String,
+        confirmed: AidenWorkspace? = nil,
+        superseding revision: String? = nil
+    ) {
+        if let revision, revision != confirmed?.revision {
+            supersededWorkspaceRevisions[workspaceId, default: []].insert(revision)
+        }
+        if let confirmed,
+           let current = confirmedWorkspaces.first(where: { $0.id == workspaceId }),
+           Self.answer(confirmed, replaces: current, superseded: supersededWorkspaceRevisions[workspaceId] ?? []) {
+            confirmedWorkspaces = Self.replacing(confirmed, in: confirmedWorkspaces)
+        }
+        let remaining = (workspaceEdits[workspaceId] ?? []).filter { !versions.contains($0.version) }
+        workspaceEdits[workspaceId] = remaining.isEmpty ? nil : remaining
+        showWorkspaces()
+    }
+
+    /// Whether a save's answer goes over the confirmed copy. The machine
+    /// accepted the save only on the revision it replaced, so a copy at that
+    /// revision, or at one this phone's saves replaced earlier, is older than
+    /// the answer. Any other copy was written after the save landed unless it
+    /// is strictly older: the machine's times are in milliseconds, so two
+    /// writes can share one, and a shared time keeps the confirmed copy.
+    private static func answer(
+        _ answer: AidenWorkspace,
+        replaces current: AidenWorkspace,
+        superseded: Set<String>
+    ) -> Bool {
+        guard !superseded.contains(answer.revision) else { return false }
+        return current.revision == answer.revision
+            || superseded.contains(current.revision)
+            || current.updatedAt < answer.updatedAt
+    }
+
+    /// Hides a workspace this phone asked the machine to remove until
+    /// `showWorkspace` puts it back: on a refusal, or once the machine's list
+    /// has replaced the confirmed one.
+    func hideWorkspace(_ workspaceId: String) {
+        guard hiddenWorkspaceIds.insert(workspaceId).inserted else { return }
+        showWorkspaces()
+    }
+
+    func showWorkspace(_ workspaceId: String) {
+        guard hiddenWorkspaceIds.remove(workspaceId) != nil else { return }
+        showWorkspaces()
+    }
+
+    /// True while an edit of the workspace with this version is still shown.
+    func hasWorkspaceEdit(_ version: Int, workspaceId: String) -> Bool {
+        workspaceEdits[workspaceId]?.contains { $0.version == version } == true
+    }
+
+    /// A list's copy of a workspace whose revision one of this phone's saves
+    /// already replaced gives way to the confirmed copy that save left.
+    private func keepingOwnSaves(in workspaces: [AidenWorkspace]) -> [AidenWorkspace] {
+        guard !supersededWorkspaceRevisions.isEmpty else { return workspaces }
+        let current = Dictionary(confirmedWorkspaces.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return workspaces.map { workspace in
+            guard let replaced = supersededWorkspaceRevisions[workspace.id],
+                  replaced.contains(workspace.revision),
+                  let kept = current[workspace.id],
+                  !replaced.contains(kept.revision) else { return workspace }
+            return kept
+        }
+    }
+
+    private func dropWorkspaceEdits() {
+        supersededWorkspaceRevisions = [:]
+        guard !workspaceEdits.isEmpty || !hiddenWorkspaceIds.isEmpty else { return }
+        workspaceEdits = [:]
+        hiddenWorkspaceIds = []
+        workspaces = confirmedWorkspaces
+    }
+
+    private func showWorkspaces() {
+        workspaces = shown(confirmedWorkspaces)
         delegate?.hostConnectionDidApplyWorkspaceSnapshot(self)
+    }
+
+    /// The confirmed list as this phone shows it: unanswered edits on top, and
+    /// workspaces waiting to be removed left out.
+    private func shown(_ confirmed: [AidenWorkspace]) -> [AidenWorkspace] {
+        let edited = Self.overlaying(workspaceEdits, on: confirmed)
+        guard !hiddenWorkspaceIds.isEmpty else { return edited }
+        return edited.filter { !hiddenWorkspaceIds.contains($0.id) }
+    }
+
+    private static func overlaying(
+        _ edits: [String: [AidenWorkspaceEdit]],
+        on confirmed: [AidenWorkspace]
+    ) -> [AidenWorkspace] {
+        guard !edits.isEmpty else { return confirmed }
+        return confirmed
+            .map { workspace in
+                (edits[workspace.id] ?? []).reduce(into: workspace) { shown, edit in
+                    if let name = edit.name { shown.name = name }
+                    if let permission = edit.permission { shown.permission = permission }
+                    if let memoryEnabled = edit.memoryEnabled { shown.memoryEnabled = memoryEnabled }
+                }
+            }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private static func replacing(_ workspace: AidenWorkspace, in workspaces: [AidenWorkspace]) -> [AidenWorkspace] {
+        (workspaces.filter { $0.id != workspace.id } + [workspace])
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     /// Existing pairings predate the progress opt-in field. Upgrade them only
@@ -391,8 +552,27 @@ final class AidenHostConnection {
         self.server = server
     }
 
+    /// A list the coordinator changed in place. A workspace it left as shown
+    /// keeps its confirmed copy, so an unanswered edit never becomes confirmed.
     func adopt(workspaces: [AidenWorkspace]) {
-        self.workspaces = workspaces
+        let shown = Dictionary(self.workspaces.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let confirmed = Dictionary(confirmedWorkspaces.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let listed = Set(workspaces.map(\.id))
+        // A workspace waiting to be removed isn't shown, so the list leaves it
+        // out without the machine having removed it. A list cleared while the
+        // machine connects keeps nothing, so a removal that fails can't show
+        // that workspace alone on it; the hidden mark stays until it settles.
+        let waitingRemoval = workspaces.isEmpty ? [] : confirmedWorkspaces.filter {
+            hiddenWorkspaceIds.contains($0.id) && !listed.contains($0.id)
+        }
+        let adopted = workspaces.map { workspace in
+            guard workspaceEdits[workspace.id] != nil, shown[workspace.id] == workspace,
+                  let original = confirmed[workspace.id] else { return workspace }
+            return original
+        }
+        confirmedWorkspaces = waitingRemoval.isEmpty ? adopted : (adopted + waitingRemoval)
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        self.workspaces = self.shown(confirmedWorkspaces)
     }
 
     func advanceGeneration() {
@@ -402,6 +582,7 @@ final class AidenHostConnection {
     /// A new pairing replaced the one earlier contexts were issued under.
     func advanceHostGeneration() {
         lifecycle.advanceHostGeneration()
+        dropWorkspaceEdits()
     }
 
     func advanceConnectionGeneration() {
@@ -412,12 +593,15 @@ final class AidenHostConnection {
     /// it issues no context or client and never connects again.
     func markRevoked() {
         lifecycle.markRevoked()
+        dropWorkspaceEdits()
     }
 
     /// Revoked, with the purge held back until the views showing this machine
     /// have gone. Nothing here reconnects it, so it stops at `.needsPairing`.
     func markRevokedWithPurgePending() {
-        if lifecycle.markRevokedWithPurgePending() {
+        let firstRevoke = lifecycle.markRevokedWithPurgePending()
+        dropWorkspaceEdits()
+        if firstRevoke {
             delegate?.hostConnectionNeedsPairing(self)
         }
     }
@@ -558,7 +742,8 @@ final class AidenHostConnection {
               workspaces.isEmpty else { return }
         // Not a live snapshot, so the workspace revision stays put and archive
         // pruning waits for the Mac's own answer.
-        workspaces = saved
+        confirmedWorkspaces = saved
+        workspaces = Self.overlaying(workspaceEdits, on: saved)
     }
 
     /// Opt-ins a Mac older than their revision refuses by name, in the order
@@ -662,4 +847,13 @@ final class AidenHostConnection {
         // must never make a valid authenticated connection fail.
         try? await client.updateDeviceIdentity(name: name)
     }
+}
+
+/// One unanswered Workspace Settings edit: the fields it changes, and nil for
+/// the rest.
+struct AidenWorkspaceEdit: Equatable, Sendable {
+    let version: Int
+    var name: String?
+    var permission: AidenWorkspacePermission?
+    var memoryEnabled: Bool?
 }

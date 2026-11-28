@@ -17,6 +17,8 @@ struct AidenWorkspacesDirectoryView: View {
     @State private var workspacePendingRemoval: AidenWorkspace?
     @State private var renameText = ""
     @State private var retainedRenameDraftWorkspaceID: String?
+    /// Why a rename or removal sent nothing.
+    @State private var refusalNotice: String?
     @State private var hapticScope = UUID()
     @AppStorage(AidenWorkspaceDefaultApplication.permissionKey) private var defaultWorkspacePermissionRaw = AidenWorkspacePermission.ask.rawValue
 
@@ -100,8 +102,42 @@ struct AidenWorkspacesDirectoryView: View {
         }
     }
 
+    /// A rename or removal that sent nothing, or the first listed workspace a
+    /// computer refused a change to: the quiet note the workspace page shows,
+    /// named here because the list holds many workspaces.
+    private var listNotice: (message: String, dismiss: @MainActor () -> Void)? {
+        if let refusal = refusalNotice { return (refusal, { refusalNotice = nil }) }
+        let notices = coordinator.workspaceSaveNotices.sorted { $0.key.objectId < $1.key.objectId }
+        for (id, notice) in notices {
+            guard let workspace = coordinator.hosts.connection(for: id.instanceId)?
+                .workspaces.first(where: { $0.id == id.objectId }) else { continue }
+            return ("\(workspace.name): \(notice)", { coordinator.dismissWorkspaceSaveNotice(id) })
+        }
+        return nil
+    }
+
+    /// The default machine's context for a rename or removal from this list,
+    /// which joins that workspace's queue of Workspace Settings changes.
+    private var ownerContext: AidenRemoteRequestContext? {
+        guard let instanceId = coordinator.defaultInstanceId else { return nil }
+        return try? coordinator.ownerContext(for: instanceId)
+    }
+
+    private static let refusal = String(localized: "Nothing was sent: this workspace or its computer changed. Pull to refresh and try again.")
+
+    /// Shows why a tap sent nothing, with a warning haptic, and reads it to
+    /// VoiceOver, since focus stays on the row the person acted on.
+    private func refuse(_ notice: String) {
+        refusalNotice = notice
+        coordinator.haptics.play(.warning, scope: hapticScope)
+        UIAccessibility.post(notification: .announcement, argument: notice)
+    }
+
     var body: some View {
         List {
+            if let notice = listNotice {
+                AidenWorkspaceSaveNoticeRow(message: notice.message, onDismiss: notice.dismiss)
+            }
             if let machines = tabChrome.machines {
                 machineRows(machines)
             } else if filteredWorkspaces.isEmpty {
@@ -266,22 +302,24 @@ struct AidenWorkspacesDirectoryView: View {
             Button("Rename") {
                 guard let workspace = workspacePendingRename else { return }
                 let trimmedName = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                workspacePendingRename = nil
+                // The new name shows at once and queues behind this phone's
+                // other changes to the workspace; a refusal puts the old name
+                // back with a notice, and the typed name stays for a retry.
+                guard let context = ownerContext,
+                      let save = coordinator.enqueueWorkspaceSave(workspace, name: trimmedName, on: context) else {
+                    refuse(Self.refusal)
+                    return
+                }
+                coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "workspace-rename:\(workspace.id):\(trimmedName)")
                 Task {
-                    let outcome = await coordinator.updateWorkspaceOutcome(workspace, name: trimmedName)
-                    if case .success = outcome {
-                        retainedRenameDraftWorkspaceID = nil
-                        coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "workspace-rename:\(workspace.id):\(trimmedName)")
-                    } else if outcome.isDefinitiveFailure {
-                        coordinator.haptics.play(.error, scope: hapticScope)
-                    }
-                    workspacePendingRename = nil
+                    if case .success = await save.value { retainedRenameDraftWorkspaceID = nil }
                 }
             }
             .disabled(
                 renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     || renameText.trimmingCharacters(in: .whitespacesAndNewlines) == workspacePendingRename?.name
                     || coordinator.connectionState != .connected
-                    || coordinator.isMutating
             )
         } message: {
             Text("This updates the workspace name in Aiden Agent on your computer and paired clients. It does not rename the folder on disk.")
@@ -317,20 +355,21 @@ struct AidenWorkspacesDirectoryView: View {
             Button("Remove from Aiden Agent", role: .destructive) {
                 guard let workspace = workspacePendingRemoval else { return }
                 workspacePendingRemoval = nil
+                // The row goes at once and the removal queues behind this
+                // phone's other changes to the workspace; a refusal brings
+                // the row back with a notice.
+                guard let context = ownerContext,
+                      let removal = coordinator.enqueueWorkspaceRemoval(workspace, on: context) else {
+                    refuse(Self.refusal)
+                    return
+                }
+                coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "workspace-remove:\(workspace.id):\(workspace.revision)")
                 Task {
-                    let outcome = await coordinator.removeWorkspaceOutcome(workspace)
-                    if case .success = outcome {
-                        archiveStore.forget(
-                            workspaceID: workspace.id,
-                            instanceID: coordinator.defaultInstanceId
-                        )
-                        coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "workspace-remove:\(workspace.id):\(workspace.revision)")
-                    } else if outcome.isDefinitiveFailure {
-                        coordinator.haptics.play(.error, scope: hapticScope)
-                    }
+                    guard case .success = await removal.value else { return }
+                    archiveStore.forget(workspaceID: workspace.id, instanceID: context.instanceId)
                 }
             }
-            .disabled(coordinator.connectionState != .connected || coordinator.isMutating)
+            .disabled(coordinator.connectionState != .connected)
         } message: {
             Text("This unregisters the workspace from Aiden Agent and paired clients. Its folder, files, and chats stay on your computer, but its chats will no longer be listed. Delete the folder separately in your system file manager if you no longer need it.")
         }
@@ -485,8 +524,10 @@ private struct AidenWorkspaceInteractiveRow: View {
     let onToggleArchive: () -> Void
     let onRemove: (() -> Void)?
 
+    // Rename and Remove queue behind this phone's other changes, so a request
+    // already on its way never greys them out.
     private var serverMutationDisabled: Bool {
-        coordinator.connectionState != .connected || coordinator.isMutating
+        coordinator.connectionState != .connected
     }
 
     var body: some View {

@@ -305,7 +305,7 @@ struct AidenBotMemoryTidyLine: View {
 
     var body: some View {
         AidenBotReceiptLine(
-            symbol: "memorychip",
+            symbol: AidenBotMemorySymbol.name,
             text: tidy.changeId == nil ? "Tidied memory (undone)" : "Tidied memory",
             action: tidy.changeId != nil && canUndo ? "Undo" : nil,
             perform: onUndo

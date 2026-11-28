@@ -72,7 +72,7 @@ interface AidenBotSessionTransport {
         key: UUID
     ): AidenBotHandoffAnswerReceipt = throw AidenRemoteClientException.InvalidResponse()
 
-    /** Revision 37: Finish on your Mac for a sign-in hand-off. */
+    /** Revision 37: Finish on your computer for a sign-in hand-off. */
     suspend fun openHandoffOnMac(botId: String, waitId: String, key: UUID): AidenBotHandoffOpenOnMacReceipt =
         throw AidenRemoteClientException.InvalidResponse()
 
@@ -440,7 +440,7 @@ enum class AidenBotComposerMode {
 /** The line a typed approval card settles to ("Allowed once", "Denied") after a tap. */
 data class AidenBotAnsweredApproval(val waitId: String, val title: String, val answered: String)
 
-/** The Mac's answer to Finish on your Mac: whether it brought the Bot's browser forward. */
+/** The Mac's answer to Finish on your computer: whether it brought the Bot's browser forward. */
 data class AidenBotHandoffMacPrompt(val waitId: String, val opened: Boolean)
 
 data class AidenBotSessionUiState(
@@ -465,9 +465,9 @@ data class AidenBotSessionUiState(
     val plansSupported: Boolean = false,
     val respondingPlanIds: Set<String> = emptySet(),
     val planError: String? = null,
-    /** Revision 37: Finish on your Mac is on its way. */
+    /** Revision 37: Finish on your computer is on its way. */
     val isFinishingHandoffOnMac: Boolean = false,
-    /** What the Mac said after Finish on your Mac, for the card it was pressed on. */
+    /** What the Mac said after Finish on your computer, for the card it was pressed on. */
     val handoffMacPrompt: AidenBotHandoffMacPrompt? = null,
     /** Revision 37: Resume on a paused Bot is on its way. */
     val isUnpausing: Boolean = false,
@@ -1133,7 +1133,7 @@ class AidenBotSessionController(
                 }
                 clean = false
             }
-            // Closed or dropped: while a turn runs the line says "Reconnecting to your Mac". A
+            // Closed or dropped: while a turn runs the line says "Reconnecting to your computer". A
             // clean close usually comes straight back, so it says so only if it doesn't.
             if (clean) debounceStreamDown() else markStreamDown()
             delay(reconnectDelayMillis)
@@ -2052,7 +2052,7 @@ class AidenBotSessionController(
     }
 
     /**
-     * Revision 37: Finish on your Mac, for a sign-in hand-off (and, revision 43, a step on the
+     * Revision 37: Finish on your computer, for a sign-in hand-off (and, revision 43, a step on the
      * Bot's own screen there). The card stays; it then says whether the Mac brought the Bot's
      * browser or computer forward. A retry after an unknown outcome reuses the key.
      */
@@ -2432,8 +2432,8 @@ class AidenBotSessionController(
         const val MAX_CONNECTION_ATTEMPTS = 3
         const val SEND_FAILED = "Aiden couldn’t send that. Try again."
         /** A typed card answer this phone can't send to a Bot's approval route. */
-        const val ANSWER_ON_MAC = "Answer this on your Mac."
-        const val UNREACHABLE = "Aiden couldn’t reach your Mac. Try again."
+        const val ANSWER_ON_MAC = "Answer this on your computer."
+        const val UNREACHABLE = "Aiden couldn’t reach your computer. Try again."
         const val ANSWER_FAILED = "Aiden couldn’t send that answer. Try again."
         /** Revision 37 copy, shared with iOS and desktop. */
         const val HANDOFF_EXPIRED = "That card was already answered or closed."
@@ -2441,7 +2441,7 @@ class AidenBotSessionController(
         const val HANDOFF_NOTE_TOO_LONG = "Keep the note under 4,000 characters."
         /** Revision 42 copy, shared with iOS and desktop. */
         const val ISSUE_STALE = "This card changed. Pull to refresh and try again."
-        const val ISSUE_NOT_SENT = "That didn’t reach your Mac. Please try again."
+        const val ISSUE_NOT_SENT = "That didn’t reach your computer. Please try again."
         /** The bound on each request to the Mac (FR-I3), the same as iOS. */
         const val REQUEST_LIMIT_MILLIS = 12_000L
         /** How long a taken message nothing on the Mac shows waits for a second look (FR-m5). */

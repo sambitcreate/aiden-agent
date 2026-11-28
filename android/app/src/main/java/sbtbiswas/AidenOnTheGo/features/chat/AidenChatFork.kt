@@ -97,9 +97,9 @@ object AidenChatForkErrors {
         return when {
             server == null -> error.localizedMessage ?: "The fork could not be created."
             server.body.code == AidenRemoteErrorCode.OPERATION_IN_PROGRESS ->
-                "This chat is busy on your Mac. Try forking again in a moment."
+                "This chat is busy on your computer. Try forking again in a moment."
             isRevisionConflict(error) ->
-                "This chat changed on your Mac. Check the latest messages and try again."
+                "This chat changed on your computer. Check the latest messages and try again."
             server.statusCode == 413 || server.body.code == AidenRemoteErrorCode.PAYLOAD_TOO_LARGE ->
                 "This chat is too large to fork."
             isNotFound(error) -> "That message is no longer available to fork."

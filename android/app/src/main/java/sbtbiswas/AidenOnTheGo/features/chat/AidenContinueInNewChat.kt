@@ -44,7 +44,7 @@ object AidenContinueInNewChat {
     const val ACTION_LABEL = "Continue in a new chat"
     const val PICKER_TITLE = "Continue in a new chat"
     const val PICKER_BODY = "The whole conversation is copied into a new chat in the workspace you choose. This chat stays as it is."
-    const val NO_DESTINATIONS = "There is no other workspace on your Mac to continue in. Add one there, then try again."
+    const val NO_DESTINATIONS = "There is no other workspace on your computer to continue in. Add one there, then try again."
     private const val FALLBACK_FAILURE = "The new chat could not be created."
 
     /**

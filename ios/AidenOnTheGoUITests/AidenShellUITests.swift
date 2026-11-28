@@ -613,6 +613,96 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
+    /// Workspace Settings opens with its form every time, not as an empty
+    /// sheet, including a second time after Cancel. Runs at either width, so on
+    /// an open iPhone Duo or an iPad it checks the sheet over the split's detail.
+    func testWorkspaceSettingsOpensWithItsFormEveryTime() {
+        let app = AidenStateMatrix.launch(scenario: .busy)
+        AidenStateMatrix.openArea("Workspaces", in: app)
+        let workspace = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Aiden Agent")).firstMatch
+        XCTAssertTrue(workspace.waitForExistence(timeout: 10), "No workspace in the list")
+        workspace.tap()
+        XCTAssertTrue(app.navigationBars["Aiden Agent"].waitForExistence(timeout: 10), "The workspace did not open")
+
+        for attempt in ["first", "again"] {
+            let menu = app.buttons["Workspace menu"].firstMatch
+            XCTAssertTrue(menu.waitForExistence(timeout: 5), "No Workspace menu")
+            menu.tap()
+            let settings = app.buttons["Workspace Settings"].firstMatch
+            XCTAssertTrue(settings.waitForExistence(timeout: 5), "No Workspace Settings in the menu")
+            settings.tap()
+            XCTAssertTrue(
+                app.navigationBars["Workspace Settings"].waitForExistence(timeout: 10),
+                "Workspace Settings opened without its title (\(attempt))"
+            )
+            let name = app.textFields["Name"].firstMatch
+            XCTAssertTrue(name.waitForExistence(timeout: 5), "Workspace Settings opened without its form (\(attempt))")
+            XCTAssertEqual(name.value as? String, "Aiden Agent", "The form is not this workspace's (\(attempt))")
+            AidenStateMatrix.keepScreenshot("workspace-settings-\(attempt)", in: self)
+            app.navigationBars["Workspace Settings"].buttons["Cancel"].tap()
+            XCTAssertTrue(
+                app.navigationBars["Workspace Settings"].waitForNonExistence(timeout: 5),
+                "Cancel did not close Workspace Settings (\(attempt))"
+            )
+        }
+
+        // Save closes the sheet straight away; the machine's answer comes later.
+        app.buttons["Workspace menu"].firstMatch.tap()
+        app.buttons["Workspace Settings"].firstMatch.tap()
+        let name = app.textFields["Name"].firstMatch
+        XCTAssertTrue(name.waitForExistence(timeout: 10), "Workspace Settings opened without its form (save)")
+        name.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)).tap()
+        name.typeText(" Docs")
+        app.navigationBars["Workspace Settings"].buttons["Save"].tap()
+        XCTAssertTrue(
+            app.navigationBars["Workspace Settings"].waitForNonExistence(timeout: 2),
+            "Save did not close Workspace Settings"
+        )
+        app.terminate()
+    }
+
+    /// Workspace Settings sit above the split and the stack, so narrowing an
+    /// iPad's window to compact width and widening it again (the size-class
+    /// change an iPhone Duo makes as it closes and opens) keeps the sheet and
+    /// the name typed into it.
+    func testWorkspaceSettingsKeepTheirEditsWhenTheWindowChangesWidth() throws {
+        guard UIDevice.current.userInterfaceIdiom == .pad else {
+            throw XCTSkip("Only an iPad's window changes width here")
+        }
+        let app = AidenStateMatrix.launch(scenario: .busy)
+        restoreTheWindowAfterwards(of: app)
+        try AidenStateMatrix.widenTheWindow(of: app)
+        AidenStateMatrix.openArea("Workspaces", in: app)
+        let workspace = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Aiden Agent")).firstMatch
+        XCTAssertTrue(workspace.waitForExistence(timeout: 10), "No workspace in the list")
+        workspace.tap()
+        let menu = app.buttons["Workspace menu"].firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 10), "No Workspace menu")
+        menu.tap()
+        let settings = app.buttons["Workspace Settings"].firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 5), "No Workspace Settings in the menu")
+        settings.tap()
+        let name = app.textFields["Name"].firstMatch
+        XCTAssertTrue(name.waitForExistence(timeout: 10), "Workspace Settings opened without its form")
+        // At the end of the name, so the typing adds to it.
+        name.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)).tap()
+        name.typeText(" Docs")
+        XCTAssertEqual(name.value as? String, "Aiden Agent Docs")
+
+        try AidenStateMatrix.narrowTheWindow(of: app)
+        XCTAssertTrue(app.navigationBars["Workspace Settings"].waitForExistence(timeout: 5), "Compact width closed Workspace Settings")
+        XCTAssertEqual(app.textFields["Name"].firstMatch.value as? String, "Aiden Agent Docs", "Compact width lost the edit")
+        AidenStateMatrix.keepScreenshot("workspace-settings-compact", in: self)
+
+        try AidenStateMatrix.widenTheWindow(of: app)
+        XCTAssertTrue(app.navigationBars["Workspace Settings"].waitForExistence(timeout: 5), "Regular width closed Workspace Settings")
+        XCTAssertEqual(app.textFields["Name"].firstMatch.value as? String, "Aiden Agent Docs", "Regular width lost the edit")
+        AidenStateMatrix.keepScreenshot("workspace-settings-regular", in: self)
+
+        app.navigationBars["Workspace Settings"].buttons["Cancel"].tap()
+        XCTAssertTrue(app.navigationBars["Workspace Settings"].waitForNonExistence(timeout: 5), "Cancel did not close Workspace Settings")
+    }
+
     /// Pushed Settings has no sheet of its own for pairing: it asks the shell for one.
     func testPairAMachineOpensFromPushedSettings() {
         let app = AidenStateMatrix.launch(scenario: .busy)

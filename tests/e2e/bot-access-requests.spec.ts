@@ -100,7 +100,7 @@ test("access cards keep their scope visible and wait for the host's answer", asy
   await expect(card.getByRole("button", {name: "Deny", exact: true})).toBeDisabled();
   await aiden.app.evaluate(() => (globalThis as unknown as {accessRequestE2e: AccessE2eState}).accessRequestE2e.release());
   await expect(card).toBeHidden();
-  await expect(page.getByPlaceholder("Ask Planner")).toBeVisible();
+  await expect(page.getByPlaceholder("Message Planner")).toBeVisible();
 
   const {place: _place, ...wholeMac} = request;
   const wholeMacRequest: BotPendingAccessRequest = {...wholeMac, waitId: "22222233-4455-4677-8899-aabbccddeeff", target: "whole_mac", label: "your whole Mac", choices: ["not_now", "once"]};

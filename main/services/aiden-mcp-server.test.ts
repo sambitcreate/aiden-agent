@@ -246,8 +246,19 @@ async function harness(options: {
       provenanceDocument = structuredClone(document);
     },
   });
+  // Counts workspace lists that would read or refresh Git summaries; MCP never needs them.
+  let gitWorkspaceLists = 0;
   const tools = new AidenMcpToolRunner({
-    services: async () => ({ chats: service, streams, workspaces: { list: async () => ({ workspaces: WORKSPACES }) } }),
+    services: async () => ({
+      chats: service,
+      streams,
+      workspaces: {
+        list: async (listOptions?: { git?: boolean }) => {
+          if (listOptions?.git !== false) gitWorkspaceLists += 1;
+          return { workspaces: WORKSPACES };
+        },
+      },
+    }),
     acquireAuthorization: (appId, tracksMutationDrain) => registry.acquireDeviceAuthorization(appId, tracksMutationDrain),
     recordProvenance: async (chatId, entry) => {
       await options.beforeProvenance?.(chatId);
@@ -296,6 +307,7 @@ async function harness(options: {
     cancelled,
     settled,
     connect,
+    gitWorkspaceLists: () => gitWorkspaceLists,
     stored: () => structuredClone(stored) as AidenRemoteStateDocument,
     provenance: () => structuredClone(provenanceDocument),
     generationStarts: () => generationStarts,
@@ -639,6 +651,7 @@ test("a Read app sees only read tools and cannot start, send or stop a turn", as
     assert.deepEqual(workspaces.workspaces, [
       { id: "workspace-1", name: "Website", hasFolder: true, toolPermission: "ask" },
     ]);
+    assert.equal(fixture.gitWorkspaceLists(), 0, "starting a chat and listing workspaces never read Git");
     assert.equal(
       refusal(await reader.callTool({ name: "aiden_chat_read", arguments: { chatId: "chat 1" } })),
       "The arguments do not match the tool's schema.",

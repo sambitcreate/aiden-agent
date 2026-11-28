@@ -102,7 +102,7 @@ test("a Bot's A–E question shows its card, and submitting a chosen option answ
     "bots:answerQuestion": () => ({ answered: true }),
   });
   assert.ok(await screen.findByRole("heading", { name: "Which colour should the banner use?" }));
-  assert.equal(screen.queryByPlaceholderText("Ask Planner"), null, "the card takes the composer's place");
+  assert.equal(screen.queryByPlaceholderText("Message Planner"), null, "the card takes the composer's place");
   fireEvent.click(screen.getByRole("button", { name: /Blue/u }));
   assert.equal(
     calls.filter((call) => call.channel === "bots:answerQuestion").length,
@@ -151,7 +151,7 @@ test("a question leaves the chat when the live view reports it settled, and its 
     entry: { id: "qa1", type: "question_answer", text: "Blue" },
   }));
   assert.ok(await screen.findByText("Blue"));
-  assert.ok(screen.getByPlaceholderText("Ask Planner"), "the composer is back");
+  assert.ok(screen.getByPlaceholderText("Message Planner"), "the composer is back");
 });
 
 test("a sequence gap re-subscribes and shows the fresh snapshot", async () => {
@@ -503,7 +503,7 @@ test("a connected card reads Connected and offers no actions", async () => {
 
 test("sends carry a fresh request id per message and go to the Bot's one conversation", async () => {
   const calls = await mountChat({ "bots:live:subscribe": () => snapshot(), "bots:send": () => ({ submissionId: "s", deduped: false }) });
-  const box = await screen.findByPlaceholderText("Ask Planner");
+  const box = await screen.findByPlaceholderText("Message Planner");
   fireEvent.change(box, { target: { value: "First question" } });
   fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:send").length, 1));
@@ -559,7 +559,7 @@ test("a Bot over its monthly spending limit sends nothing until Allow more", asy
   assert.equal(calls.some((call) => call.channel === "bots:send"), false);
 
   fireEvent.click(screen.getByRole("button", { name: "Allow $20.00 more" }));
-  const box = await screen.findByPlaceholderText("Ask Planner");
+  const box = await screen.findByPlaceholderText("Message Planner");
   fireEvent.change(box, { target: { value: "One more thing" } });
   fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:send").length, 1));
@@ -597,7 +597,7 @@ test("a Bot at its monthly limit can send again once its month starts over, with
         : { ...month, spentUsd: 0, state: "under", periodStart: periodEnd, periodEnd: periodEnd + 30 * 86_400_000 },
   });
   await waitFor(() => assert.equal(screen.getAllByText("Planner reached its $20.00 spending limit this month.").length, 2));
-  const box = await screen.findByPlaceholderText("Ask Planner", undefined, { timeout: 3_000 });
+  const box = await screen.findByPlaceholderText("Message Planner", undefined, { timeout: 3_000 });
   fireEvent.change(box, { target: { value: "New month" } });
   fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:send").length, 1));
@@ -1099,7 +1099,7 @@ test("Reply quotes a message at the start of the composer", async () => {
   await screen.findByText("Day one: Alfama.");
   fireEvent.keyDown(screen.getByRole("button", { name: "Message actions for Planner’s message" }), { key: "Enter" });
   fireEvent.click(await screen.findByRole("menuitem", { name: "Reply" }));
-  const composer = screen.getByPlaceholderText("Ask Planner") as HTMLTextAreaElement;
+  const composer = screen.getByPlaceholderText("Message Planner") as HTMLTextAreaElement;
   await waitFor(() => assert.equal(composer.value, "> Day one: Alfama.\n\n"));
 });
 
@@ -1113,7 +1113,7 @@ for (const key of [{ key: "F10", shiftKey: true }, { key: "ContextMenu" }]) {
     fireEvent.keyDown(actions, key);
     const reply = await screen.findByRole("menuitem", { name: "Reply" });
     fireEvent.click(reply);
-    await waitFor(() => assert.equal((screen.getByPlaceholderText("Ask Planner") as HTMLTextAreaElement).value, "> Keep this answer\n\n"));
+    await waitFor(() => assert.equal((screen.getByPlaceholderText("Message Planner") as HTMLTextAreaElement).value, "> Keep this answer\n\n"));
   });
 }
 
@@ -1469,7 +1469,7 @@ test("each queued message has its own Remove, and removing one moves focus on: t
   fireEvent.click(first);
   await waitFor(() => assert.equal(document.activeElement, second));
   fireEvent.click(second);
-  await waitFor(() => assert.equal((document.activeElement as HTMLElement | null)?.getAttribute("placeholder"), "Ask Planner"));
+  await waitFor(() => assert.equal((document.activeElement as HTMLElement | null)?.getAttribute("placeholder"), "Message Planner"));
 });
 
 test("the chat header's face works only while the Bot works, and a photo gets a small activity badge", async () => {
@@ -1659,7 +1659,7 @@ test("a hand-off card waits above the composer, Open asks for its page, and Done
     }),
   );
   await waitFor(() => assert.equal(document.body.textContent?.includes("You did this: Enter the 2FA code for your bank"), true));
-  assert.ok(screen.getByPlaceholderText("Ask Planner"), "the composer asks the Bot again");
+  assert.ok(screen.getByPlaceholderText("Message Planner"), "the composer asks the Bot again");
 });
 
 test("Skip answers the card as skipped, and a card answered elsewhere says so", async () => {
@@ -1995,7 +1995,7 @@ test("a sent message shows at once as a sent message with Getting ready, and the
     "bots:live:subscribe": () => snapshot(),
     "bots:send": () => new Promise((resolve) => (answer = resolve)),
   });
-  const box = await screen.findByPlaceholderText("Ask Planner");
+  const box = await screen.findByPlaceholderText("Message Planner");
   fireEvent.change(box, { target: { value: "Plan dinner" } });
   fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
   const echo = await screen.findByText("Plan dinner");
@@ -2068,7 +2068,7 @@ test("a send moving into place holds its entry until it lands, and a reply that 
     "bots:send": () => ({ submissionId: "s1", deduped: false }),
   });
   const send = async (text: string) => {
-    fireEvent.change(await screen.findByPlaceholderText("Ask Planner"), { target: { value: text } });
+    fireEvent.change(await screen.findByPlaceholderText("Message Planner"), { target: { value: text } });
     fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
     await screen.findByText(text);
     // The copy starts moving on the next frame.
@@ -2107,7 +2107,7 @@ test("a send main is slow to accept looks sent and says Getting ready, never Sen
     "bots:live:subscribe": () => snapshot(),
     "bots:send": () => new Promise((resolve) => (answer = resolve)),
   });
-  const box = await screen.findByPlaceholderText("Ask Planner");
+  const box = await screen.findByPlaceholderText("Message Planner");
   fireEvent.change(box, { target: { value: "Plan dinner" } });
   fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
   await screen.findByText("Plan dinner");
@@ -2129,7 +2129,7 @@ test("a message sent while the Bot works shows as Queued at once", async () => {
       }),
     "bots:send": () => new Promise(() => undefined),
   });
-  const box = await screen.findByPlaceholderText("Ask Planner");
+  const box = await screen.findByPlaceholderText("Message Planner");
   fireEvent.change(box, { target: { value: "And Porto" } });
   fireEvent.keyDown(box, { key: "Enter" });
   const echo = await screen.findByText("And Porto");
@@ -2147,7 +2147,7 @@ test("a Steer sent while the Bot works shows as sent at once, not Queued", async
       }),
     "bots:send": () => new Promise(() => undefined),
   });
-  const box = await screen.findByPlaceholderText("Ask Planner");
+  const box = await screen.findByPlaceholderText("Message Planner");
   fireEvent.change(box, { target: { value: "Keep it under 100 euros" } });
   fireEvent.contextMenu(await screen.findByRole("button", { name: "Queue message" }));
   fireEvent.click(await screen.findByRole("menuitemradio", { name: /Steer/u }));
@@ -2169,7 +2169,7 @@ test("a send that fails takes back Getting ready, and an interrupted card left w
       "bots:send": () => new Promise((_resolve, reject) => (fail = reject)),
     });
     await screen.findByRole("group", { name: "Planner was interrupted" });
-    const box = await screen.findByPlaceholderText("Ask Planner");
+    const box = await screen.findByPlaceholderText("Message Planner");
     fireEvent.change(box, { target: { value: "Start over" } });
     fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
     await waitFor(() => assert.equal(announced(), "Getting ready"));
@@ -2194,7 +2194,7 @@ test("a send that fails drops its echo, and the same words sent again replay the
       return { submissionId: "s1", deduped: false };
     },
   });
-  const box = (await screen.findByPlaceholderText("Ask Planner")) as HTMLTextAreaElement;
+  const box = (await screen.findByPlaceholderText("Message Planner")) as HTMLTextAreaElement;
   fireEvent.change(box, { target: { value: "Plan dinner" } });
   fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:send").length, 1));
@@ -2269,7 +2269,7 @@ test("an access request sits above the unchanged composer, preserves failed gran
       },
     });
     const card = await screen.findByRole("group", { name: "Planner wants to use Taxes" });
-    const composer = screen.getByPlaceholderText("Ask Planner");
+    const composer = screen.getByPlaceholderText("Message Planner");
     assert.ok(card.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING);
     const more = within(card).getByRole("button", { name: "More ways to allow" });
     act(() => {
@@ -2286,7 +2286,7 @@ test("an access request sits above the unchanged composer, preserves failed gran
     assert.ok(screen.getByRole("group", { name: "Planner wants to use Taxes" }), "a receipt alone cannot fabricate card removal");
     act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 1, type: "access_request", accessRequest: null }));
     await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Planner wants to use Taxes" }), null));
-    assert.equal(screen.getByPlaceholderText("Ask Planner"), composer);
+    assert.equal(screen.getByPlaceholderText("Message Planner"), composer);
   } finally { errors.restore(); }
 });
 
@@ -2307,7 +2307,7 @@ test("a no-longer-waiting access answer shows no success and its fresh host proj
       botId: "bot-1", epoch: "epoch-1", seq: 1, type: "snapshot", snapshot: snapshot({ seq: 1, accessRequest: null }),
     }));
     await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Planner wants to use your whole Mac" }), null));
-    screen.getByPlaceholderText("Ask Planner");
+    screen.getByPlaceholderText("Message Planner");
   } finally { errors.restore(); }
 });
 
@@ -2474,7 +2474,7 @@ test("only a pending plan gates the composer; active, ended and cleared host eve
   await screen.findByRole("button", { name: "Allow once" });
   assert.equal((screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement).disabled, true);
   emitPlan({ ...CHAT_PLAN, status: "active", revision: 2, expiresAt: Date.now() + 600_000 }, 1);
-  const box = await screen.findByPlaceholderText("Ask Planner") as HTMLTextAreaElement;
+  const box = await screen.findByPlaceholderText("Message Planner") as HTMLTextAreaElement;
   assert.equal(box.disabled, false);
   screen.getByRole("button", { name: "Stop plan" });
   fireEvent.change(box, { target: { value: "A normal message" } });
@@ -2546,7 +2546,7 @@ test("a repeated approval requests Always truthfully, preserves the draft and Ma
     "bots:allowed:list": () => [],
   });
   const { router } = await mountWithBotRouter(<BotChatRoute botId="bot-1" />, { initialPath: "/bots/bot-1/chat" });
-  const box = await screen.findByPlaceholderText("Ask Planner") as HTMLTextAreaElement;
+  const box = await screen.findByPlaceholderText("Message Planner") as HTMLTextAreaElement;
   fireEvent.change(box, { target: { value: "Keep this draft" } });
   act(() => emitBotTestNotification("bots:approval", { botId: "bot-1", waitId: "always-1", toolCallId: "call-a", toolName: "send_email", summary: "Send the update.", always: { key: "k", count: 3 } }));
   const card = await screen.findByRole("region", { name: "Request from Planner: Review before Send email" });
@@ -2698,7 +2698,7 @@ test("the approval keyboard shortcut stays one-time on an offered card, respects
   const card = await screen.findByRole("region", { name: "Request from Planner: Review before Send email" });
   const allow = within(card).getByRole("button", { name: "Allow once" });
   const key = { key: "Enter", ...(allow.getAttribute("aria-keyshortcuts")?.startsWith("Meta") ? { metaKey: true } : { ctrlKey: true }) };
-  const box = screen.getByPlaceholderText("Ask Planner");
+  const box = screen.getByPlaceholderText("Message Planner");
   fireEvent.change(box, { target: { value: "An unsent draft" } });
   fireEvent.keyDown(box, key);
   assert.equal(calls.filter((call) => call.channel === "bots:approve").length, 0);

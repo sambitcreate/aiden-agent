@@ -1012,7 +1012,7 @@ fun AidenBotRoutineProposalCard(
 
 /**
  * Revision 42 (`bot:issues`): a "Needs you" card the host raised, with up to two actions. A card
- * that offers nothing a phone can do (the Mac's own settings opened it) says "Open on your Mac".
+ * that offers nothing a phone can do (the Mac's own settings opened it) says "Open on your computer".
  */
 @Composable
 fun AidenBotIssueCard(

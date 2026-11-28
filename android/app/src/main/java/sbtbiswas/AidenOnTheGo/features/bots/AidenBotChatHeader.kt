@@ -46,7 +46,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 
 /** Composer placeholder for a Bot chat. */
 fun aidenBotChatPlaceholder(name: String?): String =
-    "Ask ${name?.trim()?.ifEmpty { null } ?: "your Bot"}"
+    "Message ${name?.trim()?.ifEmpty { null } ?: "your Bot"}"
 
 object AidenBotChatHeaderTags {
     const val PILL = "bot_chat_header_pill"

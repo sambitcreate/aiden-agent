@@ -87,7 +87,7 @@ test("a paired Mac's Bot opens its one conversation there and sends to it with a
     ["host_a", "bot_1"],
   );
 
-  const box = await screen.findByPlaceholderText("Ask Planner");
+  const box = await screen.findByPlaceholderText("Message Planner");
   fireEvent.change(box, { target: { value: "Move the dentist" } });
   fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
   await waitFor(() => assert.equal(peerCalls().filter((call) => call.operation === "botSend").length, 1));
@@ -114,7 +114,7 @@ test("a send whose acknowledgement was lost keeps the draft and retries with the
       return { ok: false, error: { code: "failed", message: `unexpected ${name}` } };
     },
   });
-  const box = (await screen.findByPlaceholderText("Ask Planner")) as HTMLTextAreaElement;
+  const box = (await screen.findByPlaceholderText("Message Planner")) as HTMLTextAreaElement;
   fireEvent.change(box, { target: { value: "Move the dentist" } });
   fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
   await waitFor(() => assert.equal(sends, 1));
@@ -160,7 +160,7 @@ test("Retry on a failed reply from another computer resends the person's words t
 test("Aiden Live finds a Bot's transcript as one chat region it may only count, with the composer outside it", async () => {
   await mount();
   const reply = await screen.findByText("Two meetings and a dentist.");
-  const box = await screen.findByPlaceholderText("Ask Planner");
+  const box = await screen.findByPlaceholderText("Message Planner");
   // Main runs this on the live page to find what it must not read.
   const regions = new Function(`return ${AIDEN_CONTENT_REGIONS_SOURCE}`)() as Element[] & {
     facts: AidenContentRegionFacts[];
@@ -506,7 +506,7 @@ test("without the host's activity frames a busy Bot is not offered Queue, so a q
   await act(async () => {
     emitBotTestNotification("remote:peer-bot-session", event(4, "state", { state: "running", interrupted: false }));
   });
-  const box = await screen.findByPlaceholderText("Ask Planner");
+  const box = await screen.findByPlaceholderText("Message Planner");
   fireEvent.change(box, { target: { value: "and Friday?" } });
   assert.equal(screen.queryByRole("button", { name: "Queue message" }), null);
   fireEvent.keyDown(box, { key: "Enter" });
@@ -744,7 +744,7 @@ test("a message sent to a Bot on another computer shows at once, before that com
       return { ok: false, error: { code: "failed", message: `unexpected ${operation.operation}` } };
     },
   });
-  const box = await screen.findByPlaceholderText("Ask Planner");
+  const box = await screen.findByPlaceholderText("Message Planner");
   fireEvent.change(box, { target: { value: "Move the dentist to Friday" } });
   fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
   assert.ok(await screen.findByText("Move the dentist to Friday"));
@@ -767,7 +767,7 @@ test("a send the other computer refuses takes its echo away and keeps the draft"
       return { ok: false, error: { code: "failed", message: "Studio is busy." } };
     },
   });
-  const box = (await screen.findByPlaceholderText("Ask Planner")) as HTMLTextAreaElement;
+  const box = (await screen.findByPlaceholderText("Message Planner")) as HTMLTextAreaElement;
   fireEvent.change(box, { target: { value: "Move the dentist to Friday" } });
   fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
   await waitFor(() => assert.equal(box.value, "Move the dentist to Friday"));

@@ -120,7 +120,7 @@ data class AidenBotHomeRow(
             }
             val conv = conversation
             if (conv?.activityState == AidenBotConversationActivityState.WAITING_FOR_APPROVAL) {
-                return if (conv.canRespondToApproval) "Needs your OK" else "Waiting for your OK on your Mac"
+                return if (conv.canRespondToApproval) "Needs your OK" else "Waiting for your OK on your computer"
             }
             val last = conv?.preview?.trim().orEmpty()
             if (last.isNotEmpty()) return last

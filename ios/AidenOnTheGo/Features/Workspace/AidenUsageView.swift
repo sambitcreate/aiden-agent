@@ -587,9 +587,5 @@ private extension View {
             palette.raised,
             in: RoundedRectangle(cornerRadius: AidenRadius.card, style: .continuous)
         )
-        .overlay {
-            RoundedRectangle(cornerRadius: AidenRadius.card, style: .continuous)
-                .stroke(palette.foreground.opacity(0.06), lineWidth: 0.5)
-        }
     }
 }

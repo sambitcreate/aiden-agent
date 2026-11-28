@@ -85,7 +85,7 @@ test("the Bots page lists only Bots, opens the latest one, and its panel shows a
   await expect(botsNav.getByRole("button", { name: /^Planner/u })).toBeVisible();
   await expect(botsNav.getByRole("button", { name: /^Inbox Helper/u })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Primary" })).toHaveCount(0);
-  await expect(page.getByPlaceholder("Ask Planner")).toBeVisible();
+  await expect(page.getByPlaceholder("Message Planner")).toBeVisible();
   // Still open, but out of reach: the workspace panel keeps its state while a Bots page is showing,
   // and nobody can see, read or tab into it.
   await expect(page.locator("#environment-panel")).toHaveAttribute("data-state", "covered");
@@ -106,7 +106,7 @@ test("the Bots page lists only Bots, opens the latest one, and its panel shows a
   // At this width the panel sits beside the chat: the composer moves over rather than being covered.
   await expect
     .poll(async () => {
-      const composer = await page.getByPlaceholder("Ask Planner").boundingBox();
+      const composer = await page.getByPlaceholder("Message Planner").boundingBox();
       const surface = await page.locator("#bot-panel").boundingBox();
       return Boolean(composer && surface && composer.x + composer.width <= surface.x);
     })
