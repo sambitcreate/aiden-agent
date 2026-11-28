@@ -467,6 +467,7 @@ jobs:
         if: failure()
         shell: bash
         run: |
+          set -euo pipefail
           # Parallel test runs print only test names; the failure messages
           # live in the result bundles. A bundle is missing when its step never
           # ran, so each one is optional.
@@ -477,7 +478,7 @@ jobs:
           import json, sys
           for failure in json.load(sys.stdin).get("testFailures", []):
               print("::error title=" + failure.get("testName", "test") + "::" + failure.get("failureText", "").replace("\n", " "))
-          ' || true
+          '
           done
 
       - name: Preserve failed iOS simulator test results
@@ -594,6 +595,7 @@ jobs:
         if: failure()
         shell: bash
         run: |
+          set -euo pipefail
           # Parallel test runs print only test names; the failure messages
           # live in the result bundles. A bundle is missing when its step never
           # ran, so each one is optional.
@@ -604,7 +606,7 @@ jobs:
           import json, sys
           for failure in json.load(sys.stdin).get("testFailures", []):
               print("::error title=" + failure.get("testName", "test") + "::" + failure.get("failureText", "").replace("\n", " "))
-          ' || true
+          '
           done
 
       - name: Preserve failed iOS simulator test results
@@ -846,7 +848,25 @@ jobs:
           node scripts/prepare-linux-update-feed.mjs release/linux-distribution "${{ matrix.arch }}" "$(node -p 'require("./package.json").version')"
           sudo apt-get install --yes ./release/linux-distribution/*.deb
           dpkg --verify aiden-agent
-          ! ldd "/opt/Aiden Agent/aiden-agent" | grep -q "not found"
+          for binary in \
+            "/opt/Aiden Agent/aiden-agent" \
+            "/opt/Aiden Agent/Helpers/aiden-global-shortcuts-portal" \
+            "/opt/Aiden Agent/Helpers/aiden-secret-service-authority" \
+            "/opt/Aiden Agent/Helpers/aiden-worktree-remover" \
+            "/opt/Aiden Agent/Helpers/aiden-bot-inbox-writer" \
+            "/opt/Aiden Agent/Helpers/aiden-lease-flock" \
+            "/opt/Aiden Agent/Helpers/aiden-subagent-run-store" \
+            "/opt/Aiden Agent/Helpers/aiden-subagent-file-mutator" \
+            "/opt/Aiden Agent/Helpers/aiden-subagent-shell-runner"; do
+            ldd_output="$(ldd "$binary")" || {
+              printf '%s\n' "$binary" "$ldd_output" >&2
+              exit 1
+            }
+            if printf '%s\n' "$ldd_output" | grep -q "not found"; then
+              printf '%s\n' "$binary" "$ldd_output" >&2
+              exit 1
+            fi
+          done
           test -f /usr/share/applications/com.sambitcreate.aiden-agent.desktop
           grep -F 'StartupWMClass=com.sambitcreate.aiden-agent' /usr/share/applications/com.sambitcreate.aiden-agent.desktop
           expected_version="$(node -p 'require("./package.json").version')"
@@ -1111,5 +1131,23 @@ jobs:
             test "$rpm_verify_output" = '.M.......    /opt/Aiden Agent/chrome-sandbox'
             test "$(stat -c '%a:%U:%G' '/opt/Aiden Agent/chrome-sandbox')" = '4755:root:root'
           fi
-          ! ldd "/opt/Aiden Agent/aiden-agent" | grep -q "not found"
+          for binary in \
+            "/opt/Aiden Agent/aiden-agent" \
+            "/opt/Aiden Agent/Helpers/aiden-global-shortcuts-portal" \
+            "/opt/Aiden Agent/Helpers/aiden-secret-service-authority" \
+            "/opt/Aiden Agent/Helpers/aiden-worktree-remover" \
+            "/opt/Aiden Agent/Helpers/aiden-bot-inbox-writer" \
+            "/opt/Aiden Agent/Helpers/aiden-lease-flock" \
+            "/opt/Aiden Agent/Helpers/aiden-subagent-run-store" \
+            "/opt/Aiden Agent/Helpers/aiden-subagent-file-mutator" \
+            "/opt/Aiden Agent/Helpers/aiden-subagent-shell-runner"; do
+            ldd_output="$(ldd "$binary")" || {
+              printf '%s\n' "$binary" "$ldd_output" >&2
+              exit 1
+            }
+            if printf '%s\n' "$ldd_output" | grep -q "not found"; then
+              printf '%s\n' "$binary" "$ldd_output" >&2
+              exit 1
+            fi
+          done
           test "$(aiden-agent --no-sandbox --version)" = "$expected_version"

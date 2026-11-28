@@ -15,7 +15,11 @@ sender_unit=aiden-electron-role-probe-sender.service
 ipc_runtime=/run/aiden-electron-role-probe-ipc
 [[ ! -e "$installation" && ! -e "$runtime" && ! -e "/etc/systemd/system/$unit" ]]
 [[ ! -e "$ipc_runtime" && ! -e "/etc/systemd/system/$sender_unit" ]]
-! semodule -l | grep -q '^aiden_electron_role_probe\(_deny\)\?\s'
+loaded_modules="$(semodule -l)"
+if printf '%s\n' "$loaded_modules" | grep -Eq '^aiden_electron_role_probe(_deny)?([[:space:]]|$)'; then
+  echo "Refusing to run: aiden_electron_role_probe policy module already loaded" >&2
+  exit 1
+fi
 payload=/var/tmp/aiden-electron43/dist
 [[ -x "$payload/electron" && "$(realpath "$payload")" == "$payload" ]]
 # Reject links/devices/FIFOs before copying operator-provided synthetic inputs.

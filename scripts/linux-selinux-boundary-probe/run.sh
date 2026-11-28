@@ -13,8 +13,15 @@ unit=aiden-selinux-boundary-probe.service
 installation=/usr/libexec/aiden-selinux-boundary-probe
 runtime=/run/aiden-selinux-boundary-probe
 [[ ! -e "$installation" && ! -e "$runtime" && ! -e "/etc/systemd/system/$unit" ]]
-! getent passwd "$user" >/dev/null
-! semodule -l | grep -q '^aiden_boundary_probe\(_deny\)\?\s'
+if getent passwd "$user" >/dev/null; then
+  echo "Refusing to run: fixture user $user already exists" >&2
+  exit 1
+fi
+loaded_modules="$(semodule -l)"
+if printf '%s\n' "$loaded_modules" | grep -Eq '^aiden_boundary_probe(_deny)?([[:space:]]|$)'; then
+  echo "Refusing to run: aiden_boundary_probe policy module already loaded" >&2
+  exit 1
+fi
 mkdir -m 700 -- "$evidence"
 work="$(mktemp -d /var/tmp/aiden-boundary-build.XXXXXX)"
 base_installed=false
@@ -153,7 +160,11 @@ runcon_status=$?
 set -e
 printf '{"direct":%s,"runcon":%s}\n' "$direct_status" "$runcon_status" >"$evidence/entry-attempts.json"
 [[ "$direct_status" -ne 0 && "$direct_status" -ne 124 && "$direct_status" -ne 137 && "$runcon_status" -ne 0 ]]
-! grep -q 'invalid context' "$evidence/runcon.txt"
+runcon_output="$(cat "$evidence/runcon.txt")"
+if printf '%s\n' "$runcon_output" | grep -q 'invalid context'; then
+  printf '%s\n' "$runcon_output" >&2
+  exit 1
+fi
 systemctl stop "$unit"
 rm -f "$runtime/socket"
 start_holder

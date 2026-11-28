@@ -10,6 +10,7 @@ const app = JSON.parse(read('app.json'));
 const processes = JSON.parse(read('processes.json'));
 const negative = JSON.parse(read('negative-status.json'));
 assert.equal(read('enforcement-before.txt').trim(), 'Enforcing');
+assert.doesNotMatch(read('modules-before.txt'), /^aiden_electron_role_probe(?:_deny)?(?:\s|$)/mu);
 assert.equal(app.electron, '43.1.1');
 assert.match(app.mainContext, /:aiden_electron_role_probe_main_t:/);
 assert.deepEqual(app.errors, []);

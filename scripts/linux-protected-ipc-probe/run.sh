@@ -11,8 +11,15 @@ user=aiden-protected-ipc-probe
 installation=/usr/libexec/aiden-protected-ipc-probe
 runtime=/run/aiden-protected-ipc-probe
 [[ ! -e "$installation" && ! -e "$runtime" ]]
-! getent passwd "$user" >/dev/null
-! semodule -l | grep -q '^aiden_ipc_probe\(_deny\)\?\s'
+if getent passwd "$user" >/dev/null; then
+  echo "Refusing to run: fixture user $user already exists" >&2
+  exit 1
+fi
+loaded_modules="$(semodule -l)"
+if printf '%s\n' "$loaded_modules" | grep -Eq '^aiden_ipc_probe(_deny)?([[:space:]]|$)'; then
+  echo "Refusing to run: aiden_ipc_probe policy module already loaded" >&2
+  exit 1
+fi
 mkdir -m 700 -- "$evidence"
 work="$(mktemp -d /var/tmp/aiden-ipc-build.XXXXXX)"
 base_installed=false

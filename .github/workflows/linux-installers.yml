@@ -54,6 +54,25 @@ jobs:
           node scripts/prepare-linux-update-feed.mjs release/linux-distribution "${{ matrix.arch }}" "$(node -p 'require("./package.json").version')"
           sudo apt-get install --yes ./release/linux-distribution/*.deb
           dpkg --verify aiden-agent
+          for binary in \
+            "/opt/Aiden Agent/aiden-agent" \
+            "/opt/Aiden Agent/Helpers/aiden-global-shortcuts-portal" \
+            "/opt/Aiden Agent/Helpers/aiden-secret-service-authority" \
+            "/opt/Aiden Agent/Helpers/aiden-worktree-remover" \
+            "/opt/Aiden Agent/Helpers/aiden-bot-inbox-writer" \
+            "/opt/Aiden Agent/Helpers/aiden-lease-flock" \
+            "/opt/Aiden Agent/Helpers/aiden-subagent-run-store" \
+            "/opt/Aiden Agent/Helpers/aiden-subagent-file-mutator" \
+            "/opt/Aiden Agent/Helpers/aiden-subagent-shell-runner"; do
+            ldd_output="$(ldd "$binary")" || {
+              printf '%s\n' "$binary" "$ldd_output" >&2
+              exit 1
+            }
+            if printf '%s\n' "$ldd_output" | grep -q "not found"; then
+              printf '%s\n' "$binary" "$ldd_output" >&2
+              exit 1
+            fi
+          done
           expected_version="$(node -p 'require("./package.json").version')"
           test "$(aiden-agent --no-sandbox --version)" = "$expected_version"
           chmod +x ./release/linux-distribution/*.AppImage
