@@ -130,7 +130,7 @@ test("profile onboarding keeps Web Search default-on without a first-run toggle"
 test("the final step is a complete grouped bento gallery with hover descriptions", () => {
   assert.match(
     source,
-    /<OnboardingFeatureGallery features=\{visibleFeatureBentos\} platform=\{capabilities\.platform\} \/>/u,
+    /<OnboardingFeatureGallery\s+features=\{visibleFeatureBentos\}\s+platform=\{capabilities\.platform\}\s*\/>/u,
   );
   assert.match(featurePresentation, /Queue follow-ups, edit them, or steer the next response/u);
   assert.match(galleryMarkup, new RegExp(`data-onboarding-feature-count="${onboardingFeatures.length}"`, "u"));
@@ -292,8 +292,8 @@ test("workspace tour discloses AGENTS instruction loading and refresh", () => {
 test("provider onboarding explains separate opt-in and cloud speech privacy without network setup", () => {
   const disclosure = source.slice(source.indexOf("data-onboarding-tts-privacy"), source.indexOf("</Text>", source.indexOf("data-onboarding-tts-privacy")));
   assert.match(disclosure, /off by default/u);
-  assert.match(disclosure, /Settings → Voice & Speech → Text to Speech/u);
-  assert.match(disclosure, /response text to Google/u);
+  assert.match(disclosure, /Settings →\s+Voice & Speech →\s+Text to Speech/u);
+  assert.match(disclosure, /response\s+text to Google/u);
   assert.match(disclosure, /local-model replies/u);
   assert.match(disclosure, /charges may apply/u);
   assert.doesNotMatch(source, /ttsApi\.(start|preview)/u);

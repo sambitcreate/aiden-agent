@@ -510,7 +510,10 @@ test("a late refusal from the previous chat cannot restore its side question int
 
 test("chat pane hides the generic tool phase when a chronological row owns it", () => {
   const pane = source("./chat-pane.tsx");
-  assert.match(pane, /toolVisible:\s*chronologicalLiveRows\?\.some\(\(row\) => row\.kind === "activity"[\s\S]*?step\.status === "running"/u);
+  assert.match(
+    pane,
+    /toolVisible:\s*chronologicalLiveRows\?\.some\(\s*\(row\) =>\s*row\.kind === "activity"[\s\S]*?step\.status === "running"/u,
+  );
   assert.match(pane, /resolveVisibleAgentActivity\(timelineActivity/u);
 });
 
@@ -778,17 +781,29 @@ test("revisited generations expose Stop and queue/steer without admitting a seco
   const stop = between(pane, "const handleStop = React.useCallback", "const { queue: messageQueue");
   // The visibility rule is now tested behaviorally in chat-terminal-sync.test.ts:
   // "a saved reply hides an own run, but a mirrored run only by its own reply"
-  assert.match(pane, /isGenerating=\{isGenerating \|\| isStartingGeneration \|\| Boolean\(visibleDetachedProjection\)\}/u);
-  assert.match(pane, /canStopGeneration=\{\(canStopGeneration \|\| Boolean\(visibleDetachedProjection\)\) && !isStoppingGeneration\}/u);
+  assert.match(
+    pane,
+    /isGenerating=\{\s*isGenerating \|\| isStartingGeneration \|\| Boolean\(visibleDetachedProjection\)\s*\}/u,
+  );
+  assert.match(
+    pane,
+    /canStopGeneration=\{\s*\(canStopGeneration \|\| Boolean\(visibleDetachedProjection\)\) &&\s*!isStoppingGeneration\s*\}/u,
+  );
   // Stop closes busy admission synchronously, before React re-renders.
   assert.match(pane, /if \(handleStop\(\)\) stopRequestedRef\.current = true;/u);
   assert.match(pane, /stoppingGeneration=\{isStoppingGeneration\}/u);
   const queueAdmission = between(pane, "const queueMessage = React.useCallback(", "const steerMessage = React.useCallback(");
   assert.match(queueAdmission, /if \(stopRequestedRef\.current\) \{\s*throw new Error/u);
   assert.ok(queueAdmission.indexOf("stopRequestedRef.current") < queueAdmission.indexOf("messageQueue.add("));
-  assert.match(stop, /if \(visibleDetachedProjection && !generationRef\.current && !isStoppingGeneration\)/u);
-  assert.match(stop, /chatControl\.cancel\(streamId\)/u);
-  assert.match(pane, /if \(!detachedGenerationDraining && !generationRef\.current\) setIsStoppingGeneration\(false\)/u);
+  assert.match(
+    stop,
+    /if \(\s*visibleDetachedProjection &&\s*!generationRef\.current &&\s*!isStoppingGeneration\s*\)/u,
+  );
+  assert.match(stop, /chatControl\s*\.cancel\(streamId\)/u);
+  assert.match(
+    pane,
+    /if \(\s*!detachedGenerationDraining &&\s*!generationRef\.current\s*\)\s*setIsStoppingGeneration\(false\)/u,
+  );
   assert.match(send, /if \(detachedGenerationDraining\) \{\s*throw new Error/u);
   assert.match(pane, /enabled:\s*!draft\s*&&\s*ready\s*&&\s*!isGenerating[\s\S]*?!detachedGenerationDraining/u);
 });

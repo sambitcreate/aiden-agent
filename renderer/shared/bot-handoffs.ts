@@ -122,8 +122,9 @@ function boundedText(value: unknown, maximum: number): value is string {
  * The zero-width joiner and non-joiner stay: emoji sequences and scripts such
  * as Persian are shaped with them.
  */
-// eslint-disable-next-line no-control-regex -- these are exactly the characters it removes
+/* eslint-disable no-control-regex -- these are exactly the characters it removes */
 const CARD_CONTROL_CHARACTERS = /[\u0000-\u0008\u000E-\u001F\u007F-\u009F\u00AD\u061C\u180E\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFB]/gu;
+/* eslint-enable no-control-regex */
 /** The line and paragraph separators break a line wherever they are drawn. */
 const UNICODE_LINE_BREAKS = /[\u2028\u2029]/gu;
 

@@ -150,7 +150,10 @@ for (const nextDocument of ["same-url-reload", "same-title-new-origin", "native-
 test("desktop and Bot share disabled specialist admission, with no enable/download or tour affordance", () => {
   assert.equal(FORM_FILL_MUTATION_AVAILABLE, false);
   const read = (file: string) => readFileSync(new URL(file, import.meta.url), "utf8");
-  assert.match(read("../llm-client.ts"), /if \(FORM_FILL_MUTATION_AVAILABLE && computerUse && settings.formFillSpecialistEnabled/u);
+  assert.match(
+    read("../llm-client.ts"),
+    /if \(\s*FORM_FILL_MUTATION_AVAILABLE &&\s*computerUse &&\s*settings\.formFillSpecialistEnabled/u,
+  );
   assert.match(read("../form-fill/settings.ts"), /if \(enabled && !FORM_FILL_MUTATION_AVAILABLE\) throw/u);
   assert.match(read("../../handlers/form-fill.ts"), /if \(!FORM_FILL_MUTATION_AVAILABLE\) throw/u);
   const settings = read("../../../renderer/components/settings/computer-use-settings.tsx");

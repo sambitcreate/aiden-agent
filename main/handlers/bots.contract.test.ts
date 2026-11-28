@@ -73,7 +73,7 @@ test("Remote production wires Bot notice and retained-chat policy authority", ()
   assert.match(remote, /revokeNoticeAudience\(deviceId\)/u);
   assert.match(
     remote,
-    /const revoked = await revokeAidenRemoteRuntimeDevice[\s\S]*if \(hostPlatformCapabilities\(\)\.bots\) \{\s*await revokeBotNoticeAudience\(\(\) => botApplicationService\.revokeNoticeAudience\(deviceId\), botNotices,[\s\S]*?\);\s*\}\s*return revoked;/u,
+    /const revoked = await revokeAidenRemoteRuntimeDevice[\s\S]*if \(hostPlatformCapabilities\(\)\.bots\) \{\s*await revokeBotNoticeAudience\(\s*\(\) => botApplicationService\.revokeNoticeAudience\(deviceId\),\s*botNotices,[\s\S]*?\);\s*\}\s*return revoked;/u,
   );
 });
 
@@ -90,7 +90,7 @@ test("Telegram authority reduction stays independent from Bot mutation health", 
   assert.match(bindings, /authority:\s*\{\s*head: authorities!\.telegramAnchor,\s*bootstrap: authorities!\.telegramBootstrapMarker/u);
   assert.match(bindings, /createTelegramBotBindingAuthorityNarrower\(telegramBotBindings\)/u);
   assert.match(botMain, /disableBinding: \(botId\)[\s\S]*telegramBotBindingAuthority\.disableBot/u);
-  assert.doesNotMatch(botMain, /disableBinding:[\s\S]{0,120}botApplicationService/u);
+  assert.doesNotMatch(botMain, /disableBinding:[^\n]*botApplicationService/u);
 });
 
 test("Bot startup migration precedes chat reconciliation projection and deletion preserves runtime cleanup", () => {

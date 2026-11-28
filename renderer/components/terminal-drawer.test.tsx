@@ -8,7 +8,7 @@ function source(relativePath: string): string {
 
 test("the Ghostty surface sizes its backing store from the canvas box", () => {
   const surface = source("../lib/ghostty-terminal/surface.ts");
-  assert.match(surface, /terminalGridSize\(canvas\.clientWidth, canvas\.clientHeight/u);
+  assert.match(surface, /terminalGridSize\(\s*canvas\.clientWidth,\s*canvas\.clientHeight/u);
   assert.match(surface, /const width = this\.canvas\.clientWidth/u);
   assert.match(surface, /const height = this\.canvas\.clientHeight/u);
   assert.doesNotMatch(surface, /this\.mount\.clientWidth/u);

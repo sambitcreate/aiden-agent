@@ -316,7 +316,10 @@ test("production updater awaits downloads and exposes a sender-scoped retry entr
   const service = readFileSync(new URL("./app-updater.ts", import.meta.url), "utf8");
   const main = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
   const handlerStart = main.indexOf('"app:checkForUpdates"');
-  const handlerEnd = main.indexOf("\n);", handlerStart);
+  const handlerEnd =
+    [main.indexOf("\n);", handlerStart), main.indexOf("\n});", handlerStart)]
+      .filter((index) => index > handlerStart)
+      .sort((a, b) => a - b)[0] ?? -1;
   assert.ok(handlerStart >= 0);
   assert.ok(handlerEnd > handlerStart);
   const handler = main.slice(handlerStart, handlerEnd);

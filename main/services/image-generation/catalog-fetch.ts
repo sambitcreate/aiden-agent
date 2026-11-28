@@ -61,8 +61,9 @@ function stringArray(value: unknown): string[] {
 
 function cleanName(value: unknown, fallback: string): string {
   if (typeof value !== "string") return fallback;
-  // eslint-disable-next-line no-control-regex
+  /* eslint-disable no-control-regex */
   const name = value.replace(/[\u0000-\u001f\u007f]+/gu, " ").replace(/\s+/gu, " ").trim();
+  /* eslint-enable no-control-regex */
   return name && name.length <= MAX_NAME ? name : fallback;
 }
 

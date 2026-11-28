@@ -173,8 +173,9 @@ const RUNNERS = new Set(["npx", "bunx", "node", "bun", "deno", "bash", "sh", "zs
  * make a command or name read differently from what runs: the same set the
  * approval cards refuse.
  */
-// eslint-disable-next-line no-control-regex -- matching these characters is the point
+/* eslint-disable no-control-regex -- matching these characters is the point */
 const UNSAFE_DISPLAY_CHARACTER = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2028\u2029\u2066-\u2069]/u;
+/* eslint-enable no-control-regex */
 
 function displayableName(name: string | undefined): string | undefined {
   const cleaned = name?.replace(new RegExp(UNSAFE_DISPLAY_CHARACTER.source, "gu"), "").trim().slice(0, 60);

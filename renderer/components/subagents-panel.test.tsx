@@ -1308,7 +1308,7 @@ test("the roster separates active and terminal runs without color-only status", 
   assert.match(rosterSource, /aria-level=\{node\.level\}/u);
   assert.match(rosterSource, /aria-posinset=\{node\.position\}/u);
   assert.match(rosterSource, /aria-setsize=\{node\.setSize\}/u);
-  assert.match(rosterSource, /treeRef\.current\?\.querySelector/u);
+  assert.match(rosterSource, /treeRef\.current\s*\?\.querySelector/u);
   assert.doesNotMatch(rosterSource, /document\.querySelector/u);
 });
 

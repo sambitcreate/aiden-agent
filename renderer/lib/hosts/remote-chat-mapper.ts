@@ -94,8 +94,9 @@ const MAX_REMOTE_VISUAL_LINES = 400;
 // draw as nothing. A tab stays (as a space in the title); a line break only
 // separates lines. The zero-width joiner and non-joiner stay: they shape emoji
 // and the spelling of Persian and Indic words.
-// eslint-disable-next-line no-control-regex
+/* eslint-disable no-control-regex */
 const REMOTE_VISUAL_HIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\ufff9-\ufffb]|\p{Cs}/gu;
+/* eslint-enable no-control-regex */
 
 // A line or paragraph separator would break a line where the host's text has no
 // line break; it reads as a space instead.

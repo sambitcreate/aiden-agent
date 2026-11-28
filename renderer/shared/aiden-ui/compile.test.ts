@@ -312,8 +312,9 @@ test("chart, sparkline and heatmap labels reach a text reader on one line, witho
   assert.ok(compiled.tree);
   const label = "Sales\u202egnp.exe\nnext\u0007line\u2066";
   const text = fallbackTextFor(compiled.tree, { vars: { rows: [{ name: "A", n: 1 }], label } }, { chartTables: true, plainTables: true });
-  // eslint-disable-next-line no-control-regex -- matching control characters is the point
+  /* eslint-disable no-control-regex -- matching control characters is the point */
   assert.doesNotMatch(text, /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u, JSON.stringify(text));
+  /* eslint-enable no-control-regex */
   const lines = text.split("\n");
   assert.ok(lines.includes("Salesgnp.exe next line (bar chart, 1 points)"), text);
   assert.ok(lines.includes("Salesgnp.exe next line (sparkline): 1, 2"), text);
@@ -349,8 +350,9 @@ test("table cells never carry control or direction characters that could reorder
   assert.ok(compiled.tree);
   for (const plainTables of [true, false]) {
     const text = fallbackTextFor(compiled.tree, { vars: { rows: [{ name: cell, n: 1 }] } }, { plainTables });
-    // eslint-disable-next-line no-control-regex -- matching control characters is the point
+    /* eslint-disable no-control-regex -- matching control characters is the point */
     assert.doesNotMatch(text, /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u, JSON.stringify(text));
+    /* eslint-enable no-control-regex */
     assert.match(text, /safegnp\.exex y z/u);
   }
 });

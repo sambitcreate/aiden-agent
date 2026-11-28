@@ -78,8 +78,9 @@ function eventAndMatcher(listing: Pick<HookListing, "event" | "configuredEvent" 
  * Control and text-direction characters shown as `\u{…}` escapes, so a hooks
  * file Aiden refuses still can't reorder how its command reads.
  */
-// eslint-disable-next-line no-control-regex -- matching these characters is the point
+/* eslint-disable no-control-regex -- matching these characters is the point */
 const HIDDEN_COMMAND_CHARACTER = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2028\u2029\u2066-\u2069]/gu;
+/* eslint-enable no-control-regex */
 
 function visibleCommand(command: string): string {
   return command.replace(HIDDEN_COMMAND_CHARACTER, (character) => `\\u{${(character.codePointAt(0) ?? 0).toString(16)}}`);

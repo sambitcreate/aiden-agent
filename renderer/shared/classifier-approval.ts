@@ -27,8 +27,9 @@ export function isClassifierApprovalDetails(value: unknown): value is Classifier
   const input = value as Record<string, unknown>;
   if (Object.keys(input).sort().join(",") !== "kind,modelId,payloadComplete,providerId,providerLabel,questionsBytes,questionsJson,stateBytes,stateJson") return false;
   // Reject control and direction characters in recipient labels; payload JSON escapes these.
-  // eslint-disable-next-line no-control-regex
+  /* eslint-disable no-control-regex */
   const label = (entry: unknown, maximum: number) => typeof entry === "string" && entry.trim().length > 0 && entry.length <= maximum && !/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(entry);
+  /* eslint-enable no-control-regex */
   return input.kind === "model-classification" && input.payloadComplete === true &&
     label(input.providerId, 128) && label(input.providerLabel, 512) && label(input.modelId, 256) &&
     typeof input.stateBytes === "number" && input.stateBytes === jsonBytes(input.stateJson) &&

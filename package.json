@@ -189,6 +189,7 @@
     "type-check": "tsc --noEmit",
     "type-check:e2e": "tsc --noEmit --project tests/e2e/tsconfig.json",
     "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
     "package": "node scripts/prepare-macos-package-output.mjs development && npm run computer-use:vendor && npm run bot-computers:vendor && npm run generative-ui:vendor && npm run build:native && npm run build && npm run package:model-catalog && electron-builder --mac dir --config.mac.type=development --config.mac.notarize=false --config.directories.output=release/development",
     "package:verify": "node scripts/verify-macos-package.mjs --development",
     "package:linux": "npm run build && npm run package:model-catalog && electron-builder --linux dir --config.forceCodeSigning=false --config.directories.output=release/linux-development --publish never",

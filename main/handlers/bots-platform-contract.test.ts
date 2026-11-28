@@ -24,7 +24,7 @@ test("ordinary chat paths cannot activate Bot services on unsupported hosts", ()
   const rendererChatMutations = readFileSync(new URL("./chat-renderer-mutations.ts", import.meta.url), "utf8");
   assert.match(
     rendererChatMutations,
-    /const result = chat\?\.botId && hostPlatformCapabilities\(\)\.bots\s+\? await botApplicationService\.deleteChat\(\{ botId: chat\.botId, chatId \}\)\s+: await chatApplicationService\.remove\(chatId\b/u,
+    /const result =\s+chat\?\.botId && hostPlatformCapabilities\(\)\.bots\s+\? await botApplicationService\.deleteChat\(\{ botId: chat\.botId, chatId \}\)\s+: await chatApplicationService\.remove\(chatId\b/u,
   );
   assert.match(
     llmClient,

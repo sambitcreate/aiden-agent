@@ -117,7 +117,7 @@ test("chat removal deletes private child history before the chat can disappear",
   ]);
   assert.match(
     handler,
-    /const chatId = asString\(id, "id"\);[\s\S]*const result = chat\?\.botId[\s\S]*botApplicationService\.deleteChat\([\s\S]*chatApplicationService\.remove\(chatId\b[\s\S]*return result/u,
+    /const chatId = asString\(id, "id"\);[\s\S]*const result =\s*chat\?\.botId[\s\S]*botApplicationService\.deleteChat\([\s\S]*chatApplicationService\.remove\(chatId\b[\s\S]*return result/u,
   );
   const beginDeletion = applicationService.indexOf("deps.llmClient.beginChatDeletion(chatId)");
   const cancel = applicationService.indexOf("deps.llmClient.cancelChat(chatId)");
@@ -505,7 +505,8 @@ test("managed worktree deletion and terminal creation share workspace mutation a
   assert.match(terminal, /async \(\) => \{[\s\S]+const latest = await workspaceFolder/u);
   const revalidate = terminalService.indexOf("await revalidateAccess?.()");
   const finalAbortCheck = terminalService.indexOf("if (ownerInvalidated())", revalidate);
-  const spawn = terminalService.indexOf("const { pty,", finalAbortCheck);
+  const spawnMatch = /const \{\s*pty,/u.exec(terminalService.slice(finalAbortCheck));
+  const spawn = spawnMatch ? finalAbortCheck + spawnMatch.index : -1;
   assert.ok(revalidate >= 0);
   assert.ok(finalAbortCheck > revalidate);
   assert.ok(spawn > finalAbortCheck);

@@ -53,5 +53,5 @@ test("credential mutations retain the document fence through the secret-store tr
 
 
 test("production synthesis persists usage through the privacy-safe mapper", () => {
-  assert.match(bindings, /recordUsage:.*usageStore\.record\(ttsUsageRecord\(report\)\)/u);
+  assert.match(bindings, /recordUsage:[\s\S]*?usageStore\.record\(ttsUsageRecord\(report\)\)/u);
 });

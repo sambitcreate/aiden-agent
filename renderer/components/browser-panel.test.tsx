@@ -80,7 +80,7 @@ test("annotation editor clears only after sanitized context is acknowledged by i
   assert.ok(source.includes("recipient.deliver(result.annotation)) cancelAnnotation()"));
   assert.ok(source.includes("setError(BROWSER_ANNOTATION_UNAVAILABLE)"));
   assert.ok(source.includes("annotationSubmissionRef.current !== submission"));
-  assert.ok(source.includes("annotationPreviewQueueRef.current.reset"));
+  assert.match(source, /annotationPreviewQueueRef\.current\s*\.reset/u);
   assert.ok(source.includes('action: "annotation_reset"'));
   const main = readFileSync(new URL("../../main/services/browser/service.ts", import.meta.url), "utf8");
   assert.ok(main.includes("result.annotation = annotation"));
@@ -90,7 +90,7 @@ test("annotation editor clears only after sanitized context is acknowledged by i
 test("screenshot success requires a written file and favicon failures keep the globe affordance", () => {
   const source = readFileSync(new URL("./browser-panel.tsx", import.meta.url), "utf8");
   assert.ok(source.includes("savedBrowserScreenshotPath(saved)"));
-  assert.ok(source.includes('if (path) toast.success("Screenshot saved"'));
+  assert.match(source, /if \(path\)\s*toast\.success\("Screenshot saved"/u);
   assert.ok(source.includes("failedSource !== src"));
   assert.ok(source.includes('<Globe aria-hidden="true" />'));
   assert.ok(!source.includes("event.currentTarget.hidden = true"));
@@ -99,7 +99,7 @@ test("screenshot success requires a written file and favicon failures keep the g
 test("floating preview uses the live browser portal independently of sidebar visibility", () => {
   const source = readFileSync(new URL("./browser-panel.tsx", import.meta.url), "utf8");
   assert.ok(source.includes("active || Boolean(tab?.floating)"));
-  assert.ok(source.includes("createPortal(<BrowserFloatingFrame"));
+  assert.match(source, /createPortal\(\s*<BrowserFloatingFrame/u);
   assert.ok(source.includes("presentationRef.current = schedule"));
   assert.ok(source.includes("onPictureInPicture"));
   assert.ok(!source.includes("Browser is in a floating window"));

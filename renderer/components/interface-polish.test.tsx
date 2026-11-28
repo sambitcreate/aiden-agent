@@ -13,8 +13,8 @@ test('routine buttons stay static and optional press feedback honors reduced mot
  assert.doesNotMatch(renderToStaticMarkup(<Button>Copy</Button>),/button-press-feedback|active:scale/u);
  assert.match(renderToStaticMarkup(<Button pressFeedback>Continue</Button>),/button-press-feedback/u);
  const css=source('../styles.css');
- assert.match(css,/\.button-press-feedback:active:not\(:disabled\) \{ scale: 0\.96;/u);
- assert.match(css,/:root\[data-reduce-motion="true"\] \.button-press-feedback \{ scale: none !important;/u);
+ assert.match(css,/\.button-press-feedback:active:not\(:disabled\)\s*\{\s*scale:\s*0\.96;/u);
+ assert.match(css,/:root\[data-reduce-motion="true"\]\s+\.button-press-feedback\s*\{\s*scale:\s*none !important;/u);
 });
 test('tinted error text renders one explicit foreground utility',()=>{
  const markup=renderToStaticMarkup(<Text color="status-red">Error</Text>);

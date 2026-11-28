@@ -217,8 +217,9 @@ function text(value: string): AgentToolResult<null> {
 }
 
 // C0/C1 controls, bidi marks and overrides, and line/paragraph separators.
-// eslint-disable-next-line no-control-regex
+/* eslint-disable no-control-regex */
 const UNSAFE_LINE_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2028\u2029\u2066-\u2069]+/gu;
+/* eslint-enable no-control-regex */
 
 /** Control and bidi characters out, whitespace folded, trimmed and bounded: safe for one card line. */
 function cardLine(value: string, limit: number): string {

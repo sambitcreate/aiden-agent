@@ -137,11 +137,11 @@ test("composer focus tints the whole shell, not only the textarea", () => {
   );
   assert.match(
     styles,
-    /:root :where\(input, textarea\):focus-visible\s*\{\s*outline: none !important;\s*\}/u,
+    /:root\s+:where\(\s*input,\s*textarea\s*\):focus-visible\s*\{\s*outline: none !important;\s*\}/u,
   );
   assert.match(
     styles,
-    /:root :where\(button,[^}]+\):focus-visible\s*\{\s*outline: 2px solid var\(--focus-ring\) !important;\s*outline-offset: var\(--keyboard-focus-offset, 2px\) !important;/u,
+    /:root\s+:where\(\s*button,[^}]+\):focus-visible\s*\{\s*outline: 2px solid var\(--focus-ring\) !important;\s*outline-offset: var\(--keyboard-focus-offset, 2px\) !important;/u,
   );
 });
 
@@ -248,7 +248,10 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   assert.match(composer, /type: "send-started"/u);
   assert.match(composer, /failedSendDraft\(payload\.draftText, currentDraft\)/u);
   assert.match(composer, /failedSendAttachments\([\s\S]{0,160}payload\.attachments/u);
-  assert.match(composer, /markComposerSubmission\(chatId, messageWithMentions\(payload\.mentions \?\? \[\], payload\.draftText\)\)/u);
+  assert.match(
+    composer,
+    /markComposerSubmission\(\s*chatId,\s*messageWithMentions\(payload\.mentions \?\? \[\], payload\.draftText\)\s*,?\s*\)/u,
+  );
   assert.match(composer, /settleComposerSubmission\(chatId, true, draftRef\.current\.text\)/u);
   assert.match(
     composer,
@@ -315,7 +318,7 @@ test("first-send draft freeze blocks edits and browser annotation delivery until
   assert.match(composer, /firstSendPendingRef\.current = freezeWhileSending/u);
   assert.match(composer, /inert=\{firstSendPending \|\| undefined\}/u);
   assert.match(composer, /if \(firstSendPendingRef\.current \|\| sendPendingRef\.current \|\| !available\(\)\) return false/u);
-  assert.match(composer, /role="status"[^\n]*Sending…/u);
+  assert.match(composer, /role="status"[\s\S]{0,120}?Sending…/u);
 });
 
 

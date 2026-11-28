@@ -500,11 +500,11 @@ test("the shared focus treatment separates text entry from non-text keyboard foc
   const ui = readFileSync(new URL("../components/ui.tsx", import.meta.url), "utf8");
   assert.match(
     styles,
-    /:root :where\(input, textarea\):focus-visible\s*\{\s*outline: none !important;\s*\}/u,
+    /:root\s+:where\(\s*input,\s*textarea\s*\):focus-visible\s*\{\s*outline: none !important;\s*\}/u,
   );
   assert.match(
     styles,
-    /:root :where\(button,[^}]+\):focus-visible\s*\{\s*outline: 2px solid var\(--focus-ring\) !important;\s*outline-offset: var\(--keyboard-focus-offset, 2px\) !important;/u,
+    /:root\s+:where\(\s*button,[^}]+\):focus-visible\s*\{\s*outline: 2px solid var\(--focus-ring\) !important;\s*outline-offset: var\(--keyboard-focus-offset, 2px\) !important;/u,
   );
   assert.doesNotMatch(styles, /:root :where\(\*\):focus/u);
   assert.match(
@@ -689,13 +689,15 @@ test("status primitives keep semantic fills and icons without decorative edges",
   assert.match(radio, /data-\[state=checked\]:bg-fill-accent/u);
   assert.match(radio, /Indicator className="size-1.5 rounded-full bg-fill-accent-foreground"/u);
   assert.doesNotMatch(badge, /(?:border|ring|outline)-(?:accent|red|green|support)/u);
+  const canonicalCss = (css: string) =>
+    css.toLowerCase().replace(/(\.\d*?[1-9])0+\b|\.0+\b/gu, "$1");
   const styles = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
   for (const scheme of ["light", "dark"] as const) {
     const tokens = resolveThemeTokens(getPresetVariant("aiden", scheme), scheme);
     const start = styles.indexOf(scheme === "light" ? ":root {" : ":root.dark {");
-    const fallback = styles.slice(start, styles.indexOf("\n}", start));
+    const fallback = canonicalCss(styles.slice(start, styles.indexOf("\n}", start)));
     for (const [token, value] of Object.entries(tokens).filter(([name]) => ["--status-", "--text-", "--syntax-", "--support-", "--fill-", "--accent-text"].some(prefix => name.startsWith(prefix)))) {
-      assert.ok(fallback.includes(`${token}: ${value};`), `${scheme} fallback ${token} matches the resolver`);
+      assert.ok(fallback.includes(canonicalCss(`${token}: ${value};`)), `${scheme} fallback ${token} matches the resolver`);
     }
   }
 });

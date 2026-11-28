@@ -8,8 +8,9 @@ import type { BotPlanRecord, BotPlanReceipt } from "./plans.js";
 export interface BotPlanFile { version: 1; plans: BotPlanRecord[]; receipts: BotPlanReceipt[] }
 const obj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const keys = (v: Record<string, unknown>, allowed: string[]) => Object.keys(v).every((k) => allowed.includes(k));
-// eslint-disable-next-line no-control-regex -- Reject hidden control and direction marks in persisted authority.
+/* eslint-disable no-control-regex -- Reject hidden control and direction marks in persisted authority. */
 const text = (v: unknown, max: number): v is string => typeof v === "string" && !!v.trim() && [...v].length <= max && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(v);
+/* eslint-enable no-control-regex */
 const time = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0;
 const hash = (v: unknown): v is string => typeof v === "string" && /^[a-f0-9]{64}$/u.test(v);
 const planId = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z0-9-]{1,64}$/u.test(v);

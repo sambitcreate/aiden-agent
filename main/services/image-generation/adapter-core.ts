@@ -204,8 +204,9 @@ export function providerDetail(value: unknown): string | undefined {
     }
   }
   if (!text) return undefined;
-  // eslint-disable-next-line no-control-regex
+  /* eslint-disable no-control-regex */
   const clean = text.replace(/[\u0000-\u001f\u007f]+/gu, " ").replace(/\s+/gu, " ").trim();
+  /* eslint-enable no-control-regex */
   return clean || undefined;
 }
 
