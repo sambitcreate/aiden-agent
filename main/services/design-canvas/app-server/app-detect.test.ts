@@ -549,3 +549,92 @@ test("a Storybook-only repo, scripts as an array and a null dev script never giv
     );
   });
 });
+
+// ---- 3d: design apps (S104, S108) ----
+
+const mockPackage = () => ({
+  name: "design-app",
+  private: true,
+  type: "module",
+  aiden: { designApp: 1 },
+  scripts: { dev: "vite" },
+  dependencies: { react: "19.2.7", "react-dom": "19.2.7" },
+  devDependencies: { vite: "8.3.5", "@vitejs/plugin-react": "6.0.3" },
+});
+const electronApp = () => ({ name: "desk", dependencies: { react: "^19.0.0", electron: "^43.0.0" }, scripts: { start: "electron ." } });
+
+test("a design-app folder is a candidate, and the marker makes it a mock", async () => {
+  await withBase(async (base) => {
+    await writeTree(base, {
+      "ws/package.json": electronApp(),
+      "ws/design-app/package.json": mockPackage(),
+      "ws/design-app/package-lock.json": "{}",
+    });
+    const mock = app(await detect(base), "design-app");
+    assert.equal(mock.kind, "web");
+    assert.equal(mock.framework, "vite");
+    assert.equal(mock.script, "dev");
+    assert.equal(mock.mock, true);
+    assert.equal(mock.installRoot, "design-app");
+    // Without the marker it's an ordinary web app.
+    await writeTree(base, { "ws/design-app/package.json": { ...mockPackage(), aiden: { designApp: "1" } } });
+    assert.equal(app(await detect(base), "design-app").mock, undefined);
+  });
+});
+
+test("design-app-3 is found too, design is not", async () => {
+  await withBase(async (base) => {
+    await writeTree(base, {
+      "ws/package.json": electronApp(),
+      "ws/design-app-3/package.json": mockPackage(),
+      "ws/design/package.json": viteReact("design"),
+    });
+    const roots = (await detect(base)).apps.map((candidate) => candidate.root);
+    assert.ok(roots.includes("design-app-3"));
+    assert.equal(roots.includes("design"), false);
+  });
+});
+
+test("an Electron root with a mock app gives the mock as the single web target", async () => {
+  await withBase(async (base) => {
+    await writeTree(base, { "ws/package.json": electronApp(), "ws/design-app/package.json": mockPackage() });
+    const target = designTarget(await detect(base));
+    assert.equal(target.kind, "single");
+    assert.equal(target.kind === "single" && target.app.root, "design-app");
+  });
+});
+
+test("a linked design-app is skipped", async () => {
+  await withBase(async (base) => {
+    await writeTree(base, { "elsewhere/package.json": mockPackage(), "ws/package.json": electronApp() });
+    await symlink(path.join(base, "elsewhere"), path.join(base, "ws", "design-app"));
+    assert.deepEqual((await detect(base)).apps.map((candidate) => candidate.root), ["."]);
+  });
+});
+
+test('workspaces ["*", "!design-app"] still finds the mock, as its own install root', async () => {
+  await withBase(async (base) => {
+    await writeTree(base, {
+      "ws/package.json": { name: "mono", private: true, workspaces: ["*", "!design-app"] },
+      "ws/package-lock.json": "{}",
+      "ws/design-app/package.json": mockPackage(),
+      "ws/tools/package.json": { name: "tools" },
+    });
+    const mock = app(await detect(base), "design-app");
+    assert.equal(mock.kind, "web");
+    assert.equal(mock.mock, true);
+    assert.equal(mock.installRoot, "design-app", "not a workspace member, so not installed from the root");
+    assert.equal(app(await detect(base), "tools").installRoot, ".", "an ordinary member still installs at the root");
+  });
+});
+
+test("an excluded pattern still drops a fixed-container folder", async () => {
+  await withBase(async (base) => {
+    await writeTree(base, {
+      "ws/package.json": { name: "mono", private: true, workspaces: ["apps/*", "!apps/old"] },
+      "ws/apps/web/package.json": viteReact(),
+      "ws/apps/old/package.json": viteReact("old"),
+    });
+    assert.deepEqual((await detect(base)).apps.map((candidate) => candidate.root), [".", "apps/web"]);
+  });
+});

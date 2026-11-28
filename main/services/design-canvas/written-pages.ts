@@ -338,8 +338,8 @@ export type WrittenAppRoute = { appRoot: string; route: string };
 
 /** What a turn resolves written route files against (S83), read once per turn. */
 export type WrittenRouteData = {
-  /** Every app root the workspace knows, with its framework when one is known. */
-  owners: readonly { appRoot: string; framework?: FrameworkId }[];
+  /** Every app root the workspace knows, with its framework when one is known, and (3d) whether it's a design app. */
+  owners: readonly { appRoot: string; framework?: FrameworkId; mock?: true }[];
   /** canvas.json's `params`, by app root. */
   params: ReadonlyMap<string, Readonly<Record<string, readonly string[]>>>;
 };
@@ -347,18 +347,24 @@ export type WrittenRouteData = {
 /** The roots of the snapshot's candidates and apps, and canvas.json's described roots, each with its framework. */
 export function writtenRouteData(snapshot: Pick<DesignAppsSnapshot, "apps" | "candidates"> | null, config: CanvasConfig | null): WrittenRouteData {
   const frameworks = new Map<string, FrameworkId | undefined>();
-  const add = (appRoot: string, framework: FrameworkId | undefined) => {
+  const mocks = new Set<string>();
+  const add = (appRoot: string, framework: FrameworkId | undefined, mock?: true) => {
     if (!frameworks.has(appRoot) || (frameworks.get(appRoot) === undefined && framework !== undefined)) frameworks.set(appRoot, framework);
+    if (mock) mocks.add(appRoot);
   };
-  for (const candidate of snapshot?.candidates ?? []) add(candidate.appRoot, candidate.framework);
-  for (const app of snapshot?.apps ?? []) add(app.appRoot, app.framework);
+  for (const candidate of snapshot?.candidates ?? []) add(candidate.appRoot, candidate.framework, candidate.mock);
+  for (const app of snapshot?.apps ?? []) add(app.appRoot, app.framework, app.mock);
   const params = new Map<string, Record<string, readonly string[]>>();
   for (const app of config?.apps ?? []) {
     add(app.root, undefined);
     if (app.params) params.set(app.root, app.params);
   }
   return {
-    owners: [...frameworks].map(([appRoot, framework]) => (framework ? { appRoot, framework } : { appRoot })),
+    owners: [...frameworks].map(([appRoot, framework]) => ({
+      appRoot,
+      ...(framework ? { framework } : {}),
+      ...(mocks.has(appRoot) ? { mock: true as const } : {}),
+    })),
     params,
   };
 }
@@ -380,7 +386,7 @@ function routeOwner(relativePath: string, data: WrittenRouteData): WrittenRouteD
 export function writtenRoutePattern(relativePath: string, data: WrittenRouteData): { appRoot: string; pattern: string } | null {
   const owner = routeOwner(relativePath, data);
   if (!owner) return null;
-  const pattern = routeForWrittenFile(owner.appRoot, owner.framework, relativePath);
+  const pattern = routeForWrittenFile(owner.appRoot, owner, relativePath);
   return pattern === null ? null : { appRoot: owner.appRoot, pattern };
 }
 

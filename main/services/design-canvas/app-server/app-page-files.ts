@@ -10,7 +10,7 @@ import path from "node:path";
 import type { FrameworkId } from "../../../../renderer/shared/design-app.js";
 import { isPathInside } from "../../../shared/path-containment.js";
 import type { OwnerFile } from "./app-page-files-core.js";
-import { conventionsFor, parseReactRouterConfig, routeFileEntries } from "./app-routes-core.js";
+import { parseReactRouterConfig, routeAppOf, routeConventionsOf, routeFileEntries, type RouteApp } from "./app-routes-core.js";
 import { confinedRoot, conventionFiles, readParsedFile, type Budget, type RouteFs } from "./app-routes.js";
 
 export type RouteFileWalk = {
@@ -36,8 +36,9 @@ export async function routeFiles(
   fs: RouteFs,
   workspaceRoot: string,
   appRoot: string,
-  framework: FrameworkId | undefined,
+  app: RouteApp | FrameworkId | undefined,
 ): Promise<RouteFileWalk | null> {
+  const { framework } = routeAppOf(app);
   const walked: string[] = [];
   const budget: Budget = { entries: 0, truncated: false };
   const result = (configRouter: boolean, files = new Map<string, OwnerFile[]>(), layouts = new Set<string>()): RouteFileWalk => ({
@@ -50,7 +51,7 @@ export async function routeFiles(
     truncated: budget.truncated,
     configRouter,
   });
-  const conventions = conventionsFor(framework);
+  const conventions = routeConventionsOf(app);
   if (conventions.length === 0) return result(true);
   const root = await confinedRoot(fs, workspaceRoot, appRoot);
   if (!root) return null;

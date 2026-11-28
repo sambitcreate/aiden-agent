@@ -33,6 +33,7 @@ import {
   type PackageManagerSignals,
   type WebAppDetection,
 } from "./app-server-core.js";
+import { isMockFolder, isMockPackage, MOCK_FOLDERS } from "./mock-app-core.js";
 
 const PACKAGE_JSON_CAP = 512 * 1024;
 const PNPM_WORKSPACE_CAP = 64 * 1024;
@@ -42,7 +43,8 @@ const MAX_CANDIDATES = 100;
 const MAX_WALK_LEVELS = 5;
 const MAX_NAME = 214;
 const FIXED_CONTAINERS = ["apps", "packages"];
-const FIXED_FOLDERS = ["web", "frontend", "site"];
+/** 3d: the design app folders are fixed folders too (S108). */
+const FIXED_FOLDERS = ["web", "frontend", "site", ...MOCK_FOLDERS];
 const RUNNER_FILES = ["nx.json", "turbo.json", "lerna.json"];
 
 /**
@@ -312,7 +314,11 @@ async function findCandidates(
     }
   }
   for (const rel of [...found.keys()]) {
-    if (rel !== "." && patterns.exclude.some((pattern) => matchesWorkspacePattern(rel, pattern))) found.delete(rel);
+    if (rel === "." || !patterns.exclude.some((pattern) => matchesWorkspacePattern(rel, pattern))) continue;
+    // 3d (S104): excluding a design app folder keeps it out of the person's
+    // workspace install, not out of design mode: it stays, as its own install root.
+    if (isMockFolder(rel)) found.set(rel, false);
+    else found.delete(rel);
   }
   return found;
 }
@@ -374,6 +380,7 @@ export async function detectWebApp(root: string, options: { stopAt?: string; hom
       packageManager: decidePackageManager(signals),
       installRoot,
       installed,
+      ...(isMockFolder(rel) && isMockPackage(pkg) ? { mock: true as const } : {}),
     });
   }
   return { apps, truncated };

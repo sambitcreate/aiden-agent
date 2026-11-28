@@ -1192,6 +1192,27 @@ test("3b: a route file belongs to the deepest app root holding it; no root or no
   assert.equal(writtenAppRoute("design/home.html", routeData([nextApp()])), null);
 });
 
+test("3d: a route written into a mock app is placed", async (t) => {
+  const mock = { appRoot: "design-app", framework: "vite" as const, frameworkLabel: "Vite", mock: true as const };
+  const data = writtenRouteData({ apps: [], candidates: [mock] }, null);
+  assert.deepEqual(data.owners, [{ appRoot: "design-app", framework: "vite", mock: true }]);
+  assert.deepEqual(writtenAppRoute("design-app/src/routes/settings.tsx", data), { appRoot: "design-app", route: "/settings" });
+  assert.deepEqual(writtenAppRoute("design-app/src/routes/settings-v2.tsx", data), { appRoot: "design-app", route: "/settings-v2" });
+  assert.deepEqual(writtenAppRoute("design-app/src/routes/index.tsx", data), { appRoot: "design-app", route: "/" });
+  assert.equal(writtenAppRoute("design-app/src/routes/$slug.tsx", data), null, "no dynamic routes in a mock");
+  assert.equal(writtenAppRoute("design-app/src/App.tsx", data), null);
+  // The same app without the marker is an ordinary Vite app, with no route convention.
+  const plain = writtenRouteData({ apps: [], candidates: [{ ...mock, mock: undefined }] }, null);
+  assert.equal(writtenAppRoute("design-app/src/routes/settings.tsx", plain), null);
+  // The marker on a running app's status counts too.
+  const running = writtenRouteData({ candidates: [], apps: [{ workspaceId: "ws-1", appRoot: "design-app", source: "started", framework: "vite", frameworkLabel: "Vite", phase: "running", since: 0, revision: 1, mock: true }] }, null);
+  assert.deepEqual(writtenAppRoute("design-app/src/routes/settings.tsx", running), { appRoot: "design-app", route: "/settings" });
+
+  const { workspaceRoot, canvases } = await workspaceWith(t, []);
+  assert.deepEqual(await writeRoutes(canvases, workspaceRoot, ["design-app/src/routes/settings.tsx"], { data }), [[1280]]);
+  assert.deepEqual(appFramesOf(await canvases.workspaceStore.get("ws-1")), [{ appRoot: "design-app", route: "/settings", pageId: "page-1" }]);
+});
+
 test("3b: a turn reads the app snapshot and canvas.json once, however many writes race", async () => {
   const loads = { count: 0 };
   const turn = createWrittenRouteTurn({

@@ -7,20 +7,17 @@ type RouteModule = { default: ComponentType };
 // The glob picks up a new route file while the app runs, through HMR.
 const modules = import.meta.glob<RouteModule>(["./routes/**/*.tsx", "./routes/**/*.jsx"], { eager: true });
 
+// Keyed by the path as the browser spells it (`/with space` is `/with%20space`), so a page's URL finds it.
+const urlPath = (route: string): string => new URL(route, "http://design-app.invalid").pathname;
+
 const pages = new Map<string, RouteModule["default"]>();
 for (const [file, module] of Object.entries(modules)) {
   const route = routePath(file.slice("./routes/".length));
-  if (route !== null && !pages.has(route)) pages.set(route, module.default);
+  if (route !== null && !pages.has(urlPath(route))) pages.set(urlPath(route), module.default);
 }
 
 function pageFor(pathname: string): RouteModule["default"] | undefined {
-  let decoded = pathname;
-  try {
-    decoded = decodeURIComponent(pathname);
-  } catch {
-    // Keep the raw path.
-  }
-  const trimmed = decoded.length > 1 ? decoded.replace(/\/+$/u, "") : decoded;
+  const trimmed = pathname.length > 1 ? pathname.replace(/\/+$/u, "") : pathname;
   return pages.get(trimmed || "/");
 }
 

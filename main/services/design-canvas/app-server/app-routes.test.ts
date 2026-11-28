@@ -308,3 +308,17 @@ test("routeForWrittenFile maps a written path under its root without reading dis
   assert.equal(routeForWrittenFile(".", "tanstack-router", "src/routes/about.tsx"), "/about");
   assert.equal(routeForWrittenFile(".", "vite", "src/routes/about.tsx"), null);
 });
+
+// ── 3d (S108): design apps use TanStack's flat-file rule, concrete routes only ──
+
+test("a mock app's routes come from src/routes with the flat rule", async () => {
+  const fixture = path.resolve(import.meta.dirname, "../../../../tests/fixtures/design-mock-routes");
+  const workspaceRoot = path.dirname(fixture);
+  const appRoot = path.basename(fixture);
+  const found = await discoverRoutes(workspaceRoot, appRoot, { framework: "vite", mock: true });
+  assert.deepEqual(found?.patterns.sort(), ["/", "/billing", "/settings", "/settings-v2"]);
+  // Without the marker it's a plain Vite app: no convention, so the `/` fallback.
+  assert.equal(await discoverRoutes(workspaceRoot, appRoot, { framework: "vite" }), null);
+  assert.equal(routeForWrittenFile("design-app", { framework: "vite", mock: true }, "design-app/src/routes/pricing.tsx"), "/pricing");
+  assert.equal(routeForWrittenFile("design-app", { framework: "vite" }, "design-app/src/routes/pricing.tsx"), null);
+});

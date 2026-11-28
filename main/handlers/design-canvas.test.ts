@@ -2010,6 +2010,8 @@ async function pageFixture(
     files: Record<string, string | Buffer>;
     framework?: DesignAppsSnapshot["candidates"][number]["framework"] | null;
     appRoot?: string;
+    /** The candidate carries the design app marker (3d). */
+    mock?: boolean;
     live?: boolean;
     trash?: boolean;
     chats?: Record<string, DesignCanvasChat>;
@@ -2061,7 +2063,7 @@ async function pageFixture(
           workspaceId,
           target: "single",
           apps: [],
-          candidates: [{ appRoot: fixtureRoot, ...(framework ? { framework } : {}), frameworkLabel: "TanStack Router" }],
+          candidates: [{ appRoot: fixtureRoot, ...(framework ? { framework } : {}), frameworkLabel: "TanStack Router", ...(setup.mock ? { mock: true as const } : {}) }],
           chosen: [],
     };
   }
@@ -2107,6 +2109,21 @@ test("3c: appPageVariant copies the route file and places it as a variant, as an
   // A second copy of the variant is -v3, of the same root.
   const again = (await invoke("designCanvas:appPageVariant", "chat-1", { frameId: answer.placed })) as { route: string };
   assert.equal(again.route, "/pricing-v3");
+});
+
+test("3d: ⌘D's page-file context knows a mock app's routes: settings.tsx copies to settings-v3.tsx past a taken -v2", async (t) => {
+  const files = { "design-app/src/routes/index.tsx": PLAIN_PAGE, "design-app/src/routes/settings.tsx": PLAIN_PAGE, "design-app/src/routes/settings-v2.tsx": PLAIN_PAGE };
+  // A design app runs Vite, which has no file router of its own: only the marker gives it TanStack's flat rule.
+  const plain = await pageFixture(t, { appRoot: "design-app", framework: "vite", files });
+  await seedFrames(plain.store, pageApp({ appRoot: "design-app", route: "/settings" }));
+  assert.deepEqual(await plain.invoke("designCanvas:appPageVariant", "chat-1", { frameId: "app-1" }), { error: "config-router" });
+
+  const { invoke, store, workspace } = await pageFixture(t, { appRoot: "design-app", framework: "vite", mock: true, files });
+  await seedFrames(store, pageApp({ appRoot: "design-app", route: "/settings" }));
+  const answer = (await invoke("designCanvas:appPageVariant", "chat-1", { frameId: "app-1" })) as { route: string; file: string };
+  assert.deepEqual([answer.route, answer.file], ["/settings-v3", "design-app/src/routes/settings-v3.tsx"]);
+  // check-aiden-rules: allow no-source-grep-test reads a page file the handler wrote in a temp workspace, not Aiden source
+  assert.equal(await fs.readFile(path.join(workspace, "design-app/src/routes/settings-v3.tsx"), "utf8"), PLAIN_PAGE);
 });
 
 test("3c: appPageVariant rewrites a TanStack createFileRoute literal and nothing else", async (t) => {

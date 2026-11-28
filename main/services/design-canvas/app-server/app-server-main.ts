@@ -22,8 +22,10 @@ import {
   type DesignAppRunningScan,
   type DesignAppsSnapshot,
   type DesignAppStatus,
+  type DesignMockOffer,
   type FrameworkId,
   type PackageManagerName,
+  type ToolchainProblem,
 } from "../../../../renderer/shared/design-app.js";
 import type { WorkspaceGatePermission } from "../../approval-gate/workspace-tool-approval.js";
 import {
@@ -34,7 +36,7 @@ import {
 } from "../../follow-through/background-jobs.js";
 import type { JobSockets } from "../../follow-through/listening-ports.js";
 import type { WorkspaceMutationGate } from "../../workspace-mutation-gate.js";
-import { attachRoots, configuredRoots, type CanvasConfig } from "../canvas-config.js";
+import { attachRoots, configuredRoots, type CanvasConfig, type CanvasConfigInspection } from "../canvas-config.js";
 import { attachOrigins, deepestRoot, parseAttachUrl, type AttachCheck, type AttachRecheck, type DesignAppAttachDeps } from "./app-attach.js";
 import {
   attachConsentKey,
@@ -67,7 +69,8 @@ import {
 } from "./app-server-core.js";
 import type { AppToolchain } from "./app-toolchain.js";
 import type { AppRouteList } from "../../../../renderer/shared/design-canvas/app-routes.js";
-import { mergeRouteList } from "./app-routes-core.js";
+import { mergeRouteList, type RouteApp } from "./app-routes-core.js";
+import { mockOffer, type MockFolderState } from "./mock-app-core.js";
 import { discoverRoutes } from "./app-routes.js";
 
 export const DESIGN_APP_PRESENCE_GRACE_MS = 60_000;
@@ -140,6 +143,19 @@ export interface DesignAppServersDeps {
   clearToolchainCache?(): void;
   /** 3b: the route walk (S78), replaceable so tests can count it. */
   discoverRoutes?: typeof discoverRoutes;
+  /**
+   * 3d (S103, S104): what the design app offer reads from disk — the design-app
+   * folders' states, the root's workspace patterns and canvas.json as inspected.
+   * Without it, the snapshot has no `mock` field and nothing can scaffold.
+   */
+  mockInputs?(workspaceRoot: string): Promise<MockOfferInputs>;
+}
+
+/** The disk facts `mockOffer` decides from (3d). */
+export interface MockOfferInputs {
+  folders: ReadonlyMap<string, MockFolderState>;
+  patterns: { include: string[]; exclude: string[] };
+  config: CanvasConfigInspection | null;
 }
 
 /** 3b (S81): how long one app root's route walk is reused. canvas.json is read fresh on every call. */
@@ -243,7 +259,7 @@ interface Entry {
   workspaceId: string;
   appRoot: string;
   status: DesignAppStatus;
-  meta: Pick<DesignAppStatus, "framework" | "frameworkLabel" | "manager" | "script" | "startedBy">;
+  meta: Pick<DesignAppStatus, "framework" | "frameworkLabel" | "manager" | "script" | "startedBy" | "mock">;
   queue: Promise<void>;
   attempt?: Attempt;
   server?: ServerWatch;
@@ -335,8 +351,11 @@ export class DesignAppServers {
   private readonly stopTicks = new Map<string, number>();
   private readonly cache = new Map<string, { detection: WebAppDetection; config: CanvasConfig | null }>();
   /** 3b: route walks by `<workspaceId>\0<appRoot>`, with the framework they read and when. */
-  private readonly routeWalks = new Map<string, { at: number; framework: FrameworkId | undefined; walk: Promise<{ patterns: string[]; truncated: boolean } | null> }>();
+  private readonly routeWalks = new Map<string, { at: number; app: RouteApp; walk: Promise<{ patterns: string[]; truncated: boolean } | null> }>();
   private readonly served = new Map<string, Set<string>>();
+  /** 3d: each workspace's design app offer as last read, and a toolchain problem its last scaffold hit. */
+  private readonly mockOffers = new Map<string, DesignMockOffer>();
+  private readonly mockProblems = new Map<string, ToolchainProblem>();
   private readonly presenceTimers = new Map<string, unknown>();
   private readonly jobWaiters = new Map<string, (view: DesignJobView) => void>();
   private readonly statusListeners = new Set<(snapshot: DesignAppsSnapshot) => void>();
@@ -374,8 +393,13 @@ export class DesignAppServers {
   async snapshot(workspaceId: string): Promise<DesignAppsSnapshot> {
     if (this.available()) {
       const workspace = await this.deps.workspace(workspaceId);
-      if (workspace?.path && workspace.permission !== "none") await this.detectFor(workspace.id, workspace.path);
-      else this.cache.delete(workspaceId);
+      if (workspace?.path && workspace.permission !== "none") {
+        const cached = await this.detectFor(workspace.id, workspace.path);
+        await this.readMockOffer(workspace as DesignWorkspace & { path: string }, cached.detection);
+      } else {
+        this.cache.delete(workspaceId);
+        this.mockOffers.delete(workspaceId);
+      }
     }
     return this.snapshotNow(workspaceId);
   }
@@ -399,13 +423,16 @@ export class DesignAppServers {
     } else if (!roots.includes(root)) {
       return { error: "unknown-root", roots };
     }
-    const framework = cached.detection.apps.find((app) => app.root === root && app.kind === "web")?.framework;
+    const found = cached.detection.apps.find((app) => app.root === root && app.kind === "web");
+    const framework = found?.framework;
+    // 3d (S108): a design app's routes follow TanStack's flat-file rules, so the walk keys on the marker too.
+    const routeApp: RouteApp = { ...(framework ? { framework } : {}), ...(found?.mock ? { mock: true as const } : {}) };
     const key = keyOf(workspaceId, root);
     let walk = this.routeWalks.get(key);
-    if (!walk || walk.framework !== framework || this.now() - walk.at > DESIGN_APP_ROUTES_CACHE_MS) {
+    if (!walk || walk.app.framework !== routeApp.framework || walk.app.mock !== routeApp.mock || this.now() - walk.at > DESIGN_APP_ROUTES_CACHE_MS) {
       const discover = this.deps.discoverRoutes ?? discoverRoutes;
-      const promise = discover(workspace.path, root, framework).catch(() => null);
-      walk = { at: this.now(), framework, walk: promise };
+      const promise = discover(workspace.path, root, routeApp).catch(() => null);
+      walk = { at: this.now(), app: routeApp, walk: promise };
       this.routeWalks.set(key, walk);
     }
     const discovered = await walk.walk;
@@ -416,6 +443,26 @@ export class DesignAppServers {
       discovered,
       ...(entry && (entry.routes || entry.params) ? { config: { ...(entry.routes ? { routes: entry.routes } : {}), ...(entry.params ? { params: entry.params } : {}) } } : {}),
     });
+  }
+
+  /**
+   * 3d (S103): the design app offer for a workspace with no web app; none for
+   * one that has a web app (a design app included: it's then the ordinary app).
+   */
+  private async readMockOffer(workspace: DesignWorkspace & { path: string }, detection: WebAppDetection): Promise<DesignMockOffer | undefined> {
+    const kind = designTarget(detection).kind;
+    if (!this.deps.mockInputs || (kind !== "react-nonweb" && kind !== "none")) {
+      this.mockOffers.delete(workspace.id);
+      return undefined;
+    }
+    const inputs = await this.deps.mockInputs(workspace.path).catch(() => undefined);
+    if (!inputs) {
+      this.mockOffers.delete(workspace.id);
+      return undefined;
+    }
+    const offer = mockOffer(detection, inputs.config, inputs.folders, inputs.patterns, workspace.permission === "none" || workspace.permission === "read-only" ? "read-only" : "write");
+    this.mockOffers.set(workspace.id, offer);
+    return offer;
   }
 
   private forgetRouteWalks(workspaceId: string): void {
@@ -702,6 +749,7 @@ export class DesignAppServers {
       frameworkLabel: frameworkLabel(app?.framework),
       ...(app?.packageManager.name ? { manager: app.packageManager.name } : {}),
       ...(app?.script ? { script: app.script } : {}),
+      ...(app?.mock ? { mock: true as const } : {}),
       phase: "stopped",
       since: 0,
       revision: 0,
@@ -837,6 +885,7 @@ export class DesignAppServers {
           frameworkLabel: frameworkLabel(app.framework),
           script: app.script!,
           ...(app.packageManager.name ? { manager: app.packageManager.name } : {}),
+          ...(app.mock ? { mock: true as const } : {}),
         };
         const toolchain = await race(this.deps.toolchain(app), signal);
         if (!toolchain.ok) {
@@ -1614,6 +1663,7 @@ export class DesignAppServers {
       ...(entry.meta.manager ? { manager: entry.meta.manager } : {}),
       ...(entry.meta.script ? { script: entry.meta.script } : {}),
       ...(entry.meta.startedBy ? { startedBy: entry.meta.startedBy } : {}),
+      ...(entry.meta.mock ? { mock: true as const } : {}),
       phase,
       since: this.now(),
       revision: entry.status.revision + 1,
@@ -1640,6 +1690,7 @@ export class DesignAppServers {
           frameworkLabel: frameworkLabel(app.framework),
           ...(app.script ? { script: app.script } : {}),
           ...(app.name ? { name: app.name } : {}),
+          ...(app.mock ? { mock: true as const } : {}),
         });
       }
       chosen = configuredRoots(cached.config, cached.detection);
@@ -1659,7 +1710,9 @@ export class DesignAppServers {
         });
       }
     }
-    return { workspaceId, target, apps, candidates, chosen };
+    const offer = this.available() && cached && (target === "react-nonweb" || target === "none") ? this.mockOffers.get(workspaceId) : undefined;
+    const problem = this.mockProblems.get(workspaceId);
+    return { workspaceId, target, apps, candidates, chosen, ...(offer ? { mock: { ...offer, ...(problem ? { problem } : {}) } } : {}) };
   }
 
   private emit(workspaceId: string): void {
@@ -1695,7 +1748,7 @@ export class DesignAppServers {
   }
 }
 
-/** 3b: what a route walk depends on in a detection — each web root and its framework. */
+/** 3b: what a route walk depends on in a detection — each web root, its framework and (3d) the design app marker. */
 function detectionShape(detection: WebAppDetection): string {
-  return JSON.stringify(detection.apps.filter((app) => app.kind === "web").map((app) => [app.root, app.framework ?? null]));
+  return JSON.stringify(detection.apps.filter((app) => app.kind === "web").map((app) => [app.root, app.framework ?? null, app.mock === true]));
 }

@@ -350,3 +350,25 @@ test("confinement: a folder above a new page linked out between the folder's che
     assert.equal(await exists(path.join(root, "app/routes/pricing-v2.tsx")), false);
   }
 });
+
+test("3d: a mock app's pages walk by TanStack's flat rule, and Trash finds the single owner of /settings", async (t) => {
+  const root = await workspace(t, {
+    "design-app/src/routes/index.tsx": "",
+    "design-app/src/routes/settings.tsx": "",
+    "design-app/src/routes/settings-v2.tsx": "",
+    "design-app/src/routes/billing.index.tsx": "",
+    "design-app/src/App.tsx": "",
+  });
+  // Vite alone is a config router: no file owns a page.
+  assert.equal((await routeFiles(routeFs(), root, "design-app", "vite"))?.configRouter, true);
+  const walk = await routeFiles(routeFs(), root, "design-app", { framework: "vite", mock: true });
+  assert.ok(walk);
+  assert.equal(walk.configRouter, false);
+  assert.deepEqual(plain(walk.files), {
+    "/": [{ appRelPath: "src/routes/index.tsx", convention: "tanstack" }],
+    "/billing": [{ appRelPath: "src/routes/billing.index.tsx", convention: "tanstack" }],
+    "/settings": [{ appRelPath: "src/routes/settings.tsx", convention: "tanstack" }],
+    "/settings-v2": [{ appRelPath: "src/routes/settings-v2.tsx", convention: "tanstack" }],
+  });
+  assert.deepEqual(ownerOf("/settings", walk), { owner: { appRelPath: "src/routes/settings.tsx", convention: "tanstack" } });
+});

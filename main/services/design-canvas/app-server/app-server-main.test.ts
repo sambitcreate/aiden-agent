@@ -21,6 +21,7 @@ import {
   type DesignWorkspace,
 } from "./app-server-main.js";
 import type { AppToolchain } from "./app-toolchain.js";
+import { routeAppOf } from "./app-routes-core.js";
 
 // ── Fakes ──
 
@@ -2375,9 +2376,10 @@ test("construction, snapshot, presence and the flag off never call an attach dep
 // ── 3b: the app's route list (S81) ──
 
 function countingDiscover(h: ReturnType<typeof harness>, patterns: string[] = ["/", "/pricing", "/blog/[slug]"]) {
-  const calls: Array<{ workspaceRoot: string; appRoot: string; framework?: string }> = [];
-  h.deps.discoverRoutes = async (workspaceRoot, appRoot, framework) => {
-    calls.push({ workspaceRoot, appRoot, ...(framework ? { framework } : {}) });
+  const calls: Array<{ workspaceRoot: string; appRoot: string; framework?: string; mock?: true }> = [];
+  h.deps.discoverRoutes = async (workspaceRoot, appRoot, app) => {
+    const { framework, mock } = routeAppOf(app);
+    calls.push({ workspaceRoot, appRoot, ...(framework ? { framework } : {}), ...(mock ? { mock } : {}) });
     return { patterns, truncated: false };
   };
   return calls;
@@ -2448,11 +2450,27 @@ test("3b: a detection change and forgetWorkspace each clear the walk cache", asy
   assert.equal(calls.length, 3);
 });
 
+test("3d: adding the marker changes the detection shape and re-walks routes", async (t) => {
+  const h = harness(t, { apps: [webApp({ root: "design-app", framework: "vite" })] });
+  const calls = countingDiscover(h);
+  await h.servers.routes("ws");
+  await h.servers.routes("ws");
+  assert.equal(calls.length, 1, "cached while nothing changed");
+  h.state.apps = [webApp({ root: "design-app", framework: "vite", mock: true })];
+  await h.servers.snapshot("ws");
+  await h.servers.routes("ws");
+  assert.deepEqual(calls[calls.length - 1], { workspaceRoot: "/w/ws", appRoot: "design-app", framework: "vite", mock: true });
+  assert.equal(calls.length, 2, "the marker re-walks within 5 s");
+  const snapshot = await h.servers.snapshot("ws");
+  assert.equal(snapshot.candidates[0]?.mock, true, "the candidate carries the marker");
+  assert.equal(snapshot.apps[0]?.mock, true, "and so does the app's status");
+});
+
 test("3b: an attached-only root lists the fallback /", async (t) => {
   const h = harness(t, { apps: [], config: { version: 1, apps: [{ root: ".", url: "http://localhost:3000" }] } });
   const calls: Array<string | undefined> = [];
-  h.deps.discoverRoutes = async (_workspaceRoot, _appRoot, framework) => {
-    calls.push(framework);
+  h.deps.discoverRoutes = async (_workspaceRoot, _appRoot, app) => {
+    calls.push(routeAppOf(app).framework);
     return null;
   };
   const list = await h.servers.routes("ws");
@@ -2463,4 +2481,65 @@ test("3b: an attached-only root lists the fallback /", async (t) => {
     ["/"],
   );
   assert.deepEqual(calls, [undefined]);
+});
+
+// ── 3d: the design app offer in the snapshot (S103, S112) ──
+
+const ALL_FREE = () => new Map(["design-app", ...Array.from({ length: 8 }, (_, i) => `design-app-${i + 2}`)].map((folder) => [folder, "missing" as const]));
+const nonWebApp = (overrides: Partial<DetectedApp>): DetectedApp => webApp({ kind: "react-nonweb", reason: "desktop", framework: undefined, script: undefined, ...overrides });
+
+function withMockInputs(h: ReturnType<typeof harness>, inputs: Partial<{ folders: Map<string, "missing" | "mock" | "taken">; patterns: { include: string[]; exclude: string[] } }> = {}) {
+  const reads: string[] = [];
+  h.deps.mockInputs = async (workspaceRoot) => {
+    reads.push(workspaceRoot);
+    return { folders: inputs.folders ?? ALL_FREE(), patterns: inputs.patterns ?? { include: [], exclude: [] }, config: null };
+  };
+  return reads;
+}
+
+test("3d: with the flag on, a react-nonweb workspace's snapshot offers react-nonweb mocks", async (t) => {
+  const h = harness(t, { apps: [nonWebApp({ desktopShell: "electron" })] });
+  const reads = withMockInputs(h);
+  const snapshot = await h.servers.snapshot("ws");
+  assert.equal(snapshot.target, "react-nonweb");
+  assert.deepEqual(snapshot.mock, { offer: "react-nonweb", folder: "design-app", source: ".", shell: "electron" });
+  assert.deepEqual(reads, ["/w/ws"]);
+  // A read-only workspace is refused before any card.
+  h.workspaces.set("ws", { id: "ws", path: "/w/ws", permission: "read-only" });
+  assert.deepEqual((await h.servers.snapshot("ws")).mock, { offer: "refused", why: "read-only" });
+});
+
+test("3d: an empty workspace's snapshot offers the starter", async (t) => {
+  const h = harness(t, { apps: [] });
+  withMockInputs(h);
+  const snapshot = await h.servers.snapshot("ws");
+  assert.equal(snapshot.target, "none");
+  assert.deepEqual(snapshot.mock, { offer: "starter", folder: "design-app" });
+});
+
+test("3d: a runner workspace's snapshot refuses with workspace-runner", async (t) => {
+  const h = harness(t, { apps: [webApp({ kind: "none", reason: "workspace-runner", framework: undefined })] });
+  withMockInputs(h);
+  assert.deepEqual((await h.servers.snapshot("ws")).mock, { offer: "refused", why: "workspace-runner" });
+});
+
+test("3d: a workspace with a web app, a design app included, has no mock field", async (t) => {
+  const h = harness(t, { apps: [webApp()] });
+  const reads = withMockInputs(h);
+  assert.equal("mock" in (await h.servers.snapshot("ws")), false);
+  h.state.apps = [nonWebApp({ desktopShell: "electron" }), webApp({ root: "design-app", mock: true })];
+  const snapshot = await h.servers.snapshot("ws");
+  assert.equal("mock" in snapshot, false, "once the design app exists the chip is the ordinary app chip");
+  assert.equal(snapshot.target, "single");
+  assert.deepEqual(reads, [], "no disk read for the offer while a web app exists");
+});
+
+test("3d: with the flag off there is no mock field", async (t) => {
+  const h = harness(t, { apps: [] });
+  const reads = withMockInputs(h);
+  h.deps.enabled = () => false;
+  const snapshot = await h.servers.snapshot("ws");
+  assert.equal(snapshot.target, "unavailable");
+  assert.equal("mock" in snapshot, false);
+  assert.deepEqual(reads, []);
 });

@@ -1056,8 +1056,11 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     const appRoot = frame.appRoot ?? ".";
     const snapshot = await live.apps.snapshot(workspaceId);
     if (snapshot.target === "unavailable") return { error: "unavailable" };
-    const framework = [...snapshot.candidates, ...snapshot.apps].find((app) => app.appRoot === appRoot)?.framework;
-    const walk = await routeFiles(routeFs(), folder.real, appRoot, framework);
+    const known = [...snapshot.candidates, ...snapshot.apps].filter((app) => app.appRoot === appRoot);
+    const framework = known.find((app) => app.framework)?.framework;
+    // 3d (S108): a design app's pages follow TanStack's flat-file rules.
+    const mock = known.some((app) => app.mock === true);
+    const walk = await routeFiles(routeFs(), folder.real, appRoot, { ...(framework ? { framework } : {}), ...(mock ? { mock: true as const } : {}) });
     if (!(await stillFraming(chat.id, workspaceId))) return { error: "unavailable" };
     if (!walk) return { error: "no-file" };
     if (walk.configRouter) return { error: "config-router" };

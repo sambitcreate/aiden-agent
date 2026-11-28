@@ -14,9 +14,12 @@ import { lstat, open, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { FrameworkId } from "../../../../renderer/shared/design-app.js";
 import { isAppRoot } from "../../../../renderer/shared/design-canvas/app-frame.js";
+import { isConcreteRoute } from "../../../../renderer/shared/design-canvas/app-routes.js";
 import { isPathInside } from "../../../shared/path-containment.js";
 import {
-  conventionsFor,
+  routeAppOf,
+  routeConventionsOf,
+  type RouteApp,
   parseReactRouterConfig,
   parseTanStackRouteTree,
   ROUTE_LIMITS,
@@ -278,12 +281,13 @@ export async function readParsedFile(fs: RouteFs, root: string, relative: string
 export async function discoverRoutes(
   workspaceRoot: string,
   appRoot: string,
-  framework: FrameworkId | undefined,
+  app: RouteApp | FrameworkId | undefined,
   options: { signal?: AbortSignal; fs?: Partial<RouteFs> } = {},
 ): Promise<{ patterns: string[]; truncated: boolean } | null> {
   const { signal } = options;
   if (signal?.aborted) throw abortError();
-  const conventions = conventionsFor(framework);
+  const { framework } = routeAppOf(app);
+  const conventions = routeConventionsOf(app);
   if (conventions.length === 0) return null;
   const fs = routeFs(options.fs);
   const root = await confinedRoot(fs, workspaceRoot, appRoot);
@@ -312,18 +316,19 @@ export async function discoverRoutes(
     }
     patterns.push(...(await walkConvention(fs, root, convention, budget, signal)));
   }
-  const unique = [...new Set(patterns)];
+  // 3d (S108): a design app has no router to fill a pattern, so only concrete routes are pages.
+  const unique = [...new Set(patterns)].filter((pattern) => !routeAppOf(app).mock || isConcreteRoute(pattern));
   if (unique.length > ROUTE_LIMITS.routes) budget.truncated = true;
   return { patterns: unique.slice(0, ROUTE_LIMITS.routes), truncated: budget.truncated };
 }
 
 /** The pattern a written workspace file maps to under `appRoot`, by its path alone (S83); no disk read. */
-export function routeForWrittenFile(appRoot: string, framework: FrameworkId | undefined, workspaceRelPath: string): string | null {
+export function routeForWrittenFile(appRoot: string, app: RouteApp | FrameworkId | undefined, workspaceRelPath: string): string | null {
   let relative: string;
   if (appRoot === ".") relative = workspaceRelPath;
   else if (workspaceRelPath.startsWith(`${appRoot}/`)) relative = workspaceRelPath.slice(appRoot.length + 1);
   else return null;
-  for (const convention of conventionsFor(framework)) {
+  for (const convention of routeConventionsOf(app)) {
     const route = routeFromFile(convention, relative);
     if (route !== null) return route;
   }

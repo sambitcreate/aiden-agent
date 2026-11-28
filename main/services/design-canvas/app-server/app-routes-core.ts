@@ -37,6 +37,21 @@ export function conventionsFor(framework: FrameworkId | undefined): readonly Rou
   return (framework && CONVENTIONS[framework]) || NONE;
 }
 
+/** 3d (S108): what route rules need to know about an app: its framework, and whether it's a design app. */
+export type RouteApp = { framework?: FrameworkId; mock?: true };
+const MOCK_CONVENTIONS: readonly RouteConvention[] = Object.freeze(["tanstack"] as const);
+
+/** A framework id (3b's callers) or a `RouteApp`, as a `RouteApp`. */
+export function routeAppOf(app: RouteApp | FrameworkId | undefined): RouteApp {
+  return typeof app === "object" ? app : app ? { framework: app } : {};
+}
+
+/** The conventions for an app: a design app's pages follow TanStack's flat-file rules (S108); others by framework. */
+export function routeConventionsOf(app: RouteApp | FrameworkId | undefined): readonly RouteConvention[] {
+  const resolved = routeAppOf(app);
+  return resolved.mock ? MOCK_CONVENTIONS : conventionsFor(resolved.framework);
+}
+
 // ---- One file to one pattern (S80's single-file rule) ----
 
 const NEXT_EXTENSIONS = new Set(["tsx", "jsx", "ts", "js", "mdx"]);
