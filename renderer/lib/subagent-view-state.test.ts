@@ -873,3 +873,125 @@ test("detail results are rejected after request, chat, or selection ownership ch
     "a current persisted-detail lookup that returns null is not a successful refresh",
   );
 });
+
+test("validated view snapshots are frozen, parsed once across live merges, and re-validated when cloned", () => {
+  const owner = { chatId: "chat-1", workspaceId: "workspace-1" };
+  let totalTaskPreviewReads = 0;
+  const makeInstrumentedV2 = (
+    runIndex: number,
+    revision: number,
+    terminal: boolean,
+  ): SubagentRunSnapshotV2 => {
+    const raw: SubagentRunSnapshotV2 = {
+      ...v2TerminalSnapshot("completed"),
+      runId: `run-live-${runIndex}`,
+      groupId: `generation-1:group-${runIndex}`,
+      childId: `child-live-${runIndex}`,
+      revision,
+      state: terminal ? "stopped" : "running",
+      activity: terminal ? undefined : `Inspecting module ${runIndex} step ${revision}`,
+      startedAt: 1_000 + runIndex,
+      updatedAt: 1_000 + revision * 100,
+      finishedAt: terminal ? 1_000 + revision * 100 : undefined,
+      turns: revision,
+      tools: revision * 2,
+      tokens: revision * 50,
+      milestones: ["reading"],
+      projectionNotices: ["task_truncated"],
+      warnings: terminal ? ["Stopped by user"] : [],
+    };
+    Object.defineProperty(raw, "taskPreview", {
+      enumerable: true,
+      get() {
+        totalTaskPreviewReads += 1;
+        return `Inspect subsystem ${runIndex}`;
+      },
+    });
+    return raw;
+  };
+
+  const firstRaw = makeInstrumentedV2(0, 1, false);
+  const firstMerged = mergeSubagentSnapshot(undefined, firstRaw, owner)!;
+  assert.equal(Object.isFrozen(firstMerged), true);
+  assert.equal(Object.isFrozen(firstMerged.warnings), true);
+  assert.equal(Object.isFrozen(firstMerged.milestones), true);
+  assert.equal(Object.isFrozen(firstMerged.projectionNotices), true);
+  assert.equal(Object.isFrozen(firstRaw), false);
+  assert.equal(Object.isFrozen(firstRaw.warnings), false);
+  assert.equal(totalTaskPreviewReads, 1);
+
+  // Simulate 40 live updates across 8 subagents plus history and detail merges.
+  totalTaskPreviewReads = 0;
+  let roster: ReturnType<typeof mergeSubagentSnapshots> = [];
+  for (let update = 0; update < 40; update += 1) {
+    const runIndex = update % 8;
+    const revision = Math.floor(update / 8) + 1;
+    const isFinalUpdate = revision === 5;
+    const incoming = makeInstrumentedV2(runIndex, revision, isFinalUpdate);
+    roster = mergeSubagentSnapshots(roster, [incoming], owner);
+  }
+  assert.equal(roster.length, 8);
+  assert.ok(roster.every((entry) => entry.revision === 5 && entry.state === "stopped"));
+  assert.equal(
+    totalTaskPreviewReads,
+    40,
+    "each raw snapshot update should be parsed once without re-parsing retained roster entries",
+  );
+
+  // Passing already-validated snapshots through history, persistence handoff, and detail helpers
+  // performs zero additional parses on the retained snapshots.
+  const target = roster[0]!;
+  const historyMerge = mergeSubagentHistorySnapshot([], [], roster, target, owner);
+  assert.equal(historyMerge.accepted, true);
+  assert.equal(historyMerge.loadedSnapshots[0], target);
+
+  const handoff = reconcileSubagentPersistenceHandoff([], [], roster, [], [], owner);
+  assert.equal(handoff.handoffSnapshots.length, 8);
+  assert.equal(target.version, 2);
+  const projected = adaptSubagentRunSnapshotV2ToV1(target)!;
+  const promoted = reconcileSubagentPersistenceHandoff(
+    handoff.loadedSnapshots,
+    handoff.handoffSnapshots,
+    [],
+    [],
+    [{ id: "msg-live-0", createdAt: 10, subagents: terminalReference(projected) }],
+    owner,
+  );
+  assert.equal(promoted.loadedSnapshots[0], target);
+
+  const view = buildSubagentRunViews(owner.chatId, [], [target], owner.workspaceId)[0]!;
+  const request = captureSubagentDetailRequest(owner.chatId, view, owner.workspaceId);
+  assert.equal(
+    resolveSubagentDetailResult(request, request, owner.chatId, target.runId, target, target),
+    target,
+  );
+
+  // A spread-cloned snapshot is not in the validated WeakSet and must still be fully validated.
+  const activeValidated = mergeSubagentSnapshot(undefined, makeInstrumentedV2(9, 1, false), owner)!;
+  const unsafeClone: SubagentRunSnapshotV2 = {
+    ...(activeValidated as SubagentRunSnapshotV2),
+    revision: 2,
+    updatedAt: activeValidated.updatedAt + 100,
+    activity: "/Users/alice/private.txt",
+  };
+  assert.equal(mergeSubagentSnapshot(activeValidated, unsafeClone, owner), activeValidated);
+  assert.deepEqual(mergeSubagentSnapshots([activeValidated], [unsafeClone], owner), [
+    activeValidated,
+  ]);
+  const activeRequest = captureSubagentDetailRequest(
+    owner.chatId,
+    { runId: activeValidated.runId, generationId: activeValidated.generationId, snapshot: activeValidated },
+    owner.workspaceId,
+  );
+  assert.equal(
+    resolveSubagentDetailResult(
+      activeRequest,
+      activeRequest,
+      owner.chatId,
+      activeValidated.runId,
+      unsafeClone,
+      activeValidated,
+    ),
+    undefined,
+  );
+});

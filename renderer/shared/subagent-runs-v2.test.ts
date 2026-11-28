@@ -14,6 +14,7 @@ import {
   parseSubagentRunSnapshot,
   parseSubagentRunSnapshotV1,
   parseSubagentRunSnapshotV2,
+  parsedSubagentRunSnapshotUpdateIsMonotonic,
   type SubagentRunSnapshotV1,
   type SubagentRunSnapshotV2,
   type SubagentRunStateV2,
@@ -438,4 +439,94 @@ test("subagentRunSnapshotUpdateIsMonotonic enforces state, identity, and exact-r
     subagentRunSnapshotUpdateIsMonotonic(queued, { ...running, label: "Renamed" }),
     false,
   );
+});
+
+test("parsedSubagentRunSnapshotUpdateIsMonotonic matches raw monotonicity rules without re-parsing", () => {
+  const queued = parseSubagentRunSnapshotV2({
+    ...v2("queued"),
+    projectionNotices: ["task_truncated"],
+  })!;
+  const running = parseSubagentRunSnapshotV2({
+    ...v2("running"),
+    revision: 2,
+    updatedAt: 2_500,
+    turns: 3,
+    tools: 4,
+    tokens: 150,
+    milestones: ["reading"],
+    projectionNotices: ["task_truncated"],
+  })!;
+  const completed = parseSubagentRunSnapshotV2({
+    ...v2("completed"),
+    revision: 3,
+    updatedAt: 2_900,
+    finishedAt: 2_900,
+    turns: 4,
+    tools: 5,
+    tokens: 220,
+    milestones: ["reading", "composing"],
+    projectionNotices: ["task_truncated", "report_truncated"],
+    warnings: ["Minor warning"],
+  })!;
+
+  const pairs: Array<
+    [SubagentRunSnapshotV2, SubagentRunSnapshotV2, { allowExactReplay?: boolean } | undefined, boolean]
+  > = [
+    [queued, running, undefined, true],
+    [running, completed, undefined, true],
+    [parseSubagentRunSnapshotV2(v2("queued"))!, running, undefined, false],
+    [completed, { ...running, revision: 4, updatedAt: 3_000 }, undefined, false],
+    [running, running, undefined, false],
+    [running, structuredClone(running), { allowExactReplay: true }, true],
+    [completed, structuredClone(completed), { allowExactReplay: true }, true],
+    [
+      completed,
+      { ...completed, warnings: ["Rewritten on same revision"] },
+      { allowExactReplay: true },
+      false,
+    ],
+    [
+      running,
+      { ...running, revision: 3, milestones: ["composing"] },
+      undefined,
+      false,
+    ],
+    [
+      running,
+      { ...running, revision: 3, authorityRevision: 2 },
+      undefined,
+      false,
+    ],
+  ];
+
+  for (const [current, next, options, expected] of pairs) {
+    assert.equal(parsedSubagentRunSnapshotUpdateIsMonotonic(current, next, options), expected);
+    assert.equal(subagentRunSnapshotUpdateIsMonotonic(current, next, options), expected);
+  }
+});
+
+test("adaptSubagentRunSnapshotV2ToV1 validates once and returns fresh array clones", () => {
+  const source = {
+    ...v2("stopped"),
+    milestones: ["reading"] as SubagentRunSnapshotV2["milestones"],
+    projectionNotices: ["display_filtered"] as SubagentRunSnapshotV2["projectionNotices"],
+    warnings: ["Stopped cleanly"],
+  };
+  let taskPreviewReads = 0;
+  Object.defineProperty(source, "taskPreview", {
+    enumerable: true,
+    get() {
+      taskPreviewReads += 1;
+      return "Review the authority boundary.";
+    },
+  });
+
+  const adapted = adaptSubagentRunSnapshotV2ToV1(source);
+  assert.ok(adapted);
+  assert.equal(taskPreviewReads, 1);
+  assert.equal(adapted.version, 1);
+  assert.equal(adapted.state, "interrupted");
+  assert.notEqual(adapted.warnings, source.warnings);
+  assert.notEqual(adapted.milestones, source.milestones);
+  assert.notEqual(adapted.projectionNotices, source.projectionNotices);
 });

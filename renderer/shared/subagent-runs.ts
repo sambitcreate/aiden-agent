@@ -218,6 +218,7 @@ function identifierEncodingSlicesAreSafe(value: string): boolean {
     if (index + 1 < value.length) starts.push(index + 1);
   }
 
+  const seen = new Set<string>([value]);
   let checked = 0;
   for (const start of starts) {
     for (const end of ends) {
@@ -225,13 +226,21 @@ function identifierEncodingSlicesAreSafe(value: string): boolean {
       checked += 1;
       if (checked > MAX_IDENTIFIER_ENCODING_SLICES) return false;
       const slice = value.slice(start, end);
-      if (sanitizeSubagentSnapshotText(slice) !== slice) return false;
+      if (!seen.has(slice)) {
+        if (sanitizeSubagentSnapshotText(slice) !== slice) return false;
+        seen.add(slice);
+      }
       const compact = slice.replace(IDENTIFIER_ENCODING_SEPARATORS, "");
-      if (compact.length >= 8 && sanitizeSubagentSnapshotText(compact) !== compact) return false;
+      if (compact.length >= 8 && !seen.has(compact)) {
+        if (sanitizeSubagentSnapshotText(compact) !== compact) return false;
+        seen.add(compact);
+      }
     }
   }
   const compact = value.replace(IDENTIFIER_ENCODING_SEPARATORS, "");
-  if (compact.length >= 8 && sanitizeSubagentSnapshotText(compact) !== compact) return false;
+  if (compact.length >= 8 && !seen.has(compact)) {
+    if (sanitizeSubagentSnapshotText(compact) !== compact) return false;
+  }
   return true;
 }
 
@@ -252,11 +261,14 @@ export function isSafeSubagentIdentifier(value: unknown): value is string {
 }
 
 function hasControl(value: string, allowNewlines: boolean): boolean {
-  return Array.from(value).some((character) => {
-    const code = character.codePointAt(0) ?? 0;
-    if (allowNewlines && (code === 10 || code === 13)) return false;
-    return code <= 31 || (code >= 127 && code <= 159) || code === 0x2028 || code === 0x2029;
-  });
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (allowNewlines && (code === 10 || code === 13)) continue;
+    if (code <= 31 || (code >= 127 && code <= 159) || code === 0x2028 || code === 0x2029) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function safeText(
@@ -673,8 +685,8 @@ function v2StateAsV1(state: SubagentRunStateV2): SubagentRunState {
 
 function v2BaseProjection(
   value: Record<string, unknown> | SubagentRunSnapshotV2,
+  state: SubagentRunStateV2,
 ): Record<string, unknown> {
-  const state = value.state as SubagentRunStateV2;
   return {
     version: SUBAGENT_RUN_SNAPSHOT_VERSION,
     runId: value.runId,
@@ -710,53 +722,72 @@ function v2BaseProjection(
   };
 }
 
-export function parseSubagentRunSnapshotV2(value: unknown): SubagentRunSnapshotV2 | undefined {
+function parseSubagentRunSnapshotV2Parts(
+  value: unknown,
+): { v1: SubagentRunSnapshotV1; v2: SubagentRunSnapshotV2 } | undefined {
+  if (!isRecord(value) || !hasExactV2SnapshotKeys(value)) return undefined;
+  const {
+    version,
+    state: rawState,
+    depth,
+    execution,
+    context,
+    authorityRevision,
+    parentRunId,
+    retryOfRunId,
+  } = value;
   if (
-    !isRecord(value) ||
-    !hasExactV2SnapshotKeys(value) ||
-    value.version !== SUBAGENT_RUN_SNAPSHOT_VERSION_V2 ||
-    typeof value.state !== "string" ||
-    !V2_STATES.has(value.state as SubagentRunStateV2) ||
-    !nonNegativeInteger(value.depth) ||
-    value.depth < 1 ||
-    value.depth > 2 ||
-    typeof value.execution !== "string" ||
-    !V2_EXECUTION_MODES.has(value.execution as SubagentExecutionModeV2) ||
-    typeof value.context !== "string" ||
-    !V2_CONTEXT_MODES.has(value.context as SubagentContextModeV2) ||
-    !nonNegativeInteger(value.authorityRevision) ||
-    (value.parentRunId !== undefined && !isSafeSubagentIdentifier(value.parentRunId)) ||
-    (value.retryOfRunId !== undefined && !isSafeSubagentIdentifier(value.retryOfRunId)) ||
-    (value.depth === 1 && value.parentRunId !== undefined) ||
-    (value.depth > 1 && value.parentRunId === undefined) ||
-    value.parentRunId === value.runId ||
+    version !== SUBAGENT_RUN_SNAPSHOT_VERSION_V2 ||
+    typeof rawState !== "string" ||
+    !V2_STATES.has(rawState as SubagentRunStateV2) ||
+    !nonNegativeInteger(depth) ||
+    depth < 1 ||
+    depth > 2 ||
+    typeof execution !== "string" ||
+    !V2_EXECUTION_MODES.has(execution as SubagentExecutionModeV2) ||
+    typeof context !== "string" ||
+    !V2_CONTEXT_MODES.has(context as SubagentContextModeV2) ||
+    !nonNegativeInteger(authorityRevision) ||
+    (parentRunId !== undefined && !isSafeSubagentIdentifier(parentRunId)) ||
+    (retryOfRunId !== undefined && !isSafeSubagentIdentifier(retryOfRunId)) ||
+    (depth === 1 && parentRunId !== undefined) ||
+    (depth > 1 && parentRunId === undefined)
+  ) {
+    return undefined;
+  }
+  const state = rawState as SubagentRunStateV2;
+  const projection = v2BaseProjection(value, state);
+  if (
+    parentRunId === projection.runId ||
+    retryOfRunId === projection.runId ||
     // A waiting child always says what it waits on: its pending question, or
     // the generic fallback. The V1 parser below bounds and redaction-checks it.
-    (value.state === "needs_attention" && value.activity === undefined) ||
-    value.retryOfRunId === value.runId
+    (state === "needs_attention" &&
+      (projection.activity === undefined || projection.finishedAt !== undefined)) ||
+    ((state === "stopped" || state === "unknown") && projection.finishedAt === undefined)
   ) {
     return undefined;
   }
-  const state = value.state as SubagentRunStateV2;
-  const v1 = parseSubagentRunSnapshotV1(v2BaseProjection(value));
+  const v1 = parseSubagentRunSnapshotV1(projection);
   if (!v1) return undefined;
-  if (
-    (state === "needs_attention" && value.finishedAt !== undefined) ||
-    ((state === "stopped" || state === "unknown") && value.finishedAt === undefined)
-  ) {
-    return undefined;
-  }
   return {
-    ...v1,
-    version: SUBAGENT_RUN_SNAPSHOT_VERSION_V2,
-    state,
-    ...(value.parentRunId === undefined ? {} : { parentRunId: value.parentRunId as string }),
-    ...(value.retryOfRunId === undefined ? {} : { retryOfRunId: value.retryOfRunId as string }),
-    depth: value.depth,
-    execution: value.execution as SubagentExecutionModeV2,
-    context: value.context as SubagentContextModeV2,
-    authorityRevision: value.authorityRevision,
+    v1,
+    v2: {
+      ...v1,
+      version: SUBAGENT_RUN_SNAPSHOT_VERSION_V2,
+      state,
+      ...(parentRunId === undefined ? {} : { parentRunId }),
+      ...(retryOfRunId === undefined ? {} : { retryOfRunId }),
+      depth,
+      execution: execution as SubagentExecutionModeV2,
+      context: context as SubagentContextModeV2,
+      authorityRevision,
+    },
   };
+}
+
+export function parseSubagentRunSnapshotV2(value: unknown): SubagentRunSnapshotV2 | undefined {
+  return parseSubagentRunSnapshotV2Parts(value)?.v2;
 }
 
 export function parseSubagentRunSnapshot(value: unknown): SubagentRunSnapshot | undefined {
@@ -865,6 +896,54 @@ export function subagentRunSnapshotProgresses(
   );
 }
 
+function sameParsedSnapshotArrays<T>(
+  left: readonly T[] | undefined,
+  right: readonly T[] | undefined,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right || left.length !== right.length) return false;
+  return left.every((item, index) => item === right[index]);
+}
+
+function sameParsedSubagentRunSnapshot(
+  current: SubagentRunSnapshot,
+  next: SubagentRunSnapshot,
+): boolean {
+  return (
+    sameSubagentRunSnapshotIdentity(current, next) &&
+    current.revision === next.revision &&
+    current.state === next.state &&
+    current.activity === next.activity &&
+    current.updatedAt === next.updatedAt &&
+    current.finishedAt === next.finishedAt &&
+    current.turns === next.turns &&
+    current.tools === next.tools &&
+    current.tokens === next.tokens &&
+    current.latestText === next.latestText &&
+    current.terminalMarkdown === next.terminalMarkdown &&
+    current.error === next.error &&
+    sameParsedSnapshotArrays(current.milestones, next.milestones) &&
+    sameParsedSnapshotArrays(current.projectionNotices, next.projectionNotices) &&
+    sameParsedSnapshotArrays(current.warnings, next.warnings)
+  );
+}
+
+/**
+ * Monotonicity check for snapshots that have already crossed `parseSubagentRunSnapshot`.
+ * Avoids re-validating identifiers and text fields on every merge comparison.
+ */
+export function parsedSubagentRunSnapshotUpdateIsMonotonic(
+  current: SubagentRunSnapshot,
+  next: SubagentRunSnapshot,
+  options: { allowExactReplay?: boolean } = {},
+): boolean {
+  if (!sameSubagentRunSnapshotIdentity(current, next)) return false;
+  if (next.revision === current.revision) {
+    return options.allowExactReplay === true && sameParsedSubagentRunSnapshot(current, next);
+  }
+  return next.revision > current.revision && subagentRunSnapshotProgresses(current, next);
+}
+
 /**
  * The shared renderer-facing lifecycle fence. A newer revision may enrich an
  * active run, but it cannot rewrite authority/display identity, revive a
@@ -878,11 +957,8 @@ export function subagentRunSnapshotUpdateIsMonotonic(
 ): boolean {
   const current = parseSubagentRunSnapshot(currentValue);
   const next = parseSubagentRunSnapshot(nextValue);
-  if (!current || !next || !sameSubagentRunSnapshotIdentity(current, next)) return false;
-  if (next.revision === current.revision) {
-    return options.allowExactReplay === true && JSON.stringify(next) === JSON.stringify(current);
-  }
-  return next.revision > current.revision && subagentRunSnapshotProgresses(current, next);
+  if (!current || !next) return false;
+  return parsedSubagentRunSnapshotUpdateIsMonotonic(current, next, options);
 }
 
 export const MAX_SUBAGENT_EFFECT_ACTIVITY = 512;
@@ -1009,6 +1085,5 @@ export function adaptSubagentRunSnapshotV1ToV2(
 export function adaptSubagentRunSnapshotV2ToV1(
   snapshot: SubagentRunSnapshotV2,
 ): SubagentRunSnapshotV1 | undefined {
-  const parsed = parseSubagentRunSnapshotV2(snapshot);
-  return parsed ? parseSubagentRunSnapshotV1(v2BaseProjection(parsed)) : undefined;
+  return parseSubagentRunSnapshotV2Parts(snapshot)?.v1;
 }

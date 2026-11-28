@@ -8,6 +8,7 @@ import {
   subagentMessageReference,
   type SubagentRunSnapshotV1,
 } from "../../../renderer/shared/subagent-runs.js";
+import { sanitizeSubagentSnapshotText } from "../../../renderer/shared/subagent-safe-text.js";
 
 function base32(value: string): string {
   let bits = 0;
@@ -281,4 +282,44 @@ test("chat:start rejects renderer-controlled private generation identifiers befo
   for (const unsafe of secretIdentifiers) {
     assert.equal(isSafeSubagentIdentifier(unsafe), false);
   }
+});
+
+test("Markdown-sensitive tokens still run full AST checks while benign single-underscore text stays intact", () => {
+  assert.equal(isSafeSubagentIdentifier("s-mixed_case.1:child-2"), true);
+  assert.equal(sanitizeSubagentSnapshotText("single_underscore status"), "single_underscore status");
+
+  for (const emphasisSecret of ["sk-_abcdefghijklmno_", "_sk_-abcdefghijklmno"]) {
+    assert.equal(isSafeSubagentIdentifier(emphasisSecret), false, emphasisSecret);
+    const sanitized = sanitizeSubagentSnapshotText(emphasisSecret);
+    assert.notEqual(sanitized, emphasisSecret);
+    assert.doesNotMatch(sanitized, /abcdefghijklmno/u);
+  }
+
+  assert.equal(sanitizeSubagentSnapshotText("_sk_-abcdefghijklmno"), "[REDACTED MARKDOWN CONTENT]");
+
+  for (const unsafeMarkdown of [
+    "![diagram](https://example.com/diagram.png)",
+    "Inline math $x + 1$ in summary",
+    "- ![diagram](https://example.com/diagram.png)",
+    "1. Inline math $x$ in list",
+    "   Check www.example.com/Users/alice/private.txt for details   ",
+    "Check www.example.com/Users/alice/private.txt for details",
+    "sk-[REDACTED]abcdefghijklmno",
+    "sREDACTEDk-abcdefghijklmno",
+  ]) {
+    assert.equal(
+      sanitizeSubagentSnapshotText(unsafeMarkdown),
+      "[REDACTED MARKDOWN CONTENT]",
+      unsafeMarkdown,
+    );
+  }
+  assert.equal(isSafeSubagentIdentifier("sREDACTEDk-abcdefghijklmno"), false);
+  assert.equal(isSafeSubagentIdentifier("sk-REDACTEDabcdefghijklmno"), false);
+});
+
+test("repeated separator segments still enforce the slice cap while keeping small repeats valid", () => {
+  assert.equal(isSafeSubagentIdentifier("seg-alpha.seg-alpha.seg-alpha"), true);
+  const repeatedWithinLengthLimit = Array.from({ length: 35 }, () => "aa").join(".");
+  assert.ok(repeatedWithinLengthLimit.length <= 160);
+  assert.equal(isSafeSubagentIdentifier(repeatedWithinLengthLimit), false);
 });

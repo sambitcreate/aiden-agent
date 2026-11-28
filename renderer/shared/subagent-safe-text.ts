@@ -82,6 +82,8 @@ const BASE32_TOKEN = /(?<![A-Z2-7=])[A-Z2-7]{16,}={0,6}(?![A-Z2-7=])/giu;
 const BASE32HEX_TOKEN = /(?<![A-V0-9=])[A-V0-9]{16,}={0,6}(?![A-V0-9=])/giu;
 const WHITESPACE_SEPARATED_PERCENT =
   /(?<!%[0-9a-f])(?:%[0-9a-f]{2}[ \t\r\n]+){2,}%[0-9a-f]{2}(?![0-9a-f])/giu;
+const HAS_WHITESPACE_SEPARATED_PERCENT = new RegExp(WHITESPACE_SEPARATED_PERCENT.source, "iu");
+const WRAPPED_ENCODING_WHITESPACE = /[ \t\r\n]/u;
 const HEX_TOKEN = /(?<![A-Za-z0-9])(?:0x)?[0-9a-f]{16,}(?![A-Za-z0-9])/giu;
 const JAVASCRIPT_NUMERIC_ESCAPE =
   /\\(?:u(?:[0-9a-f]{4}|\{[0-9a-f]{1,6}\})|x[0-9a-f]{2}|(?:[0-3][0-7]{2}|[0-7]{2}|0(?![0-9])))/iu;
@@ -97,6 +99,7 @@ const ASSIGNMENT_KEY_STOP = /[\s:=,;{}[\]]/u;
 const ASSIGNMENT_KEY_LEFT_BOUNDARY = /[\p{L}\p{M}\p{N}_-]/u;
 const COMBINING_MARK = /\p{M}/u;
 const INTERNAL_SECURITY_MARKUP = /(?<=[A-Za-z0-9_])(?:\*{1,2}|__|~~|`{1,3})(?=[A-Za-z0-9_=:])/gu;
+const INTERNAL_SECURITY_MARKUP_TRIGGER = /[*`]|__|~~/u;
 const ENCODED_TEXT_REDACTION = "[REDACTED ENCODED TEXT]";
 const UNSETTLED_TEXT_REDACTION = "[REDACTED TEXT]";
 /** A percent escape or HTML character reference left in text after filtering. */
@@ -110,6 +113,20 @@ const RENDERED_REDACTED_ASSIGNMENT = new RegExp(
 );
 const MARKDOWN_ESCAPABLE_PUNCTUATION = new Set(Array.from("!\"#$%&'()*+,-./:;<=>?@[]^_`{|}~"));
 const SNAPSHOT_MARKDOWN_PARSER = unified().use(remarkParse).use(remarkGfm).use(remarkMath);
+const MARKDOWN_LINE_BREAK_TRIGGER = /[\r\n\u2028\u2029]/u;
+const MARKDOWN_EDGE_WHITESPACE_TRIGGER = /^\s|\s$/u;
+const MARKDOWN_SYNTAX_TRIGGER = /[#>*`~[\]<>\\&$|]/u;
+const MARKDOWN_BLOCK_PREFIX_TRIGGER = /^(?:[-+]|\d{1,9}[.)](?:\s|$))/u;
+const GFM_WWW_AUTOLINK_TRIGGER = /www\./iu;
+const REDACTED_MARKER_TRIGGER = /redacted/iu;
+const FATAL_UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
+const BASE32_EXPECTED_PADDING: ReadonlyMap<number, number> = new Map([
+  [0, 0],
+  [2, 6],
+  [4, 4],
+  [5, 3],
+  [7, 1],
+]);
 const DISALLOWED_SNAPSHOT_MARKDOWN_NODES = new Set([
   "image",
   "imageReference",
@@ -259,33 +276,62 @@ function normalizeMarkdownEscapes(value: string): string {
   return normalized.join("");
 }
 
+function hasNonAscii(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    if (value.charCodeAt(index) > 0x7f) return true;
+  }
+  return false;
+}
+
+function hasNonLineControl(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (
+      (code >= 0 && code <= 9) ||
+      code === 11 ||
+      code === 12 ||
+      (code >= 14 && code <= 31) ||
+      (code >= 127 && code <= 159)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function normalizeSensitiveSyntax(value: string): {
   hadEncodedControl: boolean;
   value: string;
 } {
   let decoded = value;
   let hadEncodedControl = false;
-  for (let pass = 0; pass < 64; pass += 1) {
-    for (const [entity] of decoded.matchAll(/&(?:#[0-9]+|#x[0-9a-f]+|[a-z][a-z0-9]+);/giu)) {
-      if (Array.from(decodeHTMLStrict(entity)).some(isControl)) hadEncodedControl = true;
+  if (decoded.includes("&") && decoded.includes(";")) {
+    for (let pass = 0; pass < 64; pass += 1) {
+      if (!decoded.includes("&") || !decoded.includes(";")) break;
+      for (const [entity] of decoded.matchAll(/&(?:#[0-9]+|#x[0-9a-f]+|[a-z][a-z0-9]+);/giu)) {
+        if (Array.from(decodeHTMLStrict(entity)).some(isControl)) hadEncodedControl = true;
+      }
+      const next = decodeHTMLStrict(decoded);
+      if (next === decoded) break;
+      decoded = next;
     }
-    const next = decodeHTMLStrict(decoded);
-    if (next === decoded) break;
-    decoded = next;
   }
-  const hadWhitespaceSeparatedPercent = new RegExp(WHITESPACE_SEPARATED_PERCENT.source, "iu").test(
-    decoded,
-  );
+  const hadWhitespaceSeparatedPercent =
+    decoded.includes("%") && HAS_WHITESPACE_SEPARATED_PERCENT.test(decoded);
 
-  let normalized = decoded
-    .replace(DEFAULT_IGNORABLE_CHARACTER, "")
-    .normalize("NFKC")
-    .replace(SENSITIVE_PERCENT_ESCAPE, (escape, hex: string) => {
-      const decoded = String.fromCharCode(Number.parseInt(hex, 16));
-      return /[A-Za-z0-9_:=-]/u.test(decoded) ? decoded : escape;
+  let normalized = hasNonAscii(decoded)
+    ? decoded.replace(DEFAULT_IGNORABLE_CHARACTER, "").normalize("NFKC")
+    : decoded;
+  if (normalized.includes("%")) {
+    normalized = normalized.replace(SENSITIVE_PERCENT_ESCAPE, (escape, hex: string) => {
+      const decodedChar = String.fromCharCode(Number.parseInt(hex, 16));
+      return /[A-Za-z0-9_:=-]/u.test(decodedChar) ? decodedChar : escape;
     });
-  normalized = normalizeMarkdownEscapes(normalized);
-  while (true) {
+  }
+  if (normalized.includes("\\")) {
+    normalized = normalizeMarkdownEscapes(normalized);
+  }
+  while (INTERNAL_SECURITY_MARKUP_TRIGGER.test(normalized)) {
     const withoutInternalMarkup = normalized.replace(INTERNAL_SECURITY_MARKUP, "");
     if (withoutInternalMarkup === normalized) break;
     normalized = withoutInternalMarkup;
@@ -302,12 +348,12 @@ function controlVariants(value: string): {
   spaced: string;
 } {
   const normalized = normalizeSensitiveSyntax(value);
-  const normalizedLines = normalized.value
-    .replace(/\r\n?/gu, "\n")
-    .replace(/[\u2028\u2029]/gu, "\n");
-  const hasNonLineControls = Array.from(normalizedLines).some(isNonLineControl);
+  const normalizedLines = /[\r\u2028\u2029]/u.test(normalized.value)
+    ? normalized.value.replace(/\r\n?/gu, "\n").replace(/[\u2028\u2029]/gu, "\n")
+    : normalized.value;
+  const hasNonLineControls = hasNonLineControl(normalizedLines);
   const hadControls = hasNonLineControls || normalized.hadEncodedControl;
-  const spaced = replaceNonLineControls(normalizedLines, " ");
+  const spaced = hasNonLineControls ? replaceNonLineControls(normalizedLines, " ") : normalizedLines;
   let compact = hasNonLineControls ? replaceNonLineControls(normalizedLines, "") : normalizedLines;
   if (normalized.hadEncodedControl) {
     compact = compact.replace(LINE_BREAK_CHARACTER, "");
@@ -433,8 +479,10 @@ function decodeValidPercentRuns(value: string): string {
 }
 
 function decodePercentLayers(value: string): { exhausted: boolean; value: string } {
+  if (!value.includes("%")) return { exhausted: false, value };
   let decoded = value;
   for (let pass = 0; pass < MAX_PERCENT_DECODE_PASSES; pass += 1) {
+    if (!decoded.includes("%")) return { exhausted: false, value: decoded };
     const next = decodeValidPercentRuns(decoded);
     if (next === decoded) return { exhausted: false, value: decoded };
     decoded = next;
@@ -507,7 +555,7 @@ function decodeBase64Token(token: string): string | undefined {
   try {
     const binary = atob(padded);
     const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return FATAL_UTF8_DECODER.decode(bytes);
   } catch {
     return undefined;
   }
@@ -521,7 +569,7 @@ function decodeHexToken(token: string): string | undefined {
     bytes[index / 2] = Number.parseInt(hex.slice(index, index + 2), 16);
   }
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return FATAL_UTF8_DECODER.decode(bytes);
   } catch {
     return undefined;
   }
@@ -534,13 +582,7 @@ function decodeBase32Token(token: string, alphabet: string): string | undefined 
   const padding = firstPadding < 0 ? "" : normalized.slice(firstPadding);
   if (!/^=*$/u.test(padding)) return undefined;
   const remainder = encoded.length % 8;
-  const expectedPadding = new Map([
-    [0, 0],
-    [2, 6],
-    [4, 4],
-    [5, 3],
-    [7, 1],
-  ]).get(remainder);
+  const expectedPadding = BASE32_EXPECTED_PADDING.get(remainder);
   if (expectedPadding === undefined || (padding.length > 0 && padding.length !== expectedPadding)) {
     return undefined;
   }
@@ -563,7 +605,7 @@ function decodeBase32Token(token: string, alphabet: string): string | undefined 
   }
   if (bitCount > 0 && bits !== 0) return undefined;
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(bytes));
+    return FATAL_UTF8_DECODER.decode(Uint8Array.from(bytes));
   } catch {
     return undefined;
   }
@@ -1523,7 +1565,35 @@ function markdownContainsUnsafeMetadata(value: unknown): boolean {
     : false;
 }
 
+function hasPairedUnderscores(value: string): boolean {
+  const first = value.indexOf("_");
+  return first !== -1 && value.indexOf("_", first + 1) !== -1;
+}
+
+/**
+ * Single-line plain strings without Markdown punctuation, paired underscores,
+ * list/break prefixes, edge whitespace, GFM autolink triggers, or REDACTED
+ * placeholders parse to a single literal text node with no metadata or stripped
+ * placeholders, so their rendered text equals the input already checked by
+ * `nonMarkdownPolicyIsUnsafe`.
+ */
+function mayRequireRendererMarkdownCheck(value: string): boolean {
+  if (value.length === 0) return false;
+  return (
+    MARKDOWN_LINE_BREAK_TRIGGER.test(value) ||
+    MARKDOWN_EDGE_WHITESPACE_TRIGGER.test(value) ||
+    MARKDOWN_SYNTAX_TRIGGER.test(value) ||
+    hasPairedUnderscores(value) ||
+    MARKDOWN_BLOCK_PREFIX_TRIGGER.test(value) ||
+    value.includes("@") ||
+    value.includes("://") ||
+    GFM_WWW_AUTOLINK_TRIGGER.test(value) ||
+    REDACTED_MARKER_TRIGGER.test(value)
+  );
+}
+
 function rendererMarkdownIsUnsafe(value: string): boolean {
+  if (!mayRequireRendererMarkdownCheck(value)) return false;
   try {
     const tree = SNAPSHOT_MARKDOWN_PARSER.parse(value);
     // V1 inspector output never needs active remote resources. Math is also
@@ -1566,6 +1636,9 @@ function wrappedEncodingCompacts(candidate: string): {
   exhausted: boolean;
   values: string[];
 } {
+  if (candidate.length < 17 || !WRAPPED_ENCODING_WHITESPACE.test(candidate)) {
+    return { exhausted: false, values: [] };
+  }
   const compacts: string[] = [];
   let candidateCharacters = 0;
   let exhausted = false;
@@ -1610,18 +1683,24 @@ function decodedEncodingPayloads(candidate: string): {
   exhausted: boolean;
   payloads: string[];
 } {
-  const escapeLayer = decodeJavaScriptEscapeLayer(candidate);
-  const payloads = [
-    escapeLayer?.value,
-    ...Array.from(candidate.matchAll(BASE64_TOKEN), ([token]) => decodeBase64Token(token)),
-    ...Array.from(candidate.matchAll(HEX_TOKEN), ([token]) => decodeHexToken(token)),
-    ...Array.from(candidate.matchAll(BASE32_TOKEN), ([token]) =>
-      decodeBase32Token(token, "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"),
-    ),
-    ...Array.from(candidate.matchAll(BASE32HEX_TOKEN), ([token]) =>
-      decodeBase32Token(token, "0123456789ABCDEFGHIJKLMNOPQRSTUV"),
-    ),
-  ];
+  const escapeLayer = candidate.includes("\\") ? decodeJavaScriptEscapeLayer(candidate) : undefined;
+  const payloads: Array<string | undefined> = [escapeLayer?.value];
+  if (candidate.length >= 8) {
+    for (const [token] of candidate.matchAll(BASE64_TOKEN)) {
+      payloads.push(decodeBase64Token(token));
+    }
+  }
+  if (candidate.length >= 16) {
+    for (const [token] of candidate.matchAll(HEX_TOKEN)) {
+      payloads.push(decodeHexToken(token));
+    }
+    for (const [token] of candidate.matchAll(BASE32_TOKEN)) {
+      payloads.push(decodeBase32Token(token, "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"));
+    }
+    for (const [token] of candidate.matchAll(BASE32HEX_TOKEN)) {
+      payloads.push(decodeBase32Token(token, "0123456789ABCDEFGHIJKLMNOPQRSTUV"));
+    }
+  }
   const wrapped = wrappedEncodingCompacts(candidate);
   for (const compact of wrapped.values) {
     payloads.push(
@@ -1639,10 +1718,12 @@ function decodedEncodingPayloads(candidate: string): {
     );
   }
   let exhausted = wrapped.exhausted;
-  for (const [token] of candidate.matchAll(WHITESPACE_SEPARATED_PERCENT)) {
-    const decoded = decodePercentLayers(token.replace(/[ \t\r\n]+/gu, ""));
-    exhausted ||= decoded.exhausted;
-    if (decoded.value !== token) payloads.push(decoded.value);
+  if (candidate.includes("%") && WRAPPED_ENCODING_WHITESPACE.test(candidate)) {
+    for (const [token] of candidate.matchAll(WHITESPACE_SEPARATED_PERCENT)) {
+      const decoded = decodePercentLayers(token.replace(/[ \t\r\n]+/gu, ""));
+      exhausted ||= decoded.exhausted;
+      if (decoded.value !== token) payloads.push(decoded.value);
+    }
   }
   return {
     exhausted,
