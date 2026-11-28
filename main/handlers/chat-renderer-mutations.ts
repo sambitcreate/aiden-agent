@@ -78,7 +78,8 @@ export interface RendererChatMutationDeps {
   chatStore: Pick<
     ReturnType<typeof createChatStore>,
     "get" | "appendMessage" | "setComputerUsePendingContinue"
-  >;
+  > &
+    Partial<Pick<ReturnType<typeof createChatStore>, "getWithImageReferences">>;
   chatApplicationService: Pick<
     ReturnType<typeof createChatApplicationService>,
     "rename" | "setModelSelection" | "setDesignMode" | "remove"
@@ -128,6 +129,10 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
     designModeEnabled,
     broadcastDesignModeChanged,
   } = deps;
+  const getChatWithReferences = (chatId: string) =>
+    chatStore.getWithImageReferences
+      ? chatStore.getWithImageReferences(chatId)
+      : chatStore.get(chatId);
   return {
     rename: async (_event: IpcMainInvokeEvent, id: unknown, title: unknown) => {
       await chatApplicationService.rename(asString(id, "id"), asString(title, "title"), {
@@ -184,7 +189,7 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
     remove: async (event: IpcMainInvokeEvent, id: unknown) => {
       const chatId = asString(id, "id");
       deps.assertChatAccess?.(event, chatId);
-      const chat = await chatStore.get(chatId);
+      const chat = await getChatWithReferences(chatId);
       const result = chat?.botId && hostPlatformCapabilities().bots
         ? await botApplicationService.deleteChat({ botId: chat.botId, chatId })
         : await chatApplicationService.remove(chatId, { rejectFeatureOwned: true });
@@ -252,7 +257,7 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
             );
           }
           const authoritativeChat = skillReference
-            ? await chatStore.get(chatId)
+            ? await getChatWithReferences(chatId)
             : undefined;
           if (skillReference && !authoritativeChat) {
             throw new Error("This chat is no longer available.");
@@ -320,7 +325,7 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
                     rejectFeatureOwned: true,
                   },
                 ),
-              recover: () => chatStore.get(chatId),
+              recover: () => getChatWithReferences(chatId),
             });
           const chat = skillReference
             ? await commitSkillInvocationForAppend(

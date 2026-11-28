@@ -84,7 +84,13 @@ export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<
     snapshot, persist: (write) => journal.save(write), idempotency, persistIdempotency,
     onPersistenceError: () => process.stderr.write("aiden: Remote stream persistence failed.\n"),
   });
-  const chats = new AidenRemoteChatService({ application, chatStore: daemon.chatStore, generation: daemon.llmClient,
+  const chats = new AidenRemoteChatService({ application,
+    chatStore: {
+      get: (id) => daemon.chatStore.getWithImageReferences(id),
+      readImage: (sha256, size) => daemon.chatStore.readImage(sha256, size),
+      appendMessage: (id, message, meta) => daemon.chatStore.appendMessage(id, message, meta),
+    },
+    generation: daemon.llmClient,
     streams, models: modelService, bots: bots.botStore, botMutations: bots.mutationGate,
     isFolderWorkspace: async (workspaceId) => analyticsWorkspaceKind(await workspace.configStore.getWorkspace(workspaceId)) !== "none",
     // Refused before the message is kept, so the same key runs once the folder is back (desktop parity).
@@ -112,7 +118,7 @@ export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<
     idempotency, persistIdempotency, activeChatIds: () => daemon.activity.snapshot().activeChatIds,
     // Row state, unread, triage and live-run times: the summaries' `inbox-signals-v1` fields, as on the desktop.
     activitySnapshot: () => daemon.activity.snapshot(),
-    readMarkers: { snapshot: () => readMarkers.snapshot(), markRead: async (chatId, throughMessageId) => markChatReadThrough(readMarkers, await daemon.chatStore.get(chatId), throughMessageId) },
+    readMarkers: { snapshot: () => readMarkers.snapshot(), markRead: async (chatId, throughMessageId) => markChatReadThrough(readMarkers, await daemon.chatStore.getWithImageReferences(chatId), throughMessageId) },
     triage,
     runTimes: (chatId) => liveRunAttention(chatId, daemon.runs),
     // Plain forks only: the daemon has no summarizer, so it never advertises chat-fork-summary-v1.

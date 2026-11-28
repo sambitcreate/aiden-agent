@@ -29,7 +29,8 @@ import {
 type Owner = Pick<RendererDocumentOwner, "documentId" | "isDestroyed" | "onInvalidated">;
 
 interface Dependencies {
-  store: Pick<ReturnType<typeof createChatStore>, "get" | "createWithFirstMessage">;
+  store: Pick<ReturnType<typeof createChatStore>, "get" | "createWithFirstMessage"> &
+    Partial<Pick<ReturnType<typeof createChatStore>, "getWithImageReferences">>;
   beginTurn(chatId: string, turnId: string, ownerId: string): ChatTurnLease | null;
   requiresReconciliation(ownerId: string): boolean;
   markReconciliation(ownerId: string): void;
@@ -111,7 +112,9 @@ export function createFirstMessageCommitter(deps: Dependencies) {
             throw new Error(appendReconciliationFailureMessage("blocked"));
           }
         };
-        const existing = await deps.store.get(input.chatId);
+        const existing = await (deps.store.getWithImageReferences
+          ? deps.store.getWithImageReferences(input.chatId)
+          : deps.store.get(input.chatId));
         assertCurrent();
         if (existing) {
           if (existing.firstMessageCommit?.turnId !== input.turnId ||

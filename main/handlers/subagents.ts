@@ -29,7 +29,7 @@ export function registerSubagentHandlers(): void {
     const { chatId, runId } = parseSubagentHistoryRequestIds(chatIdValue, runIdValue);
     try {
       return await readSubagentHistoryDetailForOwner(owner, chatId, runId, {
-        getChat: (id) => chatStore.get(id),
+        getChat: (id) => chatStore.getWithImageReferences(id),
         getSnapshot: (id) => subagentRunStore.get(id),
         getEffectActivity: (id, owningChatId) =>
           subagentRunStore.listEffectActivityForRun(id, owningChatId),
@@ -62,7 +62,7 @@ export function registerSubagentHandlers(): void {
     );
     try {
       return await manageSubagentForDocumentV2(owner, chatIdValue, requestValue, {
-        getChat: (id) => chatStore.get(id),
+        getChat: (id) => chatStore.getWithImageReferences(id),
         execute: (scope, request) => subagentControlMainV2.executeForDocument(scope, request),
       });
     } catch (error) {

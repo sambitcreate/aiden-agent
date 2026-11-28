@@ -9,7 +9,8 @@ import {
   createChatApplicationService,
   type ChatApplicationDependencies,
 } from "../services/chat-application-service.js";
-import { ChatReadMarkerStore } from "../services/chat-read-markers.js";
+import { createChatImageStore, imageSha256 } from "../services/chat-image-store.js";
+import { ChatReadMarkerStore, markChatReadThrough } from "../services/chat-read-markers.js";
 import { createChatStore } from "../services/chat-store-core.js";
 import { ChatTriageStore } from "../services/chat-triage.js";
 import { assertRenameAllowedFromChat } from "../services/chat-title-policy.js";
@@ -61,7 +62,17 @@ async function fixture(
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-renderer-chat-mutations-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const chatStore = createChatStore(async () => root);
+  const rawImages = createChatImageStore(async () => root);
+  let imageReads = 0;
+  const chatStore = createChatStore(async () => root, undefined, {
+    images: {
+      ...rawImages,
+      read: async (sha256, size) => {
+        imageReads += 1;
+        return rawImages.read(sha256, size);
+      },
+    },
+  });
   // The real Inbox stores, as main wires them. Their writes after a send or a
   // delete are fire-and-forget, so each is tracked for a test to await.
   const inboxWrites: Promise<unknown>[] = [];
@@ -128,7 +139,7 @@ async function fixture(
     chatTitleService: {
       // The title service applies the same rename policy before any model call.
       renameWithFoundationModels: async (chatId, options) => {
-        const chat = await chatStore.get(chatId);
+        const chat = await chatStore.getWithImageReferences(chatId);
         if (!chat) throw new Error("This chat is no longer available.");
         assertRenameAllowedFromChat(chat, options);
         return chatStore.rename(chatId, "Titled by model");
@@ -166,10 +177,12 @@ async function fixture(
   const invoke = async (channel: string, ...args: unknown[]) => handlers.get(channel)!(event, ...args);
   return {
     chatStore,
+    chatApplicationService,
     invoke,
     broadcasts,
     triage,
     readMarkers,
+    imageReads: () => imageReads,
     triageWrites: () => triageWrites,
     inboxSettled: () => Promise.all(inboxWrites),
   };
@@ -480,4 +493,63 @@ test("assertChatAccess blocks unauthorized remove and appendMessage and onChatRe
   await f.invoke("chats:remove", "owned-chat");
   assert.equal(await f.chatStore.get("owned-chat"), null);
   assert.deepEqual(removed, ["owned-chat"]);
+});
+
+test("renderer sends, model changes, renames, opens, read markers and deletes read zero stored image files", async (t) => {
+  const pngBase64 =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
+  const pngBytes = Buffer.from(pngBase64, "base64");
+  const sha = imageSha256(pngBytes);
+
+  const f = await fixture(t);
+  const firstAppend = (await f.invoke(
+    "chats:appendMessage",
+    "regular-chat",
+    {
+      role: "user",
+      content: "Check this element",
+      attachments: [
+        {
+          id: "grab-thumb_1",
+          name: "grab-thumb_1.png",
+          mimeType: "image/png",
+          kind: "image",
+          size: pngBytes.length,
+          data: pngBase64,
+        },
+      ],
+    },
+    { providerId: "openrouter", model: "model-a", turnId: "turn-img-1" },
+  )) as { messages: Array<{ attachments?: Array<{ url?: string; data?: string; width?: number; height?: number }> }> };
+
+  const secondAppend = (await f.invoke(
+    "chats:appendMessage",
+    "regular-chat",
+    { role: "user", content: "Follow-up prompt without images" },
+    { providerId: "openrouter", model: "model-a", turnId: "turn-img-2" },
+  )) as typeof firstAppend;
+
+  const modelChanged = (await f.invoke(
+    "chats:setModel",
+    "regular-chat",
+    "openrouter",
+    "model-b",
+    "high",
+  )) as typeof firstAppend;
+
+  await f.invoke("chats:rename", "regular-chat", "Image thread");
+  await f.invoke("chats:renameWithFoundationModels", "regular-chat");
+  const opened = await f.chatApplicationService.get("regular-chat");
+  await markChatReadThrough(f.readMarkers, await f.chatStore.getWithImageReferences("regular-chat"));
+  await f.invoke("chats:remove", "regular-chat");
+  await f.inboxSettled();
+
+  assert.equal(f.imageReads(), 0, "renderer mutations and metadata reads never hydrate stored image bytes");
+  const expectedUrl = `aiden-attachment://image/regular-chat/${sha}`;
+  for (const chat of [firstAppend, secondAppend, modelChanged, opened.chat!]) {
+    const attachment = chat.messages[0]!.attachments![0]!;
+    assert.equal(attachment.data, undefined);
+    assert.equal(attachment.url, expectedUrl);
+    assert.deepEqual([attachment.width, attachment.height], [1, 1]);
+  }
 });

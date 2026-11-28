@@ -1070,16 +1070,17 @@ export function createChatStore(
       beforeRename();
       await fs.rename(staged, target);
       await syncDirectoryDurably(directory);
+      chat.messages = stored.messages;
     } finally {
       await removeStagedFileDurably(staged, directory);
     }
   }
 
   /**
-   * The chat as written to disk: each image's bytes go to the image store
-   * (before the chat file that names them) and the chat keeps only the hash.
-   * The caller's attachments keep their exact shape; their hash is remembered
-   * privately so the window can still be sent a link instead of the bytes.
+   * The chat as written to disk and returned from writes: each image's bytes go
+   * to the image store (before the chat file that names them) and the chat keeps
+   * only `sha256`, `width` and `height`. Caller-owned attachment objects are
+   * cloned before reaching here, so their shape is never mutated.
    */
   async function withStoredImages(chat: Chat): Promise<Chat> {
     let changed = false;
@@ -1586,7 +1587,7 @@ export function createChatStore(
       message: Pick<ChatMessage, "id" | "content" | "attachments" | "grabbedElements" | "skill" | "model" | "inputSource">;
       assertCurrent: () => void;
     }): Promise<Chat> {
-      return withImageData(await shared([input.id], true, async () => {
+      return shared([input.id], true, async () => {
         input.assertCurrent();
         // "pure": a corrupt payload at a colliding draft ID must stay in place
         // so the guard below rejects the collision instead of quarantining it.
@@ -1644,7 +1645,7 @@ export function createChatStore(
           firstMessageCommit: { turnId: input.turnId, fingerprint: input.fingerprint },
         };
         return installNewChat(chat, input.assertCurrent);
-      }));
+      });
     },
 
     async create(input: {
@@ -1661,7 +1662,7 @@ export function createChatStore(
       assertCurrent?: () => void;
     }): Promise<Chat> {
       const id = input.id ?? newId();
-      return withImageData(await shared([id], true, async () => {
+      return shared([id], true, async () => {
         input.assertCurrent?.();
         const owner = input.owner === undefined ? undefined : parseChatOwnerV1(input.owner);
         if (input.owner !== undefined && (owner === undefined || input.botId !== undefined)) {
@@ -1687,7 +1688,7 @@ export function createChatStore(
           messages: [],
         };
         return installNewChat(chat, input.assertCurrent);
-      }));
+      });
     },
 
     /** Copy only visible linear history; private runtime fields never enter the new payload. */
@@ -1717,7 +1718,7 @@ export function createChatStore(
       ) => void | Promise<void>;
     }): Promise<Chat> {
       const newChatId = input.targetChatId ?? newChatUuid(randomUUID);
-      return withImageData(await shared([input.sourceChatId, newChatId], true, async () => {
+      return shared([input.sourceChatId, newChatId], true, async () => {
         input.assertCurrent?.();
         const source = await readChat(input.sourceChatId, "owner");
         if (!source) throw new ChatForkError("not_found", `Chat ${input.sourceChatId} not found`);
@@ -1965,7 +1966,7 @@ export function createChatStore(
         };
         await input.beforeInstall?.(copied, sourceMessageIds);
         return installNewChat(copied, input.assertCurrent);
-      }));
+      });
     },
 
     async rename(
@@ -1973,7 +1974,7 @@ export function createChatStore(
       title: string,
       assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
     ): Promise<Chat> {
-      return withImageData(await shared([id], true, async () => {
+      return shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat) throw new Error(`Chat ${id} not found`);
         await assertCurrent(chat);
@@ -1981,7 +1982,7 @@ export function createChatStore(
         chat.updatedAt = Date.now();
         await writeChatAndMeta(chat);
         return chat;
-      }));
+      });
     },
 
     /**
@@ -1994,7 +1995,7 @@ export function createChatStore(
       id: string,
       next: (summary: ChatForkSummaryV1 | undefined, chat: Chat) => ChatForkSummaryV1 | undefined | null,
     ): Promise<Chat | null> {
-      return withImageData(await shared([id], true, async () => {
+      return shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat?.forkedFrom) return null;
         const summary = next(chat.forkedFrom.summary, chat);
@@ -2003,7 +2004,7 @@ export function createChatStore(
         chat.forkedFrom = summary ? { ...lineage, summary } : lineage;
         await writeChatAndMeta(chat);
         return chat;
-      }));
+      });
     },
 
     /** Apply an asynchronous rename only when no newer rename won the race. */
@@ -2012,7 +2013,7 @@ export function createChatStore(
       expectedTitle: string,
       title: string,
     ): Promise<Chat | null> {
-      return withImageData(await shared([id], true, async () => {
+      return shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat || chat.title !== expectedTitle) return null;
         const nextTitle = title.trim();
@@ -2021,7 +2022,7 @@ export function createChatStore(
         chat.updatedAt = Date.now();
         await writeChatAndMeta(chat);
         return chat;
-      }));
+      });
     },
 
     /** Move only an untouched new chat so its workspace can be chosen from the composer. */
@@ -2030,7 +2031,7 @@ export function createChatStore(
       workspaceId: string,
       assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
     ): Promise<Chat> {
-      return withImageData(await shared([id], true, async () => {
+      return shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat) throw new Error(`Chat ${id} not found`);
         await assertCurrent(chat);
@@ -2041,7 +2042,7 @@ export function createChatStore(
         chat.updatedAt = Date.now();
         await writeChatAndMeta(chat);
         return chat;
-      }));
+      });
     },
 
     /** Clear the ephemeral marker so a temporary floating chat becomes a durable chat. */
@@ -2049,7 +2050,7 @@ export function createChatStore(
       id: string,
       assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
     ): Promise<Chat> {
-      return withImageData(await shared([id], true, async () => {
+      return shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat) throw new Error(`Chat ${id} not found`);
         await assertCurrent(chat);
@@ -2058,7 +2059,7 @@ export function createChatStore(
         chat.updatedAt = Date.now();
         await writeChatAndMeta(chat);
         return chat;
-      }));
+      });
     },
 
     /**
@@ -2071,7 +2072,7 @@ export function createChatStore(
       workspaceId: string,
       assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
     ): Promise<Chat> {
-      return withImageData(await shared([id], true, async () => {
+      return shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat) throw new Error(`Chat ${id} not found`);
         await assertCurrent(chat);
@@ -2080,7 +2081,7 @@ export function createChatStore(
         chat.updatedAt = Date.now();
         await writeChatAndMeta(chat);
         return chat;
-      }));
+      });
     },
 
     /**
@@ -2093,7 +2094,7 @@ export function createChatStore(
       model: string,
       assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
     ): Promise<Chat> {
-      return withImageData(await shared([id], true, async () => {
+      return shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat) throw new Error(`Chat ${id} not found`);
         await assertCurrent(chat);
@@ -2107,7 +2108,7 @@ export function createChatStore(
         chat.model = model;
         await writeChatAndMeta(chat);
         return chat;
-      }));
+      });
     },
 
     /**
@@ -2126,7 +2127,7 @@ export function createChatStore(
       assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
       thinkingLevel?: GenerationThinkingLevel | null,
     ): Promise<Chat> {
-      return withImageData(await shared([id], true, async () => {
+      return shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat) throw new Error(`Chat ${id} not found`);
         await assertCurrent(chat);
@@ -2150,7 +2151,7 @@ export function createChatStore(
         else delete chat.thinkingLevel;
         await writeChatAndMeta(chat);
         return chat;
-      }));
+      });
     },
 
     /**
@@ -2210,10 +2211,10 @@ export function createChatStore(
 
     /** Persist the user's per-chat Computer Use grant without reordering history. */
     async setComputerUseAllowed(id: string, allowed: boolean): Promise<Chat> {
-      return withImageData(await updateComputerUseAccess(id, (chat) => {
+      return updateComputerUseAccess(id, (chat) => {
         if (allowed) chat.computerUseAllowed = true;
         else delete chat.computerUseAllowed;
-      }));
+      });
     },
 
     /**
@@ -2231,7 +2232,7 @@ export function createChatStore(
             cleared += 1;
           });
         } catch (error) {
-          if (await this.get(meta.id).catch(() => null)) throw error;
+          if (await this.getWithImageReferences(meta.id).catch(() => null)) throw error;
         }
       }
       return cleared;
@@ -2242,10 +2243,10 @@ export function createChatStore(
      * setup, so the chat can offer Continue after a restart.
      */
     async setComputerUsePendingContinue(id: string, pending: boolean): Promise<Chat> {
-      return withImageData(await updateComputerUseAccess(id, (chat) => {
+      return updateComputerUseAccess(id, (chat) => {
         if (pending) chat.computerUsePendingContinue = true;
         else delete chat.computerUsePendingContinue;
-      }));
+      });
     },
 
     /**
@@ -2431,7 +2432,7 @@ export function createChatStore(
       ) {
         throw new Error("Invalid thinking level.");
       }
-      return withImageData(await shared([id], true, async () => {
+      return shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat) throw new Error(`Chat ${id} not found`);
         if (meta?.rejectFeatureOwned && chat.owner !== undefined) {
@@ -2553,7 +2554,7 @@ export function createChatStore(
           }
         });
         return chat;
-      }));
+      });
     },
 
     /** Replace only the untouched first-message seed, preserving any manual rename. */
@@ -2562,7 +2563,7 @@ export function createChatStore(
       expectedSeed: string,
       title: string,
     ): Promise<Chat | null> {
-      return withImageData(await shared([id], true, async () => {
+      return shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat || !canReplaceGeneratedChatTitle(chat.title, expectedSeed))
           return null;
@@ -2572,7 +2573,7 @@ export function createChatStore(
         chat.updatedAt = Date.now();
         await writeChatAndMeta(chat);
         return chat;
-      }));
+      });
     },
   };
 }
