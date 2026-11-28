@@ -1440,7 +1440,7 @@ describe("prompt prefix stability: design mode with DESIGN.md (live flag on)", (
         offerable: false, askOffered: false,
       });
       const head = async (turn: ReturnType<typeof createDesignMdTurn>) => workspaceChat({
-        extensions: [{ id: "aiden.design-canvas", systemPrompt: designModePromptSection(designLiveEnabled()), tools: [canvasTool, turn.tool] }],
+        extensions: [{ id: "aiden.design-canvas", systemPrompt: designModePromptSection(designLiveEnabled(), designLiveEnabled() ? "limited" : "v1"), tools: [canvasTool, turn.tool] }],
       });
       // The canvas status note goes to the turn's transcript with the DESIGN.md sentence appended.
       const noteFor = (sentence: string) => (timestamp: number) =>

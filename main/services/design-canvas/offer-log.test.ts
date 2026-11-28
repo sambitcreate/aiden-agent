@@ -35,7 +35,7 @@ test("a key is claimed once per run, settle(true) persists it and settle(false) 
   assert.ok(!text.includes("work") && !text.includes("apps"));
 });
 
-test("a log written by today's DesignSystemOffers reads unchanged", async (t) => {
+test("a log in the shape v1's design-system offers wrote reads unchanged", async (t) => {
   const dir = await tempDir(t);
   const file = path.join(dir, "design-system-offers.json");
   const secret = randomBytes(32);

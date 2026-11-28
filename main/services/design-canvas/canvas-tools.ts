@@ -254,45 +254,71 @@ export const DESIGN_MODE_PROMPT_SECTION = [
   "- Coordinates and sizes are canvas units. Where a tool takes a frame id, a page's workspace path also works: its frame on the page on screen, else its first. Say which file you changed.",
 ].join("\n");
 
-/** The DESIGN.md bullet the live flag adds to the design-mode section (spec S33). */
-export const DESIGN_MD_PROMPT_BULLET =
-  "- The app's DESIGN.md is its design system's source of truth, ahead of design/tokens.css. Use its tokens, never one-off values, and its prose as guidance. The canvas note names it and its lint counts; design_system reads, lints and exports it. When a change adds or alters a token, update DESIGN.md in the same turn, keeping its sections in order and its YAML valid, then run design_system lint.";
+/**
+ * The opening every DESIGN.md bullet shares, so a stored section holding the
+ * 3b/3c bullet (which named design/tokens.css) is still recognised (S114).
+ */
+export const DESIGN_MD_BULLET_PREFIX = "- The app's DESIGN.md is its design system's source of truth";
+
+/** The DESIGN.md bullet a flag-on section adds when design_system is offered (spec S33, S114). */
+export const LIVE_DESIGN_MD_PROMPT_BULLET = `${DESIGN_MD_BULLET_PREFIX}. Use its tokens, never one-off values, and its prose as guidance. The canvas note names it and its lint counts; design_system reads, lints and exports it. When a change adds or alters a token, update DESIGN.md in the same turn, keeping its sections in order and its YAML valid, then run design_system lint.`;
 
 /** The live section's first bullet: a stored copy holding it is replaced on a turn without design_app (S86). */
 export const LIVE_APP_PROMPT_MARKER =
   "- Design in the real app. When the workspace has a web app, screens are its routes and components, not design/ HTML. Start it with design_app start, and list its pages with design_app routes.";
 
-/**
- * The design-mode section for a turn that offers design_app (3b, S86): today's
- * bullets, with the real app first and design/ pages for a workspace with no
- * web app. Static, like today's.
- */
-export const LIVE_DESIGN_MODE_PROMPT_SECTION = DESIGN_MODE_PROMPT_SECTION.split("\n")
-  .flatMap((line) => {
-    if (line.startsWith("- Screens and pages you design are workspace HTML files under design/")) {
-      return [
-        LIVE_APP_PROMPT_MARKER,
-        "- A route file you write or edit lands on this chat's page by itself, once, and updates live as you save. Component and style edits update every open frame. Use canvas_place_frame with kind app to show another route, or a device size with device (phone, tablet, laptop or desktop).",
-        "- For a variant of a page, write a route copy such as /pricing-v2 next to the original and place it with variantOf. Keep at most three directions, then ask which to keep.",
-        "- With no web app, screens are workspace HTML files under design/ (a shared design/tokens.css plus one HTML file per screen), not render_artifact visuals. Each design/ page you write, edit or make with a command lands on the canvas by itself and reloads as you save it.",
-      ];
-    }
-    if (line.startsWith("- Pick the design width")) return [line.replace("- Pick the design width", "- For a design/ page, pick the design width")];
-    if (line.startsWith("- canvas_inspect draws one page offline")) {
-      return [line.replace("- canvas_inspect draws one page offline", "- canvas_inspect draws one design/ page offline (not an app frame: canvas_read with snapshot: true shows those)")];
-    }
-    return [line];
-  })
-  .join("\n");
+/** The limited section's first bullet: a flag-on turn without design_app (S114). */
+export const LIMITED_APP_PROMPT_MARKER =
+  "- Live apps can't run in this chat, so design with notes, shapes, flows and images. Existing design/ pages still show as frames.";
+
+/** canvas_inspect in a flag-on section: it checks the person's HTML file frames, never draws app frames (S114). */
+const FLAG_ON_INSPECT =
+  "- canvas_inspect checks an HTML file frame the person placed; it doesn't draw app frames (canvas_read with snapshot: true shows those).";
+
+/** v1's bullets that teach design/ HTML mockups, which a flag-on section never carries (S114). */
+const isHtmlPagesBullet = (line: string) => line.startsWith("- Screens and pages you design are workspace HTML files under design/");
+const isDesignWidthBullet = (line: string) => line.startsWith("- Pick the design width");
+const isInspectBullet = (line: string) => line.startsWith("- canvas_inspect draws one page offline");
+
+/** v1's section with its design/ HTML bullets swapped for `htmlPages` and the flag-on canvas_inspect line. */
+function flagOnSection(htmlPages: readonly string[]): string {
+  return DESIGN_MODE_PROMPT_SECTION.split("\n")
+    .flatMap((line) => {
+      if (isHtmlPagesBullet(line)) return [...htmlPages];
+      if (isDesignWidthBullet(line)) return [];
+      if (isInspectBullet(line)) return [FLAG_ON_INSPECT];
+      return [line];
+    })
+    .join("\n");
+}
 
 /**
- * The design-mode section for a turn (S86): today's text; plus the DESIGN.md
- * bullet when design_system is offered; the live section when design_app is.
- * Static per pair of values.
+ * The design-mode section for a turn that offers design_app (3b, S86; 3d,
+ * S114): the real app first, a design app when there's no web app, and no
+ * design/ HTML pages. Static.
  */
-export function designModePromptSection(designMd: boolean, liveApps = false): string {
-  if (liveApps) return designMd ? `${LIVE_DESIGN_MODE_PROMPT_SECTION}\n${DESIGN_MD_PROMPT_BULLET}` : LIVE_DESIGN_MODE_PROMPT_SECTION;
-  return designMd ? `${DESIGN_MODE_PROMPT_SECTION}\n${DESIGN_MD_PROMPT_BULLET}` : DESIGN_MODE_PROMPT_SECTION;
+export const LIVE_DESIGN_MODE_PROMPT_SECTION = flagOnSection([
+  LIVE_APP_PROMPT_MARKER,
+  "- A route file you write or edit lands on this chat's page by itself, once, and updates live as you save. Component and style edits update every open frame. Use canvas_place_frame with kind app to show another route, or a device size with device (phone, tablet, laptop or desktop).",
+  "- For a variant of a page, write a route copy such as /pricing-v2 next to the original and place it with variantOf. Keep at most three directions, then ask which to keep.",
+  "- With no web app, ask for a design app with design_app scaffold; its pages are routes like any app's.",
+]);
+
+/** The design-mode section for a flag-on turn without design_app: no live apps and no design/ HTML pages (S114). Static. */
+export const LIMITED_DESIGN_MODE_PROMPT_SECTION = flagOnSection([LIMITED_APP_PROMPT_MARKER]);
+
+/** v1 is the flag-off section; live offers design_app; limited is a flag-on turn without it (S114). */
+export type DesignPromptMode = "v1" | "live" | "limited";
+
+/**
+ * The design-mode section for a turn: v1's text with the flag off; with it
+ * on, the live or limited section, plus the DESIGN.md bullet when
+ * design_system is offered. Static per pair of values.
+ */
+export function designModePromptSection(designMd: boolean, mode: DesignPromptMode = "v1"): string {
+  if (mode === "v1") return DESIGN_MODE_PROMPT_SECTION;
+  const section = mode === "live" ? LIVE_DESIGN_MODE_PROMPT_SECTION : LIMITED_DESIGN_MODE_PROMPT_SECTION;
+  return designMd ? `${section}\n${LIVE_DESIGN_MD_PROMPT_BULLET}` : section;
 }
 
 export type DesignCanvasToolDeps = {
@@ -1197,7 +1223,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
     if (workspaceId === null) throw new Error("This chat is no longer available.");
     const roots = appRootsOf(await deps.apps!.snapshot(workspaceId));
     if (roots.length === 0) {
-      throw new CanvasToolError("This workspace has no web app for a live frame yet. design_app finds and starts the workspace's app.");
+      throw new CanvasToolError("This workspace has no web app for a live frame yet. design_app finds and starts the workspace's app, and design_app scaffold adds a design app.");
     }
     const quoted = roots.map((root) => JSON.stringify(root)).join(", ");
     let appRoot: string;

@@ -261,7 +261,7 @@ test("with the live flag off, any copy of the section already there is kept, as 
 test("without DESIGN.md this turn, a journaled section naming design_system is replaced by the flag-off text", () => {
   // A chat whose earlier turn had DESIGN.md, now with the flag off or design_system excluded.
   const user: AgentMessage = { role: "user", content: "hi", timestamp: 1 };
-  const withBullet = withDesignModeSection([user], designModePromptSection(true), 2, { live: true });
+  const withBullet = withDesignModeSection([user], designModePromptSection(true, "limited"), 2, { live: true });
   const now = withDesignModeSection(withBullet, designModePromptSection(false), 3, { live: false });
   assert.equal(now.length, 3);
   const latest = (now[2] as { sections?: Record<string, string> }).sections?.[DESIGN_MODE_SECTION];
@@ -272,14 +272,49 @@ test("without DESIGN.md this turn, a journaled section naming design_system is r
 
 test("3b: a stored live section is replaced on a turn without design_app", () => {
   const user: AgentMessage = { role: "user", content: "hi", timestamp: 1 };
-  const live = withDesignModeSection([user], designModePromptSection(false, true), 2, { live: true });
-  for (const [designMd, flagLive] of [
-    [false, false],
-    [true, true],
+  const live = withDesignModeSection([user], designModePromptSection(false, "live"), 2, { live: true });
+  for (const [text, flagLive] of [
+    [designModePromptSection(false), false],
+    [designModePromptSection(true, "limited"), true],
   ] as const) {
-    const now = withDesignModeSection(live, designModePromptSection(designMd), 3, { live: flagLive });
+    const now = withDesignModeSection(live, text, 3, { live: flagLive });
     const latest = (now[now.length - 1] as { sections?: Record<string, string> }).sections?.[DESIGN_MODE_SECTION];
-    assert.equal(latest, designModePromptSection(designMd));
+    assert.equal(latest, text);
     assert.doesNotMatch(latest!, /design_app/u);
   }
+});
+
+const sectionOf = (messages: AgentMessage[]) => (messages[messages.length - 1] as { sections?: Record<string, string> }).sections?.[DESIGN_MODE_SECTION];
+
+test("3d: a stored limited section is replaced on a live turn and the other way round", () => {
+  const user: AgentMessage = { role: "user", content: "hi", timestamp: 1 };
+  const limited = withDesignModeSection([user], designModePromptSection(false, "limited"), 2, { live: true });
+  const live = withDesignModeSection(limited, designModePromptSection(false, "live"), 3, { live: true });
+  assert.equal(sectionOf(live), designModePromptSection(false, "live"));
+  const back = withDesignModeSection(live, designModePromptSection(false, "limited"), 4, { live: true });
+  assert.equal(sectionOf(back), designModePromptSection(false, "limited"));
+});
+
+test("3d: a flag-off turn replaces a stored limited section with v1", () => {
+  const user: AgentMessage = { role: "user", content: "hi", timestamp: 1 };
+  const limited = withDesignModeSection([user], designModePromptSection(false, "limited"), 2, { live: true });
+  const now = withDesignModeSection(limited, designModePromptSection(false), 3, { live: false });
+  assert.equal(sectionOf(now), designModePromptSection(false));
+});
+
+test("3d: a flag-on turn with neither design_system nor design_app replaces a stored v1 section with limited", () => {
+  const user: AgentMessage = { role: "user", content: "hi", timestamp: 1 };
+  const v1 = withDesignModeSection([user], designModePromptSection(false), 2, { live: false });
+  const now = withDesignModeSection(v1, designModePromptSection(false, "limited"), 3, { live: true });
+  assert.equal(sectionOf(now), designModePromptSection(false, "limited"));
+});
+
+test("3d: a flag-off turn still swaps a stored 3b/3c section holding the old DESIGN.md bullet", () => {
+  // The bullet as 3b and 3c journaled it, before 3d dropped its tokens.css clause.
+  const oldBullet =
+    "- The app's DESIGN.md is its design system's source of truth, ahead of design/tokens.css. Use its tokens, never one-off values, and its prose as guidance.";
+  const user: AgentMessage = { role: "user", content: "hi", timestamp: 1 };
+  const stored = withDesignModeSection([user], `${designModePromptSection(false)}\n${oldBullet}`, 2, { live: true });
+  const now = withDesignModeSection(stored, designModePromptSection(false), 3, { live: false });
+  assert.equal(sectionOf(now), designModePromptSection(false));
 });

@@ -21,6 +21,13 @@ import { DesignCanvasStore, DesignChatCanvases, type DesignCanvasUpdated } from 
 import { DesignCanvasViews, designTurnPages } from "./views.js";
 import { PendingEntries } from "./written-pages.js";
 import { claimPage } from "../../../renderer/shared/design-canvas/chat-pages.js";
+import {
+  DESIGN_MODE_PROMPT_SECTION as V1_SECTION,
+  designModePromptSection as promptSection,
+  LIMITED_APP_PROMPT_MARKER,
+  LIVE_APP_PROMPT_MARKER as LIVE_MARKER,
+  LIVE_DESIGN_MD_PROMPT_BULLET,
+} from "./canvas-tools.js";
 
 type ToolDeps = Parameters<typeof createDesignCanvasTools>[0];
 type FocusRequest = Parameters<NonNullable<ToolDeps["focus"]>>[0];
@@ -2490,4 +2497,42 @@ test("3b: canvas_read lists an app frame's blocked count when it isn't 0, and ne
   await without.call("canvas_place_frame", { kind: "app", title: "A", route: "/a" });
   const plain = await without.call("canvas_read");
   assert.ok([...plain.inView, ...plain.outsideFrames].every((frame: Record<string, unknown>) => !("blocked" in frame)));
+});
+
+// ── 3d (S114): the prompt modes ──
+
+/** Phrases that teach Aiden to write design/ HTML mockups. */
+const HTML_TEACHING = [/workspace HTML files under design\//u, /design\/tokens\.css/u, /lands on the canvas by itself/u, /Pick the design width/u, /pick the design width/u, /Each page you write is checked/u];
+
+test("3d: each prompt mode is static", () => {
+  for (const mode of ["v1", "live", "limited"] as const) {
+    for (const designMd of [false, true]) assert.equal(promptSection(designMd, mode), promptSection(designMd, mode), `${mode} ${designMd}`);
+  }
+});
+
+test("3d: live and limited never say to write design/ HTML", () => {
+  for (const mode of ["live", "limited"] as const) {
+    for (const designMd of [false, true]) {
+      const text = promptSection(designMd, mode);
+      for (const phrase of HTML_TEACHING) assert.doesNotMatch(text, phrase, `${mode} ${designMd} ${phrase}`);
+    }
+  }
+  assert.ok(promptSection(false, "live").includes(LIVE_MARKER));
+  assert.match(promptSection(false, "live"), /design_app scaffold/u);
+  assert.ok(promptSection(false, "limited").includes(LIMITED_APP_PROMPT_MARKER));
+  assert.doesNotMatch(promptSection(true, "limited"), /design_app/u, "a limited turn has no design_app");
+});
+
+test("3d: v1 is today's section, whatever design_system says", () => {
+  assert.equal(promptSection(false), V1_SECTION);
+  assert.equal(promptSection(true, "v1"), V1_SECTION, "the flag-off section never had the DESIGN.md bullet");
+  assert.match(V1_SECTION, /workspace HTML files under design\//u, "the flag-off method stays until Phase 7");
+});
+
+test("3d: the live DESIGN.md bullet doesn't name design/tokens.css, and comes only with design_system", () => {
+  assert.doesNotMatch(LIVE_DESIGN_MD_PROMPT_BULLET, /tokens\.css/u);
+  for (const mode of ["live", "limited"] as const) {
+    assert.ok(promptSection(true, mode).endsWith(LIVE_DESIGN_MD_PROMPT_BULLET), mode);
+    assert.ok(!promptSection(false, mode).includes(LIVE_DESIGN_MD_PROMPT_BULLET), mode);
+  }
 });

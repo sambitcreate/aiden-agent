@@ -3,7 +3,8 @@ import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { appRouteKey, DESIGN_CANVAS_LIMITS, emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../../../renderer/shared/design-canvas/schema.js";
+import { appRouteKey, DESIGN_CANVAS_LIMITS, emptyDesignCanvas, frameShowingDesignPage, type DesignCanvas, type DesignFrame } from "../../../renderer/shared/design-canvas/schema.js";
+import { createWrittenPageInspector } from "./inspect-note.js";
 import {
   createDesignPageScanner,
   createWrittenRouteTurn,
@@ -14,6 +15,7 @@ import {
   RECENT_WRITTEN_PAGES_LIMIT,
   RecentWrittenPages,
   pagesWrittenInChat,
+  routeWrittenFile,
   placeWrittenPageFrames,
   placeWrittenPagesOnCanvas,
   writtenAppRoute,
@@ -1341,14 +1343,31 @@ function liveEntry(
   return { enter, reported };
 }
 
-test("3b: entry places the chat's route files beside its pages", async (t) => {
+test("3d: flag on, entry places the chat's route files and leaves its design/ pages off", async (t) => {
   const { workspaceRoot, canvases } = await workspaceWith(t, ["home.html"]);
   const { enter, reported } = liveEntry(canvases);
   await enter({ id: "chat-1", title: "Chat", messages: wrote("app/pricing/page.tsx", "design/home.html") }, workspaceRoot);
   const doc = await canvases.workspaceStore.get("ws-1");
-  assert.deepEqual(doc.frames.map((frame) => frame.kind).sort(), ["app", "file"]);
+  assert.deepEqual(doc.frames.map((frame) => frame.kind), ["app"], "no file frame for the design/ page (S114)");
   assert.deepEqual(appFramesOf(doc).map((frame) => frame.route), ["/pricing"]);
   assert.deepEqual(reported, [1280]);
+});
+
+test("3d: flag on, a chat that wrote only design/ pages gets the single app's / instead", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, ["home.html"]);
+  const { enter } = liveEntry(canvases);
+  await enter({ id: "chat-1", title: "Chat", messages: wrote("design/home.html") }, workspaceRoot);
+  const doc = await canvases.workspaceStore.get("ws-1");
+  assert.deepEqual(doc.frames.map((frame) => frame.kind), ["app"]);
+  assert.deepEqual(appFramesOf(doc).map((frame) => frame.route), ["/"]);
+});
+
+test("3d: flag on, pagesWrittenInChat leaves out design/ pages and keeps routes", () => {
+  const messages = wrote("design/a.html", "app/pricing/page.tsx", "design/b.html");
+  const isRouteFile = (relativePath: string) => relativePath.startsWith("app/");
+  assert.deepEqual(pagesWrittenInChat(messages, { isRouteFile, includeHtmlPages: false }), ["app/pricing/page.tsx"]);
+  assert.deepEqual(pagesWrittenInChat(messages, { isRouteFile }), ["design/a.html", "app/pricing/page.tsx", "design/b.html"], "flag off: today's timeline");
+  assert.deepEqual(pagesWrittenInChat(messages), ["design/a.html", "design/b.html"]);
 });
 
 test("3b: a chat that moves while entry reads its apps places nothing from the workspace it left, in either canvas", async (t) => {
@@ -1363,22 +1382,16 @@ test("3b: a chat that moves while entry reads its apps places nothing from the w
   assert.deepEqual(reported, []);
 });
 
-test("3b: entry takes the newest 12 of one timeline of pages and routes", async (t) => {
+test("3d: flag on, entry takes the newest 12 routes of the timeline, and no pages", async (t) => {
   const pages = Array.from({ length: 10 }, (_, index) => `p${index}.html`);
   const { workspaceRoot, canvases } = await workspaceWith(t, pages);
-  // Oldest first: p0 r0 p1 p2 r1 p3 p4 r2 p5 p6 r3 p7 p8 r4 p9.
-  const timeline = ["p0", "r0", "p1", "p2", "r1", "p3", "p4", "r2", "p5", "p6", "r3", "p7", "p8", "r4", "p9"].map((name) =>
-    name.startsWith("p") ? `design/${name}.html` : `app/${name}/page.tsx`,
-  );
+  // Oldest first: routes r0 … r12 with a page after every other one.
+  const timeline = Array.from({ length: 13 }, (_, index) => [`app/r${index}/page.tsx`, ...(index % 2 === 0 && index / 2 < 10 ? [`design/p${index / 2}.html`] : [])]).flat();
   const { enter } = liveEntry(canvases);
   await enter({ id: "chat-1", title: "Chat", messages: wrote(...timeline) }, workspaceRoot);
   const doc = await canvases.workspaceStore.get("ws-1");
   const shown = doc.frames.map((frame) => (frame.kind === "app" ? frame.route : frame.path)).sort();
-  assert.deepEqual(
-    shown,
-    ["/r1", "/r2", "/r3", "/r4", ...["p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9"].map((name) => `design/${name}.html`)].sort(),
-    "p0, r0 and p1 are the three oldest and stay off",
-  );
+  assert.deepEqual(shown, Array.from({ length: 12 }, (_, index) => `/r${index + 1}`).sort(), "r0 is the oldest and stays off");
 });
 
 test("3b: a chat that wrote nothing in a single-app workspace gets the app's / on its empty page", async (t) => {
@@ -1459,4 +1472,51 @@ test("3d: a route written after a scaffold in the same turn is placed once the t
   turn.reset();
   assert.deepEqual(await turn.routeFor("design-app/src/routes/settings.tsx"), { appRoot: "design-app", route: "/settings" });
   assert.equal(loads, 2);
+});
+
+// ── 3d (S114): where a write goes ──
+
+const wroteFile = (relativePath: string, operation: "written" | "edited" = "written") => ({ producedFile: { relativePath, operation, bytes: 1 } });
+
+test("3d: a route write is placed when no page placer exists, and a design/ page then goes to the check only", () => {
+  const calls: string[] = [];
+  const sinks = { inspectPage: (file: string) => calls.push(`inspect ${file}`), placeRoute: (file: string) => calls.push(`route ${file}`) };
+  routeWrittenFile("write_file", wroteFile("design-app/src/routes/settings.tsx"), sinks);
+  routeWrittenFile("edit_file", wroteFile("design/home.html", "edited"), sinks);
+  routeWrittenFile("write_file", wroteFile("notes/todo.md"), { inspectPage: sinks.inspectPage });
+  routeWrittenFile("read_file", wroteFile("design/home.html"), sinks);
+  assert.deepEqual(calls, ["route design-app/src/routes/settings.tsx", "inspect design/home.html"]);
+});
+
+test("3d: flag off: today's placement, a design/ page placed and never routed", () => {
+  const calls: string[] = [];
+  const sinks = { placePage: (file: string) => calls.push(`page ${file}`), placeRoute: (file: string) => calls.push(`route ${file}`) };
+  routeWrittenFile("write_file", wroteFile("design/home.html"), sinks);
+  routeWrittenFile("write_file", wroteFile("app/pricing/page.tsx"), sinks);
+  assert.deepEqual(calls, ["page design/home.html", "route app/pricing/page.tsx"]);
+});
+
+test("3d: flag on, editing a design/ page a file frame shows attaches a check report and places nothing; one no frame shows gets none", async () => {
+  const doc: DesignCanvas = {
+    ...emptyDesignCanvas(),
+    frames: [{ id: "f-home", kind: "file", path: "design/home.html", title: "Home", x: 0, y: 0, w: 1280, h: 800, pageId: "page-1", createdBy: "person" } as DesignFrame],
+  };
+  const inspected: string[] = [];
+  const inspector = createWrittenPageInspector({
+    inspect: async (relativePath) => {
+      inspected.push(relativePath);
+      const frame = frameShowingDesignPage(doc, relativePath, "page-1");
+      return frame ? { frameId: frame.id, findings: ["The page overflows sideways."] } : null;
+    },
+    onError: () => undefined,
+  });
+  const placed: string[] = [];
+  const sinks = { inspectPage: (file: string) => inspector.written(file), placeRoute: (file: string) => placed.push(file) };
+  routeWrittenFile("edit_file", wroteFile("design/home.html", "edited"), sinks);
+  routeWrittenFile("write_file", wroteFile("design/other.html"), sinks);
+  const reports = await inspector.take(1_000);
+  assert.deepEqual(inspected, ["design/home.html", "design/other.html"]);
+  assert.deepEqual(reports.map((report) => [report.path, report.frameId]), [["design/home.html", "f-home"]]);
+  assert.deepEqual(placed, [], "nothing lands");
+  assert.deepEqual(doc.frames.map((frame) => frame.id), ["f-home"]);
 });

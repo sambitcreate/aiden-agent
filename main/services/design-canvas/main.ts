@@ -48,7 +48,6 @@ import { runDesignMdWorker } from "./design-md/lint-client.js";
 import { createDesignAppRoots } from "./design-md/locate.js";
 import { DesignMdOffers } from "./design-md/offers.js";
 import { DesignMdReader } from "./design-md/reader.js";
-import { DesignSystemOffers } from "./design-system-offers.js";
 import { DesignGrantRegistry } from "./grants.js";
 import { createDesignLiveChats } from "./liveness.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL, DesignCanvasStore, DesignChatCanvases, type DesignCanvasUpdated } from "./store.js";
@@ -179,12 +178,6 @@ export const designPendingEntries = new PendingEntries();
 
 /** HTML pages each chat's replies wrote in this run, for opening design mode mid-reply. Memory only. */
 export const recentWrittenPages = new RecentWrittenPages();
-
-/** Workspaces already offered a tokens file from their own colours and fonts. */
-export const designSystemOffers = new DesignSystemOffers({
-  file: () => path.join(app.getPath("userData"), "design-system-offers.json"),
-  onSaveError: (error) => logger.warn("design", "Could not record the design-system offer.", error),
-});
 
 /**
  * The DESIGN.md linter. Lazy: no worker starts until the first check, and the

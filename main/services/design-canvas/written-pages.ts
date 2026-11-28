@@ -170,6 +170,29 @@ export function writtenPagePath(toolName: string, details: unknown): string | un
   return isAutoPlacedPagePath(produced.relativePath) ? produced.relativePath : undefined;
 }
 
+/**
+ * Where a completed write or edit goes (3d, S114). A design/ page is placed
+ * when the turn places pages (the flag off), or else only checked: the
+ * inspector reports on it when a file frame shows it. Any other file is a
+ * route candidate when the turn places routes. Route placement never depends
+ * on page placement.
+ */
+export function routeWrittenFile(
+  toolName: string,
+  details: unknown,
+  sinks: { placePage?: (relativePath: string) => void; inspectPage?: (relativePath: string) => void; placeRoute?: (relativePath: string) => void },
+): void {
+  const page = writtenPagePath(toolName, details);
+  if (page !== undefined) {
+    if (sinks.placePage) sinks.placePage(page);
+    else sinks.inspectPage?.(page);
+    return;
+  }
+  if (!sinks.placeRoute) return;
+  const file = writtenFilePath(toolName, details);
+  if (file !== undefined) sinks.placeRoute(file);
+}
+
 /** Each design/ page's modification stamp, by workspace-relative path. */
 /** The workspace-relative file a completed first-party write or edit produced, whatever it is (3b: route files). */
 export function writtenFilePath(toolName: string, details: unknown): string | undefined {
@@ -493,9 +516,13 @@ export function placeWrittenAppRoutes(
  */
 export function pagesWrittenInChat(
   messages: readonly { timeline?: { steps?: readonly unknown[] } | null }[],
-  /** 3b (S83): also keeps the files this says are route files, in the same timeline. Left out, only design/ pages. */
-  options: { isRouteFile?: (relativePath: string) => boolean } = {},
+  /**
+   * 3b (S83): also keeps the files this says are route files, in the same timeline. Left out, only design/ pages.
+   * 3d (S114): `includeHtmlPages: false` (live apps on) leaves design/ pages out.
+   */
+  options: { isRouteFile?: (relativePath: string) => boolean; includeHtmlPages?: boolean } = {},
 ): string[] {
+  const includeHtmlPages = options.includeHtmlPages ?? true;
   const seen = new Set<string>();
   const ordered: string[] = [];
   for (const message of messages) {
@@ -504,9 +531,9 @@ export function pagesWrittenInChat(
       const tool = step as { kind?: unknown; toolName?: unknown; status?: unknown; producedFile?: unknown };
       if (tool.kind !== "tool" || tool.status !== "completed" || typeof tool.toolName !== "string") continue;
       const details = { producedFile: tool.producedFile };
-      const relativePath =
-        writtenPagePath(tool.toolName, details) ??
-        (options.isRouteFile ? routeFileOf(writtenFilePath(tool.toolName, details), options.isRouteFile) : undefined);
+      const page = writtenPagePath(tool.toolName, details);
+      if (page !== undefined && !includeHtmlPages) continue;
+      const relativePath = page ?? (options.isRouteFile ? routeFileOf(writtenFilePath(tool.toolName, details), options.isRouteFile) : undefined);
       if (!relativePath) continue;
       // A page edited again moves to the end, so the newest pages are kept.
       if (seen.has(relativePath)) ordered.splice(ordered.indexOf(relativePath), 1);

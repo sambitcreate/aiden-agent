@@ -7,8 +7,8 @@ import { readGenerativeUiHostLibrary } from "../generative-ui-host-libraries.js"
 import { LOAD_TOOLS_TOOL_NAME, ON_DEMAND_TOOL_NAMES } from "../on-demand-tools.js";
 import {
   createDesignCanvasTools,
-  DESIGN_MD_PROMPT_BULLET,
   DESIGN_MODE_PROMPT_SECTION,
+  LIVE_DESIGN_MD_PROMPT_BULLET,
   designModePromptSection,
   LIVE_APP_PROMPT_MARKER,
 } from "./canvas-tools.js";
@@ -48,7 +48,7 @@ test("every tool the flag-on prompt section names is one a flag-on turn offers",
     createDesignSystemTool({ workspaceRoot: base, reader: new DesignMdReader() }),
   ];
   const offered = new Set(tools.map((tool) => tool.name));
-  const section = designModePromptSection(true);
+  const section = designModePromptSection(true, "limited");
   const named = new Set(section.match(/\bcanvas_[a-z_]+|\bdesign_system\b/gu) ?? []);
   assert.ok(named.has("design_system"), "the flag-on section teaches design_system");
   for (const name of named) assert.ok(offered.has(name), `${name} is named but not offered`);
@@ -95,7 +95,7 @@ test("3b: every tool the live prompt and skill name is one a flag-on turn with d
     }),
   ];
   const offered = new Set([...tools.map((tool) => tool.name), LOAD_TOOLS_TOOL_NAME]);
-  for (const text of [designModePromptSection(true, true), designModePromptSection(false, true), aidenDesignSkill(true).instructions]) {
+  for (const text of [designModePromptSection(true, "live"), designModePromptSection(false, "live"), aidenDesignSkill(true).instructions]) {
     const named = new Set(text.match(/\bcanvas_[a-z_]+|\bdesign_(?:system|app)\b|\bload_tools\b/gu) ?? []);
     assert.ok(named.has("design_app"), "the live text teaches design_app");
     for (const name of named) assert.ok(offered.has(name), `${name} is named but not offered`);
@@ -105,24 +105,19 @@ test("3b: every tool the live prompt and skill name is one a flag-on turn with d
 
 test("3b: the prompt section is today's unless the turn offers design_app", () => {
   assert.equal(designModePromptSection(false), DESIGN_MODE_PROMPT_SECTION);
-  assert.equal(designModePromptSection(true), `${DESIGN_MODE_PROMPT_SECTION}\n${DESIGN_MD_PROMPT_BULLET}`, "Windows, or design_app excluded");
-  assert.equal(designModePromptSection(true, false), designModePromptSection(true));
-  assert.doesNotMatch(designModePromptSection(true, false), /design_app/u);
-  assert.ok(designModePromptSection(true, true).includes(DESIGN_MD_PROMPT_BULLET), "the DESIGN.md bullet, verbatim");
-  assert.ok(!designModePromptSection(false, true).includes(DESIGN_MD_PROMPT_BULLET));
-  assert.ok(designModePromptSection(false, true).includes(LIVE_APP_PROMPT_MARKER));
+  assert.doesNotMatch(designModePromptSection(true, "limited"), /design_app/u, "Windows, or design_app excluded");
+  assert.ok(designModePromptSection(true, "live").includes(LIVE_DESIGN_MD_PROMPT_BULLET), "the DESIGN.md bullet, verbatim");
+  assert.ok(!designModePromptSection(false, "live").includes(LIVE_DESIGN_MD_PROMPT_BULLET));
+  assert.ok(designModePromptSection(false, "live").includes(LIVE_APP_PROMPT_MARKER));
   // JSX comment pins wait for Phase 4's source mapping.
-  assert.doesNotMatch(designModePromptSection(true, true), /data-aiden-comment/u);
+  assert.doesNotMatch(designModePromptSection(true, "live"), /data-aiden-comment/u);
 });
 
-test("3b: the live skill keeps the HTML method for no web app, and claims no check DESIGN.md's linter doesn't make", () => {
+test("3b: the live skill claims no check DESIGN.md's linter doesn't make", () => {
   assert.equal(aidenDesignSkill(false), AIDEN_DESIGN_SKILL);
   const live = aidenDesignSkill(true);
   assert.equal(live.name, AIDEN_DESIGN_SKILL.name);
-  const [liveSections, noWebApp] = live.instructions.split(/\nNo web app:/u);
-  assert.ok(noWebApp, "a No web app section");
-  assert.doesNotMatch(liveSections!, /data-aiden-comment/u, "app frames take frame comments only in 3b");
-  assert.ok(noWebApp!.includes("design/tokens.css"), "the HTML method follows");
+  assert.doesNotMatch(live.instructions, /data-aiden-comment/u, "app frames take frame comments only");
   for (const claim of [/(?<!not )\bchecks? (?:the )?(?:Motion|Voice)/u, /(?<!not )\bresolves? (?:an? )?@file#fragment/u, /\bmotion (?:group|tokens?) (?:is|are) (?:checked|linted)/iu]) {
     assert.doesNotMatch(live.instructions, claim);
   }
@@ -135,4 +130,35 @@ test("3b: the registry lists the live skill with the live flag, today's without,
   const [today] = designCanvasSkills({ designMode: true, designLive: false });
   assert.equal(today?.instructions, AIDEN_DESIGN_SKILL.instructions);
   assert.deepEqual(designCanvasSkills({ designMode: false, designLive: true }), []);
+});
+
+// ── 3d (S114): the HTML mockup path ──
+
+test("3d: flag off, the skill still teaches the HTML method but no longer promises the tokens offer", () => {
+  const text = AIDEN_DESIGN_SKILL.instructions;
+  assert.doesNotMatch(text, /a design-mode note lists them once/u);
+  assert.doesNotMatch(text, /design\/specimen\.html/u);
+  for (const kept of [
+    "design/tokens.css holds the tokens as CSS variables, with a dark look. With no design system, pick a small set of tokens, write them to design/tokens.css and say which.",
+    'Put data-aiden-src="<file>"',
+    "call canvas_inspect for a picture after the first version",
+    '<script type="application/aiden-tweaks">',
+    "Checklist:",
+    'Add data-aiden-comment="<commentId>"',
+  ]) {
+    assert.ok(text.includes(kept), kept);
+  }
+  assert.match(AIDEN_DESIGN_SKILL.description, /workspace HTML file/u);
+});
+
+test("3d: flag on, the skill never teaches design/ HTML pages and explains scaffold", () => {
+  const live = aidenDesignSkill(true);
+  for (const phrase of [/design\/tokens\.css/u, /workspace HTML/u, /data-aiden-tweaks|application\/aiden-tweaks/u]) {
+    assert.doesNotMatch(live.instructions, phrase);
+    assert.doesNotMatch(live.description, phrase);
+  }
+  assert.match(live.instructions, /design_app scaffold/u);
+  assert.match(live.instructions, /src\/routes\//u);
+  assert.match(live.instructions, /don't ask first with ask_user_question/u);
+  assert.match(live.instructions, /Checklist:/u, "the craft guidance stays");
 });

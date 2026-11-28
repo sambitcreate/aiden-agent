@@ -45,12 +45,12 @@ test("a turn that excludes design_system gets no DESIGN.md glue and no prompt bu
   assert.equal(designMdLive(true, new Set(["write_file"])), true);
   assert.equal(designMdLive(false, undefined), false);
   assert.equal(designMdLive(true, excluded), false);
-  // With the tool excluded, the prompt is the flag-off section, which never names it.
-  assert.doesNotMatch(designModePromptSection(designMdLive(true, excluded)), /design_system/u);
-  assert.match(designModePromptSection(designMdLive(true, undefined)), /design_system/u);
+  // With the tool excluded, the section has no DESIGN.md bullet, so it never names it.
+  assert.doesNotMatch(designModePromptSection(designMdLive(true, excluded), "limited"), /design_system/u);
+  assert.match(designModePromptSection(designMdLive(true, undefined), "limited"), /design_system/u);
 });
 
-function fakes() {
+function fakeTurn() {
   const calls: string[] = [];
   const mdTurn = {
     statusSentence: async () => {
@@ -61,39 +61,27 @@ function fakes() {
       calls.push(`md.settle ${delivered}`);
     },
   };
-  const v1 = {
-    offerFor: async () => {
-      calls.push("v1.offer");
-      return "Offer tokens.";
-    },
-    settle: async (folder: string, delivered: boolean) => {
-      calls.push(`v1.settle ${folder} ${delivered}`);
-    },
-  };
-  return { calls, mdTurn, v1 };
+  return { calls, mdTurn };
 }
 
-test("with the live flag on, the DESIGN.md sentence replaces the tokens offer, and settle settles the DESIGN.md turn", async () => {
-  const { calls, mdTurn, v1 } = fakes();
-  const notes = createDesignNoteOffers({ live: true, folderPath: "/ws", offerable: true, mdTurn, v1, signal: new AbortController().signal, log: () => undefined });
+test("flag on it carries the DESIGN.md sentence, and settle settles the DESIGN.md turn", async () => {
+  const { calls, mdTurn } = fakeTurn();
+  const notes = createDesignNoteOffers({ live: true, mdTurn, signal: new AbortController().signal, log: () => undefined });
   assert.equal(await notes.statusLine("Canvas: 1 page."), 'Canvas: 1 page. DESIGN.md: "DESIGN.md" (0 errors, 0 warnings).');
   notes.settle(true);
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(calls, ["md.sentence", "md.settle true"]);
 });
 
-test("with the live flag off, the tokens offer is made and settled for its folder, as before", async () => {
-  const { calls, mdTurn, v1 } = fakes();
-  const notes = createDesignNoteOffers({ live: false, folderPath: "/ws", offerable: true, mdTurn: undefined, v1, signal: new AbortController().signal, log: () => undefined });
-  assert.equal(await notes.statusLine("Canvas: 1 page."), "Canvas: 1 page. Offer tokens.");
-  notes.settle(false);
+test("flag off the status line is the plain line, and nothing is read or settled", async () => {
+  const { calls, mdTurn } = fakeTurn();
+  const notes = createDesignNoteOffers({ live: false, mdTurn: undefined, signal: new AbortController().signal, log: () => undefined });
+  assert.equal(await notes.statusLine("Canvas: 1 page."), "Canvas: 1 page.");
   notes.settle(true);
+  // A flag-on turn without the DESIGN.md glue (design_system excluded) is plain too.
+  const bare = createDesignNoteOffers({ live: true, mdTurn: undefined, signal: new AbortController().signal, log: () => undefined });
+  assert.equal(await bare.statusLine("Canvas: 1 page."), "Canvas: 1 page.");
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(calls, ["v1.offer", "v1.settle /ws false"], "settled once");
+  assert.deepEqual(calls, []);
   void mdTurn;
-
-  const unofferable = fakes();
-  const quiet = createDesignNoteOffers({ live: false, folderPath: "/ws", offerable: false, mdTurn: undefined, v1: unofferable.v1, signal: new AbortController().signal, log: () => undefined });
-  assert.equal(await quiet.statusLine("Canvas: 1 page."), "Canvas: 1 page.");
-  assert.deepEqual(unofferable.calls, []);
 });

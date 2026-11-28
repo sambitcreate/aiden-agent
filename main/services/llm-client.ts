@@ -592,7 +592,6 @@ import {
   designLiveChats,
   designModeConsent,
   designPendingEntries,
-  designSystemOffers,
   designAppRoots,
   designAppServers,
   designMdOffers,
@@ -608,6 +607,7 @@ import {
   createDesignCanvasTools,
   designCanvasToolsAllowed,
   designModePromptSection,
+  type DesignPromptMode,
   designModeToolAllowed,
 } from "./design-canvas/canvas-tools.js";
 import { createDesignModeTool, DESIGN_MODE_TOOL_NAME } from "./design-canvas/design-mode-tool.js";
@@ -621,8 +621,7 @@ import {
   createDesignPageScanner,
   createWrittenRouteTurn,
   placeWrittenPagesOnCanvas,
-  writtenFilePath,
-  writtenPagePath,
+  routeWrittenFile,
   writtenRouteData,
 } from "./design-canvas/written-pages.js";
 import { readCanvasConfig } from "./design-canvas/canvas-config.js";
@@ -3089,12 +3088,11 @@ async function prepareGeneration(
   const designMdOn = designMdLive(designLive, options.excludeToolNames);
   /** 3b (S86): this turn offers design_app, so the design-mode section teaches the live app. */
   let liveAppsOn = false;
-  // The first time design mode is on in a workspace with no design/tokens.css,
-  // the note also offers a tokens file and a specimen page built from the
-  // workspace's own colours and fonts (see `DesignSystemOffers`): only where
-  // this chat could write them, and Aiden writes them only once the person
-  // says yes in chat. With the live flag on, the DESIGN.md draft offer takes
-  // its place under the same conditions.
+  /** 3d (S114): v1's section with the flag off; with it on, live when design_app is offered, else limited. */
+  const designPromptMode = (): DesignPromptMode => (!designLive ? "v1" : liveAppsOn ? "live" : "limited");
+  // With the live flag on, the note carries the DESIGN.md sentence, and its
+  // draft offer only where this chat could write the file; Aiden writes it
+  // only once the person says yes in chat. (3d, S114: v1's tokens offer is gone.)
   const designSystemOfferable = designOfferable({
     bot: botContext !== undefined,
     assistantMode: Boolean(assistantMode),
@@ -3235,7 +3233,7 @@ async function prepareGeneration(
       canvasStatusOffered = true;
       generationExtensions.push({
         id: "aiden.design-canvas",
-        systemPrompt: designModePromptSection(designMdOn, liveAppsOn),
+        systemPrompt: designModePromptSection(designMdOn, designPromptMode()),
         tools: [...canvasTools, ...designModeTool],
       });
     } else {
@@ -3259,6 +3257,11 @@ async function prepareGeneration(
   let resetWrittenRoutes: (() => void) | undefined;
   /** Inspects each page `placeWrittenPage` placed; its reports join the next request (see `withDesignInspectNote`). */
   let writtenPageInspector: WrittenPageInspector | undefined;
+  /**
+   * 3d (S114), live apps on: design/ pages don't land by themselves, but a
+   * written one a file frame shows is still checked, so its report follows.
+   */
+  let inspectWrittenPage: ((relativePath: string) => void) | undefined;
   /** Puts the design/ pages a terminal command made or changed on the canvas, as `placeWrittenPage` does for file tools. */
   let commandPages: { started(): void; finished(): void } | undefined;
   if (
@@ -3298,7 +3301,8 @@ async function prepareGeneration(
       },
     });
     writtenPageInspector = inspector;
-    placeWrittenPage = (relativePath) => {
+    if (designLive) inspectWrittenPage = (relativePath) => inspector.written(relativePath);
+    else placeWrittenPage = (relativePath) => {
       recentWrittenPages.note(params.chatId, relativePath);
       pagesPlaced = pagesPlaced.then(async () => {
         // The write already happened, so Stop does not drop it; design mode
@@ -3380,8 +3384,9 @@ async function prepareGeneration(
     }
     // A design turn notes design/ before its first command; a turn that
     // enters design mode later notes it when its next command starts.
-    let pageScanner = canvasStatusOffered ? createDesignPageScanner(pageRoot) : undefined;
-    commandPages = {
+    // 3d (S114): with live apps on, a command's design/ pages don't land, so there's no scanner.
+    let pageScanner = canvasStatusOffered && !designLive ? createDesignPageScanner(pageRoot) : undefined;
+    if (!designLive) commandPages = {
       started: () => {
         if (!pageScanner && canvasToolsEntered) pageScanner = createDesignPageScanner(pageRoot);
       },
@@ -3419,10 +3424,7 @@ async function prepareGeneration(
   let canvasStatusNoted = false;
   const designNoteOffers = createDesignNoteOffers({
     live: designMdOn,
-    folderPath,
-    offerable: designSystemOfferable,
     mdTurn: designMdTurn,
-    v1: designSystemOffers,
     signal,
     log: (message, error) => logger.warn("design", message, error),
   });
@@ -3431,7 +3433,7 @@ async function prepareGeneration(
     // The canvas is shared by the workspace's chats; the comment count is this chat's own.
     const own = { ...doc, comments: doc.comments.filter((comment) => comment.chatId === params.chatId) };
     const line = canvasPromptLine(own, await designPages.view(doc, workspaceId), params.designView?.selection);
-    // With the live flag on, the DESIGN.md sentence (and its draft offer) replaces v1's tokens offer.
+    // With the live flag on, the line carries the DESIGN.md sentence (and its draft offer).
     return designNoteOffers.statusLine(line);
   };
   const withCanvasStatus = async (context: AgentContext): Promise<AgentContext> => {
@@ -3456,8 +3458,9 @@ async function prepareGeneration(
     // The prompt is read-only here: the section is patched into the
     // transcript once, as browser discovery and MCP servers do, and again
     // only if the live flag changed its text since.
-    const messages = withDesignModeSection(context.messages, designModePromptSection(designMdOn, liveAppsOn), Date.now(), {
-      live: designMdOn || liveAppsOn,
+    const messages = withDesignModeSection(context.messages, designModePromptSection(designMdOn, designPromptMode()), Date.now(), {
+      // 3d (S114): the flag, so a flag-on turn without design_system or design_app still swaps a stored v1 section.
+      live: designLive,
     });
     if (additions.length === 0 && messages === context.messages) return withCanvasStatus(context);
     return withCanvasStatus({ ...context, messages, tools: [...(context.tools ?? []), ...additions] });
@@ -3501,6 +3504,7 @@ async function prepareGeneration(
     placeCanvasArtifacts,
     placeWrittenPage,
     placeWrittenRoute,
+    inspectWrittenPage,
     commandPages,
     enteredCanvasTools,
     // On a /visualize turn and in design mode the visual tools are declared
@@ -3921,6 +3925,7 @@ export const llmClient = {
       placeCanvasArtifacts,
       placeWrittenPage,
       placeWrittenRoute,
+      inspectWrittenPage,
       commandPages,
       enteredCanvasTools,
       preloadedOnDemandTools,
@@ -6429,13 +6434,12 @@ export const llmClient = {
             // A failed command may still have written files, so only a denied call is skipped.
             if (!denied) notifyWorkspaceFilesTouched(workspaceId, event.toolName);
             // A write or edit that finished before Stop took effect already changed the file on disk.
-            if (placeWrittenPage && !denied && !event.isError) {
-              const page = writtenPagePath(event.toolName, event.result?.details);
-              if (page) placeWrittenPage(page);
-              else {
-                const file = placeWrittenRoute ? writtenFilePath(event.toolName, event.result?.details) : undefined;
-                if (file) placeWrittenRoute?.(file);
-              }
+            if (!denied && !event.isError) {
+              routeWrittenFile(event.toolName, event.result?.details, {
+                ...(placeWrittenPage ? { placePage: placeWrittenPage } : {}),
+                ...(inspectWrittenPage ? { inspectPage: inspectWrittenPage } : {}),
+                ...(placeWrittenRoute ? { placeRoute: placeWrittenRoute } : {}),
+              });
             }
             // A command, even a failed one, may have written or copied pages into design/.
             if (!denied && DESIGN_PAGE_COMMAND_TOOLS.has(event.toolName)) commandPages?.finished();
@@ -6915,14 +6919,11 @@ export const llmClient = {
               onFileWrite: (producedFile) => {
                 const toolName = producedFile.operation === "written" ? "write_file" : "edit_file";
                 notifyWorkspaceFilesTouched(workspaceId, toolName);
-                if (placeWrittenPage) {
-                  const page = writtenPagePath(toolName, { producedFile });
-                  if (page) placeWrittenPage(page);
-                  else {
-                    const file = placeWrittenRoute ? writtenFilePath(toolName, { producedFile }) : undefined;
-                    if (file) placeWrittenRoute?.(file);
-                  }
-                }
+                routeWrittenFile(toolName, { producedFile }, {
+                  ...(placeWrittenPage ? { placePage: placeWrittenPage } : {}),
+                  ...(inspectWrittenPage ? { inspectPage: inspectWrittenPage } : {}),
+                  ...(placeWrittenRoute ? { placeRoute: placeWrittenRoute } : {}),
+                });
               },
             }),
           )

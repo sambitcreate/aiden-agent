@@ -14,7 +14,7 @@ import { lstat } from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import { readCanvasConfig, type CanvasConfig } from "../canvas-config.js";
-import { DESIGN_MD_PROMPT_BULLET, LIVE_APP_PROMPT_MARKER } from "../canvas-tools.js";
+import { DESIGN_MD_BULLET_PREFIX, LIMITED_APP_PROMPT_MARKER, LIVE_APP_PROMPT_MARKER } from "../canvas-tools.js";
 import { locateDesignMd, type DesignAppRoots } from "./locate.js";
 import type { DesignMdOffers } from "./offers.js";
 import { designMdStatusSentence } from "./status.js";
@@ -181,9 +181,11 @@ export function withDesignModeSection(
   // Flag off (or design_system excluded): keep any copy already there, as
   // before the flag, unless it carries the DESIGN.md bullet, which names a
   // tool this turn doesn't have.
-  // 3b (S86): nor the live section, which names design_app.
-  const namesDesignMd =
-    typeof latest === "string" && (latest.includes(DESIGN_MD_PROMPT_BULLET) || latest.includes(LIVE_APP_PROMPT_MARKER));
-  if (latest === text || (!options.live && latest !== undefined && !namesDesignMd)) return messages;
+  // 3b (S86): nor the live section, which names design_app. 3d (S114): nor the
+  // limited section, which a flag-off turn swaps back to v1's.
+  const flagOnSection =
+    typeof latest === "string" &&
+    (latest.includes(DESIGN_MD_BULLET_PREFIX) || latest.includes(LIVE_APP_PROMPT_MARKER) || latest.includes(LIMITED_APP_PROMPT_MARKER));
+  if (latest === text || (!options.live && latest !== undefined && !flagOnSection)) return messages;
   return [...messages, { role: "system", content: "", sections: { [DESIGN_MODE_SECTION]: text }, timestamp: now } as unknown as AgentMessage];
 }

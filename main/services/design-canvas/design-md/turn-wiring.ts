@@ -1,10 +1,9 @@
 /**
  * How a design-mode turn wires DESIGN.md in (spec §6.9, R5–R7): which chats
- * may get a draft offer, when the per-turn DESIGN.md glue exists, and which
- * offer the canvas status note carries and settles. llm-client calls these;
+ * may get a draft offer, when the per-turn DESIGN.md glue exists, and the
+ * sentence the canvas status note carries and settles. llm-client calls these;
  * they hold the branches so a test fails if the wiring is lost.
  */
-import type { DesignSystemOffers } from "../design-system-offers.js";
 import type { DesignMdTurn, DesignMdTurnDeps } from "./turn.js";
 
 /** A chat that could write the offered files: not a Bot, the assistant, windowless, read-only or without write_file. */
@@ -55,42 +54,24 @@ export function designMdTurnDeps(input: {
 }
 
 /**
- * The offer the canvas status note carries, and its settle. With the live
- * flag on, the DESIGN.md sentence (with its draft offer) replaces v1's tokens
- * offer; with it off, the tokens offer is made where the chat could write it.
+ * The sentence the canvas status note carries, and its settle. With the live
+ * flag on, it's the DESIGN.md sentence (with its draft offer); with it off,
+ * the plain line (3d, S114: v1's tokens offer is gone in both).
  */
 export function createDesignNoteOffers(input: {
   live: boolean;
-  folderPath: string | undefined;
-  offerable: boolean;
   mdTurn: Pick<DesignMdTurn, "statusSentence" | "settle"> | undefined;
-  v1: Pick<DesignSystemOffers, "offerFor" | "settle">;
   signal: AbortSignal;
   log: (message: string, error?: unknown) => void;
 }): { statusLine(line: string): Promise<string>; settle(delivered: boolean): void } {
-  let offeredFolder: string | undefined;
   return {
     statusLine: async (line) => {
-      if (input.live) {
-        const sentence = input.mdTurn ? await input.mdTurn.statusSentence(input.signal) : "";
-        return sentence ? `${line} ${sentence}` : line;
-      }
-      if (!input.folderPath || !input.offerable) return line;
-      try {
-        const offer = await input.v1.offerFor(input.folderPath, input.signal);
-        if (offer) offeredFolder = input.folderPath;
-        return offer ? `${line} ${offer}` : line;
-      } catch (error) {
-        if (!input.signal.aborted) input.log("Could not read the workspace's colours and fonts for a design-system offer.", error);
-        return line;
-      }
+      if (!input.live || !input.mdTurn) return line;
+      const sentence = await input.mdTurn.statusSentence(input.signal);
+      return sentence ? `${line} ${sentence}` : line;
     },
     settle: (delivered) => {
       input.mdTurn?.settle(delivered).catch((error: unknown) => input.log("Could not settle the DESIGN.md offer.", error));
-      if (offeredFolder === undefined) return;
-      const folder = offeredFolder;
-      offeredFolder = undefined;
-      void input.v1.settle(folder, delivered);
     },
   };
 }

@@ -14,7 +14,6 @@ import { designTurnPages, type DesignCanvasViews } from "./views.js";
 import {
   EARLIER_PAGES_LIMIT,
   isAutoPlacedPagePath,
-  isShowablePage,
   pagesWrittenInChat,
   placeWrittenPagesOnCanvas,
   writtenAppRoute,
@@ -65,17 +64,14 @@ export function createDesignEntry(deps: {
     const data = writtenRouteData(snapshot, config);
     const timeline = deps.recent.merged(
       chat.id,
-      pagesWrittenInChat(chat.messages, { isRouteFile: (relativePath) => writtenRoutePattern(relativePath, data) !== null }),
-    );
+      // 3d (S114): with live apps on, design/ pages don't land by themselves; routes (and `/`) do.
+      pagesWrittenInChat(chat.messages, { isRouteFile: (relativePath) => writtenRoutePattern(relativePath, data) !== null, includeHtmlPages: false }),
+    ).filter((relativePath) => !isAutoPlacedPagePath(relativePath));
     const paths: string[] = [];
     const routes: WrittenAppRoute[] = [];
-    // Newest first, up to 12 across both kinds: a page counts once it still exists, a route once it maps to one.
-    for (let index = timeline.length - 1; index >= 0 && paths.length + routes.length < EARLIER_PAGES_LIMIT; index -= 1) {
+    // Newest first, up to 12: a route counts once it maps to one.
+    for (let index = timeline.length - 1; index >= 0 && routes.length < EARLIER_PAGES_LIMIT; index -= 1) {
       const relativePath = timeline[index]!;
-      if (isAutoPlacedPagePath(relativePath)) {
-        if (await isShowablePage(workspaceRoot, relativePath)) paths.unshift(relativePath);
-        continue;
-      }
       const route = writtenAppRoute(relativePath, data);
       if (route && !routes.some((entry) => entry.appRoot === route.appRoot && entry.route === route.route)) routes.unshift(route);
     }

@@ -201,6 +201,7 @@ import {
   cleanupRetiredMcpServerCredentials,
 } from "./services/mcp-credential-cleanup.js";
 import { cleanUpRetiredModelScoring } from "./services/retired-model-scoring-cleanup.js";
+import { cleanUpRetiredDesignSystemOffers } from "./services/design-canvas/retired-design-system-offers.js";
 import { resetOnboardingData } from "./services/onboarding-reset.js";
 import {
   geminiLiveService,
@@ -2526,6 +2527,10 @@ if (!ownsSingleInstanceLock) {
       // Delete-only: the retired benchmark, Artificial Analysis and pace
       // leftovers. Local, never awaited, never rejects; retried next launch.
       void cleanUpRetiredModelScoring();
+      // Delete-only: v1's design-system offer log and its key (3d, S114). Local, never rejects.
+      void cleanUpRetiredDesignSystemOffers(undefined, {
+        onFailure: (file) => logger.debug("design-mode", `Could not remove ${file}; it will be retried next launch.`),
+      });
       const packagedSubagentSoak = await loadSubagentPackagedSoakSession({
         isPackaged: isPackagedRuntime(),
       });
