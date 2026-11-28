@@ -508,12 +508,6 @@ test("a late refusal from the previous chat cannot restore its side question int
   }
 });
 
-test("chat pane hides the generic tool phase when a chronological row owns it", () => {
-  const pane = source("./chat-pane.tsx");
-  assert.match(pane, /toolVisible:\s*chronologicalLiveRows\?\.some\(\(row\) => row\.kind === "activity"[\s\S]*?step\.status === "running"/u);
-  assert.match(pane, /resolveVisibleAgentActivity\(timelineActivity/u);
-});
-
 test("chat pane owns its own per-chat reset instead of relying on a remount", () => {
   const pane = source("./chat-pane.tsx");
 

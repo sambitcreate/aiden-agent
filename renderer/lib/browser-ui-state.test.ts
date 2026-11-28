@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
 import { acceptBrowserState, BROWSER_DEVICE_PRESETS, BROWSER_NATIVE_OCCLUDER_SELECTOR, browserAnnotationRegion, browserOcclusionMutated, browserOcclusionScrolled, browserBoundsFromRect, browserElementAtPoint, browserNativeViewObstructed, enqueueBrowserPresentation, resizeBrowserViewport, savedBrowserScreenshotPath, validBrowserViewport, visibleBrowserNativeOccluders } from "./browser-ui-state.js";
-import type { BrowserElement, BrowserState } from "../shared/browser.js";
+import { chatBrowserState, type BrowserElement, type BrowserState } from "../shared/browser.js";
 import { browserAnnotationCropBounds } from "./browser-annotation-capture.js";
 
 test("browser updates reject another workspace and an older revision", () => {
@@ -11,6 +11,22 @@ test("browser updates reject another workspace and an older revision", () => {
   assert.equal(acceptBrowserState(current, { workspaceId: "a", revision: 4 } as BrowserState, "a"), current);
   const next = { workspaceId: "a", revision: 6 } as BrowserState;
   assert.equal(acceptBrowserState(current, next, "a"), next);
+});
+
+test("a chat restores its selected live browser guest while another chat uses the workspace browser", () => {
+  const state = {
+    activeTabId: "b",
+    tabs: [
+      { id: "a1", presentationChatId: "first" },
+      { id: "a2", presentationChatId: "first", selectedInChat: true },
+      { id: "b", presentationChatId: "second" },
+    ],
+  } as BrowserState;
+  const first = chatBrowserState(state, "first");
+  assert.deepEqual(first.tabs.map((tab) => tab.id), ["a1", "a2"]);
+  assert.equal(first.activeTabId, "a2");
+  assert.equal(chatBrowserState(state, "third").activeTabId, null);
+  assert.equal(chatBrowserState(state, "second").activeTabId, "b");
 });
 
 test("device dimensions have bounded area and lock ratio without accepting invalid edits", () => {

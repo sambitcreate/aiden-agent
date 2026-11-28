@@ -2188,7 +2188,7 @@ async function prepareGeneration(
     workspace &&
     canUseBrowserTools({ permission, rendererOwner: declaresWindow, assistantMode, bot: Boolean(botContext) });
   const browserState = browserEligible
-    ? await (await import("./browser/service.js")).browserService.getState(workspace.id)
+    ? await (await import("./browser/service.js")).browserService.getState(workspace.id, params.chatId)
     : undefined;
   const browserEnabled =
     browserState &&
@@ -2217,7 +2217,7 @@ async function prepareGeneration(
           },
           port: {
             getState: async () =>
-              (await import("./browser/service.js")).browserService.getState(workspace.id),
+              (await import("./browser/service.js")).browserService.getState(workspace.id, params.chatId),
             command: async (command, browserSignal, callId) => {
               const { browserService } = await import("./browser/service.js");
               const approvedAction = callId ? browserActionApprovals.get(callId) : undefined;
@@ -2230,12 +2230,14 @@ async function prepareGeneration(
                       browserService.getApprovalTarget(
                         workspace.id,
                         approvedAction.approval.target.tabId,
+                        params.chatId,
                       ),
                     )
                 : undefined;
               beforeEffect?.();
               const liveBrowserOwner = getOwner();
               return browserService.command(workspace.id, command, {
+                presentationChatId: params.chatId,
                 source: "agent",
                 signal: browserSignal,
                 supportsImages,
@@ -2257,7 +2259,7 @@ async function prepareGeneration(
       if (!active.has(streamId) || !workspace) throw new Error("This browser generation is no longer active.");
       const current = await configStore.getWorkspace(workspace.id);
       if (!current || current.permission !== workspace.permission || current.folderPath !== workspace.folderPath) throw new Error("Browser workspace access changed. Start a new response.");
-      const state = await (await import("./browser/service.js")).browserService.getState(workspace.id);
+      const state = await (await import("./browser/service.js")).browserService.getState(workspace.id, params.chatId);
       if (!resolveBrowserAgentAccess(state.defaults.agentAccess, state.agentAccessOverride)) throw new Error("Browser agent access is disabled for this workspace.");
     },
   ) : undefined;
@@ -4231,6 +4233,7 @@ export const llmClient = {
     let full = "";
     let reasoning = "";
     let lastAssistantMessage: AssistantMessage | undefined;
+    const pendingToolCalls = new Set<string>();
     let currentAssistantTurnHadVisibleText = false;
     let currentAssistantTurnHadReasoningDelta = false;
     let currentAssistantTurnStart = { full: 0, reasoning: 0, steps: 0 };
@@ -5559,8 +5562,8 @@ export const llmClient = {
               const { browserService } = await import("./browser/service.js");
               const args = context.args as Record<string, unknown>;
               const tabId = typeof args.tabId === "string" ? args.tabId
-                : browserSelection.initialized ? browserSelection.tabId : (await browserService.getState(workspaceId)).activeTabId ?? undefined;
-              return tabId ? browserService.getApprovalTarget(workspaceId, tabId).url : undefined;
+                : browserSelection.initialized ? browserSelection.tabId : (await browserService.getState(workspaceId, params.chatId)).activeTabId ?? undefined;
+              return tabId ? browserService.getApprovalTarget(workspaceId, tabId, params.chatId).url : undefined;
             });
             const pageRuleOwner = {
               ...(workspaceId ? { workspaceId } : {}),
@@ -5854,7 +5857,7 @@ export const llmClient = {
             try {
               const { browserService } = await import("./browser/service.js");
               if (!browserSelection.initialized) {
-                const state = await browserService.getState(workspaceId);
+                const state = await browserService.getState(workspaceId, params.chatId);
                 browserSelection.tabId = state.activeTabId ?? undefined;
                 browserSelection.initialized = true;
               }
@@ -5865,7 +5868,7 @@ export const llmClient = {
               browserActionApproval = prepareBrowserToolApproval(
                 context.toolCall.name,
                 args,
-                browserService.getApprovalTarget(workspaceId, tabId),
+                browserService.getApprovalTarget(workspaceId, tabId, params.chatId),
               );
               args.tabId = browserActionApproval.target.tabId;
               summary = browserActionApproval.summary;
@@ -5985,7 +5988,7 @@ export const llmClient = {
                   browserActionApproval,
                   context.toolCall.name,
                   args,
-                  browserService.getApprovalTarget(workspaceId, browserActionApproval.target.tabId),
+                  browserService.getApprovalTarget(workspaceId, browserActionApproval.target.tabId, params.chatId),
                 );
                 browserActionApprovals.set(context.toolCall.id, {
                   approval: browserActionApproval,
@@ -6046,6 +6049,7 @@ export const llmClient = {
           case "message_start":
             if (event.message.role === "assistant") {
               requestUsage.started();
+              pendingToolCalls.clear();
               currentAssistantTurnHadVisibleText = false;
               currentAssistantTurnHadReasoningDelta = false;
               currentAssistantTurnContinuesCutOff = continuingCutOffReply;
@@ -6066,30 +6070,18 @@ export const llmClient = {
               timeline.thinkingStarted();
               noteModelBecameReady();
             } else if (e.type === "thinking_end") timeline.thinkingEnded();
-            if (e.type === "toolcall_start") {
-              // Tool-call arguments can stream for a long while (a full HTML
-              // artifact for render_artifact) before execution begins. Open the
-              // pending step now so the transcript shows live activity through
-              // that window for every provider; execution events upgrade it.
-              // Some OpenAI-compatible backends stream an empty id first and
-              // backfill it later, so wait for a usable one.
-              const block = e.partial.content[e.contentIndex];
-              if (
-                block?.type === "toolCall" &&
-                typeof block.id === "string" &&
-                block.id &&
-                typeof block.name === "string"
-              ) {
-                timeline.toolStarted(block.id, block.name, {});
-              }
-            }
-            if (e.type === "toolcall_delta" || e.type === "toolcall_end") {
-              // Stream a render_artifact call's partial HTML to a draft preview.
-              const block = e.partial.content[e.contentIndex];
-              if (block?.type === "toolCall" && typeof block.id === "string" && block.id) {
+            if (e.type === "toolcall_start" || e.type === "toolcall_delta" || e.type === "toolcall_end") {
+              const block = e.type === "toolcall_end" ? e.toolCall : e.partial.content[e.contentIndex];
+              if (block?.type === "toolCall" && typeof block.id === "string" && block.id && typeof block.name === "string" && block.name) {
+                // Compatible providers may supply the call identity after the
+                // first chunk. Publish it once while arguments are still arriving.
+                if (!pendingToolCalls.has(block.id)) {
+                  pendingToolCalls.add(block.id);
+                  timeline.toolStarted(block.id, block.name, {});
+                }
                 if (e.type === "toolcall_delta") {
                   visualDrafts.delta(block.id, block.name, block.arguments);
-                } else {
+                } else if (e.type === "toolcall_end") {
                   visualDrafts.end(block.id);
                 }
               }

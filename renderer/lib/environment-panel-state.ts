@@ -12,6 +12,7 @@ export type EnvironmentSurface = "quick-view" | "tools";
 export type EnvironmentSurfaceMode = "closed" | "tools-pinned" | "tools-floating";
 
 export interface EnvironmentSurfaceState {
+  navigationOwner?: string | null;
   quickViewOpen: boolean;
   toolsOpen: boolean;
   toolsTab: EnvironmentPanelTab;
@@ -20,6 +21,7 @@ export interface EnvironmentSurfaceState {
 }
 
 export type EnvironmentSurfaceAction =
+  | { type: "restore-navigation"; owner: string | null; toolsTab: EnvironmentPanelTab; openTabs: EnvironmentPanelTab[] }
   | { type: "toggle-quick-view" }
   | { type: "show-quick-view" }
   | { type: "close-quick-view" }
@@ -128,6 +130,8 @@ export function reduceEnvironmentSurfaceState(
 ): EnvironmentSurfaceState {
   const tabs = state.openTabs ?? [state.toolsTab];
   switch (action.type) {
+    case "restore-navigation":
+      return { ...state, navigationOwner: action.owner, toolsTab: action.toolsTab, openTabs: action.openTabs };
     case "toggle-quick-view":
       return state.quickViewOpen
         ? {

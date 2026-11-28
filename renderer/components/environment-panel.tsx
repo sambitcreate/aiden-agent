@@ -14,7 +14,7 @@ import { stageComposerText } from "../lib/composer-draft-store";
 import type { WorkspaceArtifactsChangedEvent, WorkspaceArtifactView } from "../shared/workspace-artifacts";
 import { sendPromptToChat } from "../lib/chat-prompt-bridge";
 import { TerminalSideTarget, useWorkspaceTerminal, TERMINAL_PANEL_EVENT } from "./terminal-drawer";
-import type { BrowserState } from "../shared/browser";
+import { chatBrowserState, type BrowserState } from "../shared/browser";
 import { acceptBrowserState } from "../lib/browser-ui-state";
 import { cn } from "../lib/ui-utils";
 import { setRendererLifecycleGuard } from "../lib/lifecycle-guard";
@@ -111,6 +111,7 @@ import {
   availableEnvironmentPanelTabs,
   environmentPanelViewOrder,
   parseEnvironmentOpenTabs,
+  openEnvironmentTab,
   normalizeEnvironmentPanelTab,
   parseEnvironmentPanelTab,
   reduceEnvironmentSurfaceState,
@@ -508,16 +509,25 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     React.useState<EnvironmentSubagentContext>(EMPTY_SUBAGENT_CONTEXT);
   const [activeChat, setActiveChatState] =
     React.useState<EnvironmentActiveChat>(EMPTY_ACTIVE_CHAT);
-  const setActiveChat = React.useCallback(
-    (chatId: string | null, workspaceId: string | null) => {
-      setActiveChatState((current) =>
-        current.chatId === chatId && current.workspaceId === workspaceId
-          ? current
-          : { chatId, workspaceId },
-      );
-    },
-    [],
-  );
+  const navigationOwner = activeChat.chatId && JSON.stringify([activeChat.workspaceId, activeChat.chatId]);
+  const setActiveChat = React.useCallback((chatId: string | null, workspaceId: string | null) => {
+    setActiveChatState((current) => current.chatId === chatId && current.workspaceId === workspaceId
+      ? current : { chatId, workspaceId });
+  }, []);
+  React.useLayoutEffect(() => {
+    if ((surfaceState.navigationOwner ?? null) === navigationOwner) return;
+    const suffix = navigationOwner ? `.${navigationOwner}` : "";
+    const saved = localStorage.getItem(TAB_STORAGE_KEY + suffix);
+    let toolsTab = parseEnvironmentPanelTab(saved) ?? "new-tab";
+    let openTabs = parseEnvironmentOpenTabs(localStorage.getItem(TABS_STORAGE_KEY + suffix), toolsTab);
+    if (terminal.placement !== "side" || !terminal.requestedOpen) {
+      openTabs = openTabs.filter((item) => item !== "terminal");
+      if (!openTabs.length) openTabs = ["new-tab"];
+      if (toolsTab === "terminal") toolsTab = openTabs[openTabs.length - 1];
+    }
+    setReviewMode(localStorage.getItem(`aiden-agent.environment.review-mode${suffix}`) === "compare" ? "compare" : "changes");
+    dispatchSurface({ type: "restore-navigation", owner: navigationOwner, toolsTab, openTabs });
+  }, [navigationOwner, surfaceState.navigationOwner, terminal.placement, terminal.requestedOpen]);
   const subagentsRef = React.useRef<EnvironmentSubagentContext>(EMPTY_SUBAGENT_CONTEXT);
   const commitSubagents = React.useCallback(
     (
@@ -789,9 +799,20 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     [activeId, showTools],
   );
 
-  React.useEffect(() => browserApi.onEvent((event) => {
-    if (event.type === "show" && event.workspaceId === (activeId ?? "default")) showTools("browser");
-  }), [activeId, showTools]);
+  React.useLayoutEffect(() => browserApi.onEvent((event) => {
+    if (event.type !== "show") return;
+    if (event.presentationChatId && (event.presentationChatId !== activeChat.chatId || event.workspaceId !== activeChat.workspaceId)) {
+      // A background generation can open a page while a different chat is on
+      // screen. Remember its destination without opening the foreground panel.
+      const suffix = `.${JSON.stringify([event.workspaceId, event.presentationChatId])}`;
+      const previous = parseEnvironmentPanelTab(localStorage.getItem(TAB_STORAGE_KEY + suffix)) ?? "new-tab";
+      const tabs = openEnvironmentTab(parseEnvironmentOpenTabs(localStorage.getItem(TABS_STORAGE_KEY + suffix), previous), "browser");
+      localStorage.setItem(TABS_STORAGE_KEY + suffix, JSON.stringify({ version: 1, tabs }));
+      localStorage.setItem(TAB_STORAGE_KEY + suffix, "browser");
+    } else if (event.workspaceId === (activeId ?? "default")) {
+      showTools("browser");
+    }
+  }), [activeId, activeChat, showTools]);
 
   const revealChatId = activeChat.chatId;
   React.useEffect(() => {
@@ -821,9 +842,10 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   const openReview = React.useCallback(
     (mode: EnvironmentReviewMode) => {
       setReviewMode(mode);
+      localStorage.setItem(`aiden-agent.environment.review-mode${navigationOwner ? `.${navigationOwner}` : ""}`, mode);
       showTools("review");
     },
-    [showTools],
+    [navigationOwner, showTools],
   );
 
   const syncSubagents = React.useCallback(
@@ -1342,18 +1364,22 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     setCancelAgent(() => handler ?? undefined);
   }, []);
 
-  React.useEffect(() => {
-    localStorage.setItem(TABS_STORAGE_KEY, JSON.stringify({ version: 1, tabs: surfaceState.openTabs ?? [surfaceState.toolsTab] }));
+  React.useLayoutEffect(() => {
+    // A switch commits the previous surface once before the restored
+    // navigation renders. Persist only navigation that belongs to this chat.
+    if ((surfaceState.navigationOwner ?? null) !== navigationOwner) return;
+    const suffix = navigationOwner ? `.${navigationOwner}` : "";
+    localStorage.setItem(TABS_STORAGE_KEY + suffix, JSON.stringify({ version: 1, tabs: surfaceState.openTabs ?? [surfaceState.toolsTab] }));
     localStorage.setItem(OPEN_STORAGE_KEY, surfaceState.toolsOpen ? "1" : "0");
     localStorage.setItem(QUICK_VIEW_OPEN_STORAGE_KEY, surfaceState.quickViewOpen ? "1" : "0");
-    localStorage.setItem(TAB_STORAGE_KEY, surfaceState.toolsTab);
-    localStorage.setItem(LAST_TOOLS_TAB_STORAGE_KEY, surfaceState.toolsTab);
+    localStorage.setItem(TAB_STORAGE_KEY + suffix, surfaceState.toolsTab);
+    if (!navigationOwner) localStorage.setItem(LAST_TOOLS_TAB_STORAGE_KEY, surfaceState.toolsTab);
     if (surfaceState.frontSurface) {
       localStorage.setItem(FRONT_SURFACE_STORAGE_KEY, surfaceState.frontSurface);
     } else {
       localStorage.removeItem(FRONT_SURFACE_STORAGE_KEY);
     }
-  }, [surfaceState]);
+  }, [surfaceState, navigationOwner]);
 
   const activeEditorState = editorState.workspaceId === activeId ? editorState : EMPTY_EDITOR_STATE;
   const displayedSubagentSelection = subagentPanelSelectionState(
@@ -1541,6 +1567,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       <SubagentHelperChatStoreContext.Provider value={helperChatStore}>
         <LinkOpenerProvider
           workspaceId={activeId ?? null}
+          presentationChatId={activeChat.workspaceId === activeId ? activeChat.chatId : null}
           workspaceFolder={activeWorkspace?.folderPath ?? null}
           onOpenWorkspaceFile={openFile}
         >
@@ -1707,23 +1734,26 @@ function EnvironmentPanelSurface({
   const { active } = useActiveWorkspace();
   const fullOpen = panel.toolsOpen;
   const terminal = useWorkspaceTerminal();
+  const chatId = panel.activeChat.workspaceId === active?.id ? panel.activeChat.chatId : null;
   const [browserState, setBrowserState] = React.useState<BrowserState | null>(null);
   const browserStateRef = React.useRef<BrowserState | null>(null);
   const browser = browserState?.workspaceId === active?.id ? browserState : null;
   const workspaceRef = React.useRef(active?.id);
+  const browserChatRef = React.useRef(chatId);
   React.useLayoutEffect(() => {
     workspaceRef.current = active?.id;
+    browserChatRef.current = chatId;
     browserStateRef.current = null;
     setBrowserState(null);
-  }, [active?.id]);
+  }, [active?.id, chatId]);
   const commitBrowserState = React.useCallback((next: BrowserState | null) => {
-    if (!next) return false;
+    if (!next || browserChatRef.current !== chatId) return false;
     const accepted = acceptBrowserState(browserStateRef.current, next, workspaceRef.current ?? "");
     if (accepted !== next) return false;
     browserStateRef.current = accepted;
     setBrowserState(accepted);
     return true;
-  }, []);
+  }, [chatId]);
   const surfaceRef = React.useRef<HTMLElement | null>(null);
   const activeTabRef = React.useRef<HTMLButtonElement | null>(null);
   const [browserFocusRequest, setBrowserFocusRequest] = React.useState<string | null>(null);
@@ -1731,7 +1761,7 @@ function EnvironmentPanelSurface({
   React.useLayoutEffect(() => {
     navigationIntentRef.current++;
     setBrowserFocusRequest(null);
-  }, [active?.id, fullOpen, panel.tab, panel.frontSurface, presented]);
+  }, [active?.id, chatId, fullOpen, panel.tab, panel.frontSurface, presented]);
   const handledSubagentFocusRef = React.useRef(0);
   const activeFileRequest =
     panel.fileRequest?.workspaceId === active?.id ? panel.fileRequest : null;
@@ -1740,16 +1770,15 @@ function EnvironmentPanelSurface({
   const runBrowser = async (command: Parameters<typeof browserApi.command>[1]) => {
     const owner = active?.id;
     if (!owner) return;
-    const result = await browserApi.command(owner, command);
-    if (workspaceRef.current !== owner) return;
+    const result = await browserApi.command(owner, command, chatId);
+    if (workspaceRef.current !== owner || browserChatRef.current !== chatId) return;
     // Keep snapshots monotonic while preserving the command's completion signal.
     // Callers validate navigation against this latest state and their own intent.
-    commitBrowserState(result.state);
+    commitBrowserState(chatBrowserState(result.state, chatId));
     const current = browserStateRef.current;
     if (current?.workspaceId !== owner) return;
     return { ...result, state: current };
   };
-  const chatId = panel.activeChat.chatId;
   const devices = useDeviceTabs(chatId, panel.devicesEnabled && fullOpen && panelTabs.includes("devices"));
   const [renamingDevice, setRenamingDevice] = React.useState<string | null>(null);
   const openTool = (tool: EnvironmentPanelTab) => {
@@ -1935,6 +1964,7 @@ function EnvironmentPanelSurface({
     ),
     files: () => (
       <FilesPanel
+        presentationChatId={chatId}
         workspace={active}
         active={presented && panel.tab === "files"}
         requestedPath={activeFileRequest?.path ?? null}
@@ -1950,6 +1980,8 @@ function EnvironmentPanelSurface({
       active && (
         <React.Suspense fallback={null}>
           <BrowserPanel
+            key={JSON.stringify([active.id, chatId])}
+            presentationChatId={chatId}
             workspaceId={active.id}
             integratedTabs
             onStateChange={commitBrowserState}

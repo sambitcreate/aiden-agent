@@ -16,6 +16,112 @@ import { observeNextBrowserMenu } from "./browser-native-menu";
 
 test.use({ workspaceSeed: true });
 
+test("switching chats restores each Environment browser and shows the launcher for an empty chat", async ({
+  aiden,
+}) => {
+  const { app, lmStudio, page } = aiden;
+  const server = createServer((request, response) => {
+    const title = request.url === "/background" ? "First chat background page"
+      : request.url === "/first" ? "First chat page" : "Second chat page";
+    response.writeHead(200, { "content-type": "text/html" });
+    response.end(`<title>${title}</title><h1>${title}</h1>`);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const firstUrl = `${baseUrl}/first`;
+  const secondUrl = `${baseUrl}/second`;
+  try {
+    await finishLmStudioOnboarding(page);
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1600, 900));
+    const composer = page.locator("textarea");
+    const sidebar = page.locator("[data-sidebar]");
+    const titleMenu = page.locator("[data-chat-title-menu]");
+    const chatButton = (title: string) => sidebar.getByRole("button", { name: new RegExp(`^${title}(?:,|$)`, "u") });
+    const createChat = async (title: string) => {
+      const prompt = `Create ${title} for the Environment test`;
+      const reply = `Ready in ${title}.`;
+      lmStudio.enqueueToolScenario!({ prompt, calls: [], finalText: reply });
+      await composer.fill(prompt);
+      await composer.press("Enter");
+      await expect(page.getByText(reply, { exact: true })).toBeVisible();
+      await titleMenu.click();
+      await page.getByRole("menuitem", { name: "Rename…" }).click();
+      const dialog = page.getByRole("dialog", { name: "Rename chat" });
+      await dialog.getByRole("textbox", { name: "Chat name" }).fill(title);
+      await dialog.getByRole("button", { name: "Save" }).click();
+      await expect(dialog).toBeHidden();
+      await expect(chatButton(title)).toBeVisible();
+    };
+    await createChat("First Environment chat");
+    await page.getByRole("button", { name: "New Agent", exact: true }).click();
+    await createChat("Second Environment chat");
+    await waitForToastsToClear(page);
+
+    const switchTo = async (title: string) => {
+      await chatButton(title).click();
+      await expect(titleMenu).toContainText(title);
+    };
+    const panel = page.getByRole("complementary", { name: "Environment work surface" });
+    const launcher = panel.getByRole("tabpanel", { name: "New tab" });
+    const address = launcher.getByRole("textbox", { name: "Open a URL" });
+    const visibleFixturePages = () => app.evaluate(({ BrowserWindow }, origin) =>
+      BrowserWindow.getAllWindows().flatMap((window) =>
+        window.contentView.children.flatMap((child) => {
+          if (!("webContents" in child) || !child.getVisible()) return [];
+          const url = (child as Electron.WebContentsView).webContents.getURL();
+          return url.startsWith(origin) ? [url] : [];
+        }),
+      ), baseUrl);
+    const openPage = async (url: string) => {
+      await address.fill(url);
+      await address.press("Enter");
+    };
+    const expectPage = async (title: string, url: string, otherTitle: string) => {
+      await expect(panel.getByRole("tab", { name: title, exact: true })).toHaveAttribute("aria-selected", "true");
+      await expect(panel.getByRole("tab", { name: otherTitle, exact: true })).toHaveCount(0);
+      await expect.poll(visibleFixturePages).toEqual([url]);
+    };
+
+    await switchTo("First Environment chat");
+    await page.locator("[data-environment-toggle]").click();
+    await openPage(firstUrl);
+    await expectPage("First chat page", firstUrl, "Second chat page");
+
+    await switchTo("Second Environment chat");
+    await expect(launcher).toBeVisible();
+    await expect(panel.getByRole("tab")).toHaveCount(1);
+    await expect.poll(visibleFixturePages).toEqual([]);
+    await openPage(secondUrl);
+    await expectPage("Second chat page", secondUrl, "First chat page");
+
+    await switchTo("First Environment chat");
+    await expectPage("First chat page", firstUrl, "Second chat page");
+    await switchTo("Second Environment chat");
+    await expectPage("Second chat page", secondUrl, "First chat page");
+
+    const chats = JSON.parse(readFileSync(path.join(aiden.userDataDir, "chats", "index.json"), "utf8")) as Array<{
+      id: string;
+      title: string;
+      workspaceId: string;
+    }>;
+    const firstChat = chats.find((chat) => chat.title === "First Environment chat");
+    expect(firstChat?.workspaceId).toBe(E2E_WORKSPACE_ID);
+    expect(chats.find((chat) => chat.title === "Second Environment chat")?.workspaceId).toBe(E2E_WORKSPACE_ID);
+    const backgroundUrl = `${baseUrl}/background`;
+    await page.evaluate(async ({ workspaceId, chatId, url }) => {
+      const ipc = (window as unknown as { aidenAPI: { ipc: { invoke(channel: string, ...args: unknown[]): Promise<unknown> } } }).aidenAPI.ipc;
+      await ipc.invoke("browser:command", workspaceId, { action: "create", url, show: true }, chatId);
+    }, { workspaceId: E2E_WORKSPACE_ID, chatId: firstChat!.id, url: backgroundUrl });
+    await expectPage("Second chat page", secondUrl, "First chat background page");
+    await switchTo("First Environment chat");
+    await expectPage("First chat background page", backgroundUrl, "Second chat page");
+    await expect(panel.getByRole("tab", { name: "First chat page", exact: true })).toBeVisible();
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test("workspace launcher opens tools on demand and returns after closing the last tab", async ({
   aiden,
 }) => {
@@ -136,6 +242,11 @@ test("Environment keeps its tabs, width and open state across a relaunch and ans
 }) => {
   let page = aiden.page;
   await finishLmStudioOnboarding(page);
+  const composer = page.locator("textarea");
+  await composer.fill("Remember the Environment tools in this saved chat.");
+  await composer.press("Enter");
+  await expect(page.locator("[data-chat-title-menu]")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
   const setWindowWidth = (width: number) =>
     aiden.app.evaluate(
       ({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 900),
@@ -172,9 +283,9 @@ test("Environment keeps its tabs, width and open state across a relaunch and ans
   await expect(page.locator("#environment-panel")).toHaveAttribute("data-state", "open");
   await expect(panel.getByRole("tab", { name: "Files", exact: true })).toHaveCount(1);
   await expect(panel.getByRole("tab", { name: "Context", exact: true })).toHaveCount(1);
-  await expect(panel.getByRole("tabpanel", { name: "New tab" })).toBeVisible();
+  await expect(panel.getByRole("tabpanel", { name: "Context" })).toBeVisible();
   await expect(separator).toHaveAttribute("aria-valuenow", "544");
-  await expect.poll(tabNames).toEqual(["Files", "Context", "New tab"]);
+  await expect.poll(tabNames).toEqual(["Files", "Context"]);
 
   // Select a real tab so reopening on the launcher is a real oracle.
   await panel.getByRole("tab", { name: "Files", exact: true }).click();

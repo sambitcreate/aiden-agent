@@ -937,9 +937,11 @@ function mountProvider(chatId = "chat-1") {
 }
 
 function restoreOpenArtifactsTab() {
+  const owner = JSON.stringify([WORKSPACE.id, "chat-1"]);
   window.localStorage.setItem("aiden-agent.environment.surface-state-version", "2");
   window.localStorage.setItem("aiden-agent.environment.open", "1");
-  window.localStorage.setItem("aiden-agent.environment.open-tabs-v1", JSON.stringify({ version: 1, tabs: ["artifacts"] }));
+  window.localStorage.setItem(`aiden-agent.environment.tab.${owner}`, "artifacts");
+  window.localStorage.setItem(`aiden-agent.environment.open-tabs-v1.${owner}`, JSON.stringify({ version: 1, tabs: ["artifacts"] }));
 }
 
 test("an Artifacts tab restored at launch survives while the workspace loads", async () => {
@@ -950,9 +952,10 @@ test("an Artifacts tab restored at launch survives while the workspace loads", a
     "workspaces:artifacts:list": () => [view("art1", "Open PRs", { approved: true })],
   });
   await mountProvider();
+  assert.equal(probe().tab, "artifacts");
   assert.ok(probe().tabs.includes("artifacts"));
   await act(async () => releaseWorkspaces([WORKSPACE]));
-  await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+  await waitFor(() => assert.deepEqual({ loaded: probe().loaded, workspaceId: probe().workspaceId }, { loaded: true, workspaceId: WORKSPACE.id }));
   assert.ok(probe().tabs.includes("artifacts"));
 });
 
@@ -965,7 +968,8 @@ test("a failed read leaves the tab open instead of treating the workspace as emp
     },
   });
   await mountProvider();
-  await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+  await waitFor(() => assert.match(probe().error ?? "", /disk busy/u));
+  assert.equal(probe().tab, "artifacts");
   assert.ok(probe().tabs.includes("artifacts"));
 });
 
@@ -1027,8 +1031,11 @@ test("in the real panel, an empty workspace's Artifacts tab drafts New page into
     await settle();
     assert.deepEqual(staged, [{ text: "Make a workspace artifact page that shows CI status on main.", notice: null }]);
 
-    // The chat beside the tab now belongs to another workspace: nothing to draft into.
+    // The new chat starts on the launcher. Reopen this workspace's Artifacts tab
+    // to check that it cannot draft into a chat from another workspace.
     await act(async () => wired.rerender({ chatId: "chat-9", workspaceId: "ws-other" }));
+    assert.equal(screen.queryByRole("button", { name: /New page/u }), null);
+    fireEvent.click(await screen.findByRole("button", { name: /^Artifacts/u }));
     dialog = await openNewPage();
     fireEvent.click(within(dialog).getByRole("button", { name: "Use: CI status on main" }));
     const confirm = within(dialog).getByRole("button", { name: "Draft in chat" }) as HTMLButtonElement;

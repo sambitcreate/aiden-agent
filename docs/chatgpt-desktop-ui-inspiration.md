@@ -108,6 +108,8 @@ The shipped ChatGPT/Codex renderer establishes two related but distinct surfaces
 
 ### Workspace launcher and user-opened tabs (2026-10-07)
 
+When the panel is open, switching local chats restores each chat’s selected tool and open tabs. A chat with no saved tools shows only New tab. Panel visibility and width follow the window.
+
 Generic panel opening selects a New tab launcher. Tool actions and deep links
 select their destination directly. The shared strip contains only opened tools;
 + returns to the launcher, and closing the last tab returns there too. Changes,

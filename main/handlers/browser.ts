@@ -37,7 +37,7 @@ export function registerBrowserHandlers(): void {
     browserService.attachOwner(workspaceId, owner);
     return browserService.getState(workspaceId);
   });
-  ipcMain.handle("browser:command", async (event, workspaceId: unknown, command: unknown) => {
+  ipcMain.handle("browser:command", async (event, workspaceId: unknown, command: unknown, presentationChatId?: unknown) => {
     const owner = rendererDocumentOwner(
       event,
       () => new Error("Browser access requires the active application document."),
@@ -53,6 +53,7 @@ export function registerBrowserHandlers(): void {
         owner,
         signal: lifecycle.signal,
         source: "user",
+        ...(typeof presentationChatId === "string" && presentationChatId.length <= 256 ? { presentationChatId } : {}),
       });
     } finally {
       cleanup();

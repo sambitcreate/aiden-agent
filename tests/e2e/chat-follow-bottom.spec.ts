@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { Locator } from "@playwright/test";
 import { expect, finishLmStudioOnboarding, test, E2E_MODEL_ID, LM_STUDIO_PROVIDER_ID } from "./fixtures";
 
@@ -182,4 +184,35 @@ test("older transcript content remains findable, copyable and keyboard reachable
   reply.finish();
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
   await expect.poll(() => distanceFromBottom(viewport)).toBeLessThanOrEqual(1);
+});
+
+test.describe("workspace tool stream", () => {
+  test.use({ workspaceSeed: true });
+
+  test("the live edge shows progress between reasoning, prose and late tool-call identity", async ({ aiden }) => {
+    const { page, lmStudio } = aiden;
+    test.skip(!lmStudio.enqueueStreamedReply, "needs the deterministic stream");
+    await finishLmStudioOnboarding(page);
+    const prompt = "Prepare a progress fixture file.";
+    const reply = lmStudio.enqueueStreamedReply!(prompt);
+    const composer = page.locator("textarea");
+    await composer.fill(prompt);
+    await composer.press("Enter");
+    const stop = page.getByRole("button", { name: "Stop generating" });
+    await expect(stop).toBeVisible();
+    reply.pushDelta({ reasoning_content: "Plan the fixture." });
+    reply.push("I will write the fixture now.");
+    await expect(page.getByText("I will write the fixture now.", { exact: true })).toBeVisible();
+    reply.pushDelta({ tool_calls: [{ index: 0, type: "function", function: { name: "write_file", arguments: "" } }] });
+    await expect(page.locator('[data-agent-activity="thinking"]')).toBeInViewport();
+    reply.pushDelta({ tool_calls: [{ index: 0, id: "write-proof", function: { arguments: '{"path":"fixture.txt","content":"' } }] });
+    await expect(page.getByRole("status", { name: "Preparing Write file" })).toBeInViewport();
+    await expect(page.locator("[data-agent-activity]")).toHaveCount(0);
+    await expect(stop).toBeVisible();
+    reply.pushDelta({ tool_calls: [{ index: 0, function: { arguments: 'complete"}' } }] });
+    reply.finish("tool_calls");
+    await expect.poll(() => readFile(join(aiden.workspaceDir, "fixture.txt"), "utf8").catch(() => null)).toBe("complete");
+    await expect(stop).toBeHidden();
+    await expect(page.locator("[data-agent-activity]")).toHaveCount(0);
+  });
 });
