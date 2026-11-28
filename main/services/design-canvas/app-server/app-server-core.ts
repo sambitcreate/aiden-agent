@@ -56,6 +56,8 @@ export interface DetectedApp {
   packageManager: PackageManagerInfo;
   installRoot: string;
   installed: boolean;
+  /** 3d: a design app, from its package.json's `"aiden": {"designApp": 1}` marker (S104). Decides reuse and the label only. */
+  mock?: true;
 }
 
 export interface WebAppDetection {
