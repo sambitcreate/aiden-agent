@@ -86,15 +86,16 @@ jobs:
       - name: Verify workflow policy and complete test assignment
         run: npm run test:ci-policy
 
-  # One macOS production build feeds the E2E shards and desktop verification.
-  # The tarball keeps the native helpers' executable modes, which the artifact
-  # zip format drops. The E2E type check runs in the static job.
+  # One macOS production build feeds the macOS E2E shards when mac-e2e is selected.
+  # Desktop pull requests with no macOS-only E2E specs skip this job and share
+  # linux-build instead. The tarball keeps the native helpers' executable modes,
+  # which the artifact zip format drops. The E2E type check runs in the static job.
   build:
     name: Desktop production build
     needs: changes
     outputs:
       artifact-name: ${{ steps.bundle.outputs.name }}
-    if: ${{ needs.changes.outputs.desktop == 'true' }}
+    if: ${{ needs.changes.outputs.mac-e2e == 'true' }}
     runs-on: macos-26
     timeout-minutes: 20
     steps:
@@ -121,6 +122,49 @@ jobs:
         with:
           name: ${{ steps.bundle.outputs.name }}
           path: ${{ runner.temp }}/desktop-build.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  # One Ubuntu production build feeds the Linux E2E shards, Linux x64 packaging,
+  # and macOS desktop verification (which rebuilds native C helpers for darwin).
+  linux-build:
+    name: Linux desktop production build
+    needs: changes
+    outputs:
+      artifact-name: ${{ steps.bundle.outputs.name }}
+    if: ${{ needs.changes.outputs.desktop == 'true' || needs.changes.outputs.linux == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Use Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.23.4
+          cache: npm
+      - name: Install Linux native helper dependencies
+        run: sudo apt-get update && sudo apt-get install --yes pkg-config libsecret-1-dev
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Build production bundles once
+        run: npm run build
+      - name: Check main-window initial JS budget
+        run: npm run check:bundle-budget
+      - name: Package production bundles and native helpers
+        id: bundle
+        run: |
+          tar -cf "$RUNNER_TEMP/linux-desktop-build.tar" build
+          echo "name=linux-desktop-build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+      - name: Upload production build
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ steps.bundle.outputs.name }}
+          path: ${{ runner.temp }}/linux-desktop-build.tar
           if-no-files-found: error
           retention-days: 1
 
@@ -168,6 +212,12 @@ jobs:
         run: |
           node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/${{ strategy.job-total }} --list > "$RUNNER_TEMP/e2e-shard.json"
           node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); fs.appendFileSync(process.env.GITHUB_OUTPUT, `empty=${s.files.length===0}\n`);' "$RUNNER_TEMP/e2e-shard.json"
+      - name: Restore Electron binary cache
+        if: ${{ steps.plan.outputs.empty != 'true' }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/Library/Caches/electron
+          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
       - name: Install locked dependencies
         if: ${{ steps.plan.outputs.empty != 'true' }}
         run: npm ci
@@ -234,7 +284,7 @@ jobs:
 
   verify:
     name: Desktop build and diagnostics
-    needs: [changes, build]
+    needs: [changes, linux-build]
     if: ${{ needs.changes.outputs.desktop == 'true' }}
     runs-on: macos-26
     timeout-minutes: 20
@@ -246,6 +296,11 @@ jobs:
         with:
           node-version: 22.23.4
           cache: npm
+      - name: Restore Electron binary cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/Library/Caches/electron
+          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
       - name: Install locked dependencies
         run: npm ci
       - name: Verify diagnostics privacy and storage contracts
@@ -255,10 +310,12 @@ jobs:
       - name: Download production build
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
-          name: ${{ needs.build.outputs.artifact-name }}
-          path: ${{ runner.temp }}/desktop-build
+          name: ${{ needs.linux-build.outputs.artifact-name }}
+          path: ${{ runner.temp }}/linux-desktop-build
       - name: Restore production build
-        run: tar -xf "$RUNNER_TEMP/desktop-build/desktop-build.tar"
+        run: tar -xf "$RUNNER_TEMP/linux-desktop-build/linux-desktop-build.tar"
+      - name: Rebuild native C helpers for macOS
+        run: rm -rf build/native && npm run build:native:c
       - name: Verify foreground file tools in pinned Electron
         run: npm run test:foreground-file-tools:electron
       - name: Verify production-profile diagnostics support workflow
@@ -317,14 +374,41 @@ jobs:
         with:
           node-version: 22.23.4
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/cli/package-lock.json
       - name: Install Linux test dependencies
         if: ${{ runner.os == 'Linux' }}
         run: sudo apt-get update && sudo apt-get install --yes rpm xvfb pkg-config libsecret-1-dev libselinux1-dev gnome-keyring dbus-x11
+      - name: Restore Cargo cache
+        if: ${{ matrix.lane == 'macos' }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            build/computer-use-broker-test
+          key: cargo-computer-use-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/computer-use-broker/rust-toolchain.toml', 'native/computer-use-broker/Cargo.lock') }}
+          restore-keys: |
+            cargo-computer-use-${{ runner.os }}-${{ runner.arch }}-
       - name: Install locked dependencies
         run: npm ci
-      - name: Install Playwright Chromium for containment
+      - name: Restore Playwright Chromium cache
+        id: playwright-cache
         if: ${{ matrix.chromium == true }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
+      - name: Install Playwright Chromium for containment
+        if: ${{ matrix.chromium == true && steps.playwright-cache.outputs.cache-hit != 'true' }}
         run: npx playwright install --with-deps chromium
+      - name: Install Playwright Chromium system dependencies
+        if: ${{ matrix.chromium == true && runner.os == 'Linux' && steps.playwright-cache.outputs.cache-hit == 'true' }}
+        run: npx playwright install-deps chromium
       - name: Download test selection
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
@@ -651,7 +735,21 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      - name: Restore Android 36 SDK and test image
+        id: android-sdk-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ${{ env.ANDROID_SDK_ROOT }}/platforms/android-36
+            ${{ env.ANDROID_SDK_ROOT }}/build-tools/36.0.0
+            ${{ env.ANDROID_SDK_ROOT }}/emulator
+            ${{ env.ANDROID_SDK_ROOT }}/system-images/android-36/google_apis/x86_64
+          key: android-sdk-36-x86_64-v1-${{ hashFiles('android/app/build.gradle.kts', 'android/gradle/libs.versions.toml') }}
+          restore-keys: |
+            android-sdk-36-x86_64-v1-
+
       - name: Install Android SDK and test image
+        if: ${{ steps.android-sdk-cache.outputs.cache-hit != 'true' }}
         run: >-
           sdkmanager
           "platforms;android-36"
@@ -708,15 +806,37 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Restore BuildKit cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.temp }}/.buildx-cache
+          key: cli-linux-buildx-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: |
+            cli-linux-buildx-${{ runner.arch }}-
+      - name: Set up Docker Buildx builder
+        run: docker buildx create --use --driver docker-container
       - name: Build and test the headless container
-        run: docker build -f packages/cli/Dockerfile -t aiden-cli:ci .
+        run: |
+          set -euo pipefail
+          cache_args=()
+          if [[ -f "$RUNNER_TEMP/.buildx-cache/index.json" ]]; then
+            cache_args+=(--cache-from "type=local,src=$RUNNER_TEMP/.buildx-cache")
+          fi
+          docker buildx build --load \
+            -f packages/cli/Dockerfile \
+            -t aiden-cli:ci \
+            "${cache_args[@]}" \
+            --cache-to "type=local,dest=$RUNNER_TEMP/.buildx-cache-new,mode=max" \
+            .
+          rm -rf "$RUNNER_TEMP/.buildx-cache"
+          mv "$RUNNER_TEMP/.buildx-cache-new" "$RUNNER_TEMP/.buildx-cache"
       - name: Verify the runtime image
         run: docker run --rm aiden-cli:ci --version
 
   required:
     name: CI required
     if: ${{ always() }}
-    needs: [changes, policy, static, build, verify, catalog, unit, e2e, linux-e2e, apple, ios, android, cli-linux]
+    needs: [changes, policy, static, build, linux-build, verify, catalog, unit, e2e, linux-e2e, apple, ios, android, cli-linux]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -759,7 +879,7 @@ jobs:
   linux-required:
     name: Linux ${{ matrix.arch }}
     if: ${{ always() }}
-    needs: [changes, linux, linux-e2e]
+    needs: [changes, linux-build, linux, linux-e2e]
     strategy:
       fail-fast: false
       matrix:
@@ -770,15 +890,20 @@ jobs:
       - name: Require selected Linux builds
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
+          DESKTOP_SELECTED: ${{ needs.changes.outputs.desktop }}
           LINUX_SELECTED: ${{ needs.changes.outputs.linux }}
+          LINUX_BUILD_RESULT: ${{ needs.linux-build.result }}
           LINUX_RESULT: ${{ needs.linux.result }}
           LINUX_E2E_RESULT: ${{ needs.linux-e2e.result }}
         run: |
-          case "$CHANGES_RESULT:$LINUX_SELECTED:$LINUX_RESULT:$LINUX_E2E_RESULT" in
-            # Unselected, the always-started linux matrix skips its steps and reports success.
-            # Desktop-only PRs run the Linux E2E shards without the packaging steps.
-            success:true:success:success|success:false:success:success|success:false:success:skipped|success:false:skipped:skipped) exit 0 ;;
-            *) echo "Linux gate failed: $CHANGES_RESULT:$LINUX_SELECTED:$LINUX_RESULT:$LINUX_E2E_RESULT"; exit 1 ;;
+          case "$CHANGES_RESULT:$DESKTOP_SELECTED:$LINUX_SELECTED:$LINUX_BUILD_RESULT:$LINUX_RESULT:$LINUX_E2E_RESULT" in
+            # Unselected, linux-build and linux-e2e skip while the always-started linux matrix skips its steps and reports success.
+            success:false:false:skipped:success:skipped|success:false:false:skipped:skipped:skipped) exit 0 ;;
+            # Desktop-only PRs run linux-build and the Linux E2E shards without the packaging steps.
+            success:true:false:success:success:success) exit 0 ;;
+            # Linux-selected runs require linux-build, packaging, and Linux E2E shards to pass.
+            success:true:true:success:success:success|success:false:true:success:success:success) exit 0 ;;
+            *) echo "Linux gate failed: $CHANGES_RESULT:$DESKTOP_SELECTED:$LINUX_SELECTED:$LINUX_BUILD_RESULT:$LINUX_RESULT:$LINUX_E2E_RESULT"; exit 1 ;;
           esac
 
   # Linux packaging runs for Linux-relevant changes and on every main push,
@@ -787,7 +912,8 @@ jobs:
   # name and never satisfies the required "Linux x64"/"Linux arm64" checks.
   linux:
     name: Linux build ${{ matrix.arch }}
-    needs: changes
+    needs: [changes, linux-build]
+    if: ${{ !failure() && !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
@@ -818,6 +944,31 @@ jobs:
         if: ${{ needs.changes.outputs.linux == 'true' }}
         run: sudo apt-get update && sudo apt-get install --yes rpm xvfb pkg-config libsecret-1-dev libselinux1-dev gnome-keyring dbus-x11
 
+      - name: Restore Electron and electron-builder caches
+        if: ${{ needs.changes.outputs.linux == 'true' }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: electron-packaging-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-packaging-${{ runner.os }}-${{ runner.arch }}-
+            electron-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Restore Cargo cache
+        if: ${{ needs.changes.outputs.linux == 'true' }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            native/linux-managed-payload/target
+          key: cargo-linux-payload-ubuntu-24.04-${{ runner.arch }}-${{ hashFiles('native/linux-managed-payload/Cargo.lock') }}
+          restore-keys: |
+            cargo-linux-payload-ubuntu-24.04-${{ runner.arch }}-
+
       - name: Install locked dependencies
         if: ${{ needs.changes.outputs.linux == 'true' }}
         run: npm ci
@@ -834,6 +985,17 @@ jobs:
         if: ${{ needs.changes.outputs.linux == 'true' }}
         run: npm run test:secret-service-integration
 
+      - name: Download Linux production build
+        if: ${{ needs.changes.outputs.linux == 'true' && matrix.arch == 'x64' }}
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          name: ${{ needs.linux-build.outputs.artifact-name }}
+          path: ${{ runner.temp }}/linux-desktop-build
+
+      - name: Restore Linux production build
+        if: ${{ needs.changes.outputs.linux == 'true' && matrix.arch == 'x64' }}
+        run: rm -rf build && tar -xf "$RUNNER_TEMP/linux-desktop-build/linux-desktop-build.tar"
+
       - name: Build, install, and verify Linux distributions
         if: ${{ needs.changes.outputs.linux == 'true' }}
         env:
@@ -841,7 +1003,13 @@ jobs:
           AIDEN_ANALYTICS: "0"
         run: |
           set -euo pipefail
-          npm run dist:linux
+          if [[ "${{ matrix.arch }}" == "x64" ]]; then
+            AIDEN_DISTRIBUTION_BUILD=1 npm run build:electron:production
+            npm run package:model-catalog
+            ./node_modules/.bin/electron-builder --linux AppImage deb rpm --config.forceCodeSigning=false --config.directories.output=release/linux-distribution --publish never
+          else
+            npm run dist:linux
+          fi
           node scripts/verify-linux-package.mjs release/linux-distribution
           node scripts/prepare-linux-update-feed.mjs release/linux-distribution "${{ matrix.arch }}" "$(node -p 'require("./package.json").version')"
           sudo apt-get install --yes ./release/linux-distribution/*.deb
@@ -916,7 +1084,7 @@ jobs:
   # macOS no longer runs there.
   linux-e2e:
     name: Linux E2E (${{ matrix.shard }}/3)
-    needs: changes
+    needs: [changes, linux-build]
     if: ${{ needs.changes.outputs.desktop == 'true' || needs.changes.outputs.linux == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -965,13 +1133,27 @@ jobs:
         if: ${{ steps.plan.outputs.empty != 'true' }}
         run: sudo apt-get update && sudo apt-get install --yes rpm xvfb pkg-config libsecret-1-dev libselinux1-dev gnome-keyring dbus-x11
 
+      - name: Restore Electron binary cache
+        if: ${{ steps.plan.outputs.empty != 'true' }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
+
       - name: Install locked dependencies
         if: ${{ steps.plan.outputs.empty != 'true' }}
         run: npm ci
 
-      - name: Build the app
+      - name: Download Linux production build
         if: ${{ steps.plan.outputs.empty != 'true' }}
-        run: npm run build
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          name: ${{ needs.linux-build.outputs.artifact-name }}
+          path: ${{ runner.temp }}/linux-desktop-build
+
+      - name: Restore Linux production build
+        if: ${{ steps.plan.outputs.empty != 'true' }}
+        run: tar -xf "$RUNNER_TEMP/linux-desktop-build/linux-desktop-build.tar"
 
       - name: Run deterministic Electron E2E gate
         if: ${{ steps.plan.outputs.empty != 'true' }}
@@ -1074,6 +1256,18 @@ jobs:
         with:
           node-version: 22.23.4
           cache: npm
+
+      - name: Restore Fedora Cargo cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            native/linux-managed-payload/target
+          key: cargo-linux-payload-fedora-44-${{ runner.arch }}-${{ hashFiles('native/linux-managed-payload/Cargo.lock') }}
+          restore-keys: |
+            cargo-linux-payload-fedora-44-${{ runner.arch }}-
 
       - name: Install locked dependencies
         run: npm ci

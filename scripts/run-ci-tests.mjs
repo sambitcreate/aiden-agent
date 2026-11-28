@@ -195,9 +195,16 @@ export function buildPlan(registry, options) {
     return { ...lane, files: applyUnitSelection(lane.files ?? [], selection) };
   });
   const lanePreservedIds = selectedLanes.flatMap((lane) => lane.preserved ?? []);
-  const preservedIds = options.allPreserved || options.defaultAll
+  const skipUnreachableCli =
+    selection?.cli?.run === false &&
+    !options.allPreserved &&
+    !options.preserved.includes("cli-package");
+  const rawPreservedIds = options.allPreserved || options.defaultAll
     ? [...preservedById.keys()]
     : [...new Set([...lanePreservedIds, ...options.preserved])];
+  const preservedIds = skipUnreachableCli
+    ? rawPreservedIds.filter((id) => id !== "cli-package")
+    : rawPreservedIds;
   for (const id of preservedIds) {
     if (!preservedById.has(id)) throw new Error(`Unknown preserved CI command: ${id}`);
   }

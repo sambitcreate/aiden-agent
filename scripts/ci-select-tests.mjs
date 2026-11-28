@@ -46,9 +46,10 @@ function main() {
   const selection = buildTestSelection();
   const outputPath = process.env.AIDEN_CI_TEST_SELECTION_OUT ?? path.join(PROJECT_ROOT, "ci-test-selection.json");
   writeJson(outputPath, selection);
+  const cliNote = selection.cli?.run === false ? ", cli-package skipped" : "";
   const summary =
     selection.unit.mode === "related" || selection.e2e.mode === "related"
-      ? `CI test selection: ${selection.unit.mode === "related" ? selection.unit.files.length : "all"} unit files, ${selection.e2e.mode === "related" ? selection.e2e.specs.length : "all"} E2E specs (${selection.reason}).`
+      ? `CI test selection: ${selection.unit.mode === "related" ? selection.unit.files.length : "all"} unit files, ${selection.e2e.mode === "related" ? selection.e2e.specs.length : "all"} E2E specs${cliNote} (${selection.reason}).`
       : `CI test selection: full suites (${selection.reason}).`;
   if (process.env.GITHUB_OUTPUT) {
     // A skipped job still parses its matrix, so an unused plan keeps one shard.

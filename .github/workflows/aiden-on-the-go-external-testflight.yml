@@ -84,6 +84,7 @@ jobs:
             echo "ARCHIVE_PATH=${RUNNER_TEMP}/AidenOnTheGo.xcarchive"
             echo "DERIVED_DATA_PATH=${RUNNER_TEMP}/DerivedData"
             echo "EXPORT_PATH=${RUNNER_TEMP}/ExternalTestFlightExport"
+            echo "SOURCE_PACKAGES_PATH=${RUNNER_TEMP}/AidenOnTheGoSourcePackages"
           } >> "${GITHUB_ENV}"
 
       - name: Detect marketing version
@@ -150,6 +151,14 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
+      - name: Restore Swift package checkouts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.temp }}/AidenOnTheGoSourcePackages
+          key: ios-spm-testflight-${{ hashFiles('ios/AidenOnTheGo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            ios-spm-
+
       - name: Resolve Swift packages
         run: |
           set -euo pipefail
@@ -157,7 +166,8 @@ jobs:
           xcodebuild \
             -resolvePackageDependencies \
             -project "${PROJECT_PATH}" \
-            -scheme "${SCHEME}"
+            -scheme "${SCHEME}" \
+            -clonedSourcePackagesDirPath "${SOURCE_PACKAGES_PATH}"
 
       - name: Archive
         run: |
@@ -170,6 +180,7 @@ jobs:
             -destination "generic/platform=iOS" \
             -archivePath "${ARCHIVE_PATH}" \
             -derivedDataPath "${DERIVED_DATA_PATH}" \
+            -clonedSourcePackagesDirPath "${SOURCE_PACKAGES_PATH}" \
             -allowProvisioningUpdates \
             -authenticationKeyPath "${APP_STORE_CONNECT_KEY_PATH}" \
             -authenticationKeyID "${APP_STORE_CONNECT_KEY_ID}" \

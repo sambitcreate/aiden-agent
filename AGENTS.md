@@ -12,9 +12,9 @@ The current plan inventory and status live in [`docs/plans/README.md`](docs/plan
 
 ## Keeping docs current
 
-Every change that alters behavior, platform support, commands, settings, versions, contracts, or release/distribution facts must update the affected docs in the same PR. Before finishing, search the docs for claims your change makes stale and fix them; do not leave doc updates for a follow-up.
+Every change that alters behavior, platform support, commands, settings, versions, contracts, CI workflows/caches/artifact routing, or release/distribution facts must update the affected docs in the same PR. Before finishing, search the docs for claims your change makes stale and fix them; do not leave doc updates for a follow-up.
 
-- Check at least: `README.md`, `PRODUCT.md`, the relevant `docs/*.md` guide (for example `docs/linux.md`, `docs/devices.md`, `docs/aiden-on-the-go-remote-access.md`, `docs/aiden-remote-api-v1.md`), `docs/plans/README.md` status rows, `packages/cli/README.md` for CLI changes, and `ios/` or Android docs and App Store metadata for mobile changes.
+- Check at least: `README.md`, `PRODUCT.md`, the relevant `docs/*.md` guide (for example `docs/ci.md`, `docs/linux.md`, `docs/devices.md`, `docs/aiden-on-the-go-remote-access.md`, `docs/aiden-remote-api-v1.md`), `docs/plans/README.md` status rows, `packages/cli/README.md` for CLI changes, and `ios/` or Android docs and App Store metadata for mobile changes.
 - Platform claims (Mac-only, Linux, CLI, iOS, Android) must match `main/services/host-platform-capabilities.ts` and the feature flags; version and pin claims must match `package.json` and `packages/cli/package.json`.
 - Dated records (changelogs, TestFlight logs, completed plans) are history: add new entries instead of rewriting old ones.
 - If you notice a stale claim outside your change's scope, fix it when it is a small factual correction, or note it in the PR description.
@@ -78,7 +78,8 @@ The headless Aiden server lives in `packages/cli` as a self-contained npm packag
 
 - Never wait on CI or PR comments inside your own turn: no `sleep` loops around `gh`, `gh run watch`, `gh pr checks --watch` or repeated status glances. After pushing, turn on auto-merge if asked, hand the wait to a watcher (pr-watchd, the Claude app's Auto-fix or Aiden's `follow_pull_request`), and end the turn. Follow the `aiden-pr-ci` skill in `.agents/skills/` for the details and for what to do when woken about a failure.
 - Update a shared PR branch by merging `origin/main` into it. Do not rebase or force-push a branch that already has a PR, reviews, or CI history.
-- Before requesting bot reviews or waiting on hosted CI, run the narrow suites for the touched surfaces locally. Hosted CI and review bots should not be the first place a failure shows up.
+- Before requesting bot reviews or waiting on hosted CI, run the narrow suites for the touched surfaces locally (`npm run type-check`, `npm run type-check:e2e`, `npm run lint`, `npm run check:aiden-rules`, and `npm run test:ci-policy` whenever `.github/workflows/`, `scripts/ci-*.mjs`, `scripts/ci-test-registry.json`, or `scripts/ci-e2e-spec-map.json` changes). Hosted CI and review bots should not be the first place a failure shows up.
+- Hosted PR CI compiles one shared Ubuntu `linux-build` bundle (`linux-desktop-build.tar`) for `linux-e2e`, `linux` `x64` packaging (which re-runs `AIDEN_DISTRIBUTION_BUILD=1 npm run build:electron:production`), and `verify` on `macos-26` (which rebuilds darwin C17 helpers via `rm -rf build/native && npm run build:native:c`), gates `macos-26` `build` and `e2e` on `mac-e2e`, skips preserved `cli-package` on scoped PRs that do not reach `packages/cli`, and caches `@electron/get`, `electron-builder`, Playwright Chromium, Cargo, `packages/cli` npm, BuildKit, SwiftPM, and Android 36 SDK toolchains with 40-char SHA-pinned actions (see [`docs/ci.md`](docs/ci.md)). Never set `ELECTRON_SKIP_BINARY_DOWNLOAD` on workflow jobs or cache Xcode `DerivedData`.
 - Treat a PR as mergeable only when CI is green on its exact head commit. After merging `main` in, wait for the new run; do not merge on an earlier head's result.
 - Do not cancel CI runs on `main` by hand. CI's concurrency group already supersedes an older main run when a newer merge lands. The completed run on the newest main commit is the baseline releases are judged by; if that commit's CI was cancelled, start CI on it again.
 - Flaky tests: a failure that passes on rerun is still a bug. Rerun failed jobs at most once, then record the spec, the symptom, and the run link in the PR description. Do not paper over it by raising timeouts, adding retries, or weakening `--fail-on-flaky-tests`.
@@ -90,7 +91,7 @@ The headless Aiden server lives in `packages/cli` as a self-contained npm packag
 
 ## Tests
 
-When adding a feature or changing behavior, layout, configuration, or contracts, always check whether existing tests need updating and add or extend tests when coverage is missing. Run the relevant suites before finishing (`npm run test`, or the narrower scripts in `package.json` when the change is scoped). If a new test file is added, register it in the appropriate `package.json` test script so CI picks it up.
+When adding a feature or changing behavior, layout, configuration, or contracts, always check whether existing tests need updating and add or extend tests when coverage is missing. Run the relevant suites before finishing (`npm run test`, or the narrower scripts in `package.json` when the change is scoped, plus `npm run test:ci-policy` when touching test registration or CI workflows). If a new test file is added, register it in both the appropriate `package.json` test script and `scripts/ci-test-registry.json` (and add new deterministic E2E specs to `scripts/ci-e2e-spec-map.json`) so CI picks it up.
 
 "Contracts" means behavioral or API contracts: function outputs, IPC register-and-invoke, and rendered UI (including Playwright). It does not mean grepping production source text.
 

@@ -2,7 +2,11 @@ FROM mirror.gcr.io/library/node:22-bookworm AS build
 ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1 PI_TELEMETRY=0 PI_OFFLINE=1
 WORKDIR /build
 # iproute2 (`ss`) verifies inherited Linux AF_UNIX stdio socketpairs for MCP orphan cleanup.
-RUN apt-get update -qq && apt-get install -y --no-install-recommends libssl-dev ca-certificates openssl iproute2 && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    apt-get update -qq && \
+    apt-get install -y --no-install-recommends libssl-dev ca-certificates openssl iproute2
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts
 COPY packages/cli/package.json packages/cli/package-lock.json ./packages/cli/
@@ -32,7 +36,11 @@ RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
 
 FROM mirror.gcr.io/library/node:22-bookworm-slim
 # iproute2 (`ss`) verifies inherited Linux AF_UNIX stdio socketpairs for MCP orphan cleanup.
-RUN apt-get update -qq && apt-get install -y --no-install-recommends git openssl ca-certificates libssl3 avahi-utils bzip2 iproute2 && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    apt-get update -qq && \
+    apt-get install -y --no-install-recommends git openssl ca-certificates libssl3 avahi-utils bzip2 iproute2
 COPY --from=runtime-deps --chown=node:node /deps/node_modules /opt/aiden/node_modules
 COPY --from=build --chown=node:node /build/packages/cli/package.json /opt/aiden/package.json
 COPY --from=build --chown=node:node /build/packages/cli/dist/app /opt/aiden/dist/app

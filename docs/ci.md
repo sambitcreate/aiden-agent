@@ -36,10 +36,11 @@ includes every full main run.
 
 `scripts/ci-required.mjs` lists, per job, either `always` or the areas that select
 it. A job may skip only when every one of its areas is false; any other skip,
-failure, cancellation or missing result fails **CI required**. The macOS `e2e`
-job follows the `mac-e2e` plan decision instead of an area (see below), and
-`linux-e2e` follows `desktop` or `linux`. Branch protection
-should require only that check.
+failure, cancellation or missing result fails **CI required**. On macOS, both
+`build` and `e2e` follow the `mac-e2e` plan decision instead of an area (see
+below), while `linux-build` and `linux-e2e` follow `desktop` or `linux`. Branch
+protection should require only **CI required** plus the per-arch `Linux x64` and
+`Linux arm64` checks.
 
 PR pushes cancel superseded PR CI, and main pushes cancel superseded main CI:
 when several merges land close together, the run that joined the concurrency
@@ -57,11 +58,34 @@ cancelling CI never cancels a release. Runner capacity can still cause queueing.
 
 ## Execution and coverage
 
-- TypeScript (including the e2e project) and lint run on Ubuntu. One macOS
-  `build` job runs `npm run build` and uploads `build/` as a tarred, one-day
-  artifact; the Electron shards and `verify` download it instead of rebuilding.
+- TypeScript (including the e2e project) and lint run on Ubuntu. One Ubuntu
+  `linux-build` job (selected when `desktop` or `linux` is `true`) runs
+  `npm run build`, checks `npm run check:bundle-budget`, and uploads `build/` as
+  a tarred, one-day `linux-desktop-build.tar` artifact. All three `linux-e2e`
+  shards, `linux` `x64` packaging (which re-runs
+  `AIDEN_DISTRIBUTION_BUILD=1 npm run build:electron:production` and
+  `npm run package:model-catalog` before `electron-builder` so distribution
+  metadata stays exact, while `arm64` runs `npm run dist:linux` natively), and
+  macOS `verify` (which runs `rm -rf build/native && npm run build:native:c` to
+  replace Linux C17 helpers with darwin binaries) restore `build/` from
+  `linux-build` instead of compiling duplicate bundles. On macOS, `jobs.build`
+  runs only when `mac-e2e` is `true` to feed the macOS `e2e` shards, saving a
+  `macos-26` slot on desktop pull requests without macOS-only E2E specs.
   Diagnostics and branding remain in `verify`; the model-catalog suite runs in
   its own Ubuntu `catalog` job.
+- Workflows cache toolchain downloads with 40-character SHA-pinned actions:
+  `@electron/get` (`~/.cache/electron` and `~/Library/Caches/electron`) and
+  `electron-builder` across all 16 Electron job instances (`ELECTRON_SKIP_BINARY_DOWNLOAD`
+  is never set because `electron@43.8.4` downloads lazily via `@electron/get`),
+  Playwright Chromium (`~/.cache/ms-playwright` and `~/Library/Caches/ms-playwright`,
+  still running `npx playwright install-deps chromium` on Linux cache hits),
+  Cargo registries, git checkouts, and crate target directories across all 9 Rust
+  job instances (isolating `fedora:44` keys from Ubuntu), `packages/cli/package-lock.json`
+  alongside the root lockfile in `actions/setup-node`, rotated `docker buildx`
+  BuildKit caches for `apt-get` and `/root/.npm` mounts in `cli-linux`, SwiftPM
+  `AidenOnTheGoSourcePackages` checkouts in `ios`, `ios-27`, and both TestFlight
+  workflows (`DerivedData` stays uncached), and Android 36 SDK platform,
+  build-tools, emulator, and x86_64 system-image directories in `android`.
 - Apple Foundation Models tests run in their own job. The `ios` job resolves
   Swift packages into a cached directory keyed on `Package.resolved`, builds for
   testing once for the generic device and once for the simulator, then runs
@@ -121,22 +145,26 @@ cancelling CI never cancels a release. Runner capacity can still cause queueing.
   (specs that skip or assert less off macOS: the isolated keychain, the iOS
   Simulator device tabs, guided setup's Computer Use and Apple models, and
   Computer Use goals) that the PR selected, on one runner named
-  `Electron E2E (1/1)`. When the PR selects none, the job skips and the
-  `changes` job reports `mac-e2e=false`, which is the only way **CI required**
-  accepts that skip. Every other selected spec runs on the Linux shards, so
-  darwin-only branches inside shared specs (such as Meta-modifier shortcuts) are
-  checked at merge rather than on the PR, as with the unit lanes. When you add an
-  E2E spec that only does its work on macOS, add it to `macos` in
-  `scripts/ci-e2e-spec-map.json`.
+  `Electron E2E (1/1)`. When the PR selects none, both `jobs.build` and
+  `jobs.e2e` on `macos-26` skip and the `changes` job reports `mac-e2e=false`,
+  which is the only way **CI required** accepts either skip. Every other selected
+  spec runs on the Linux shards, so darwin-only branches inside shared specs
+  (such as Meta-modifier shortcuts) are checked at merge rather than on the PR,
+  as with the unit lanes. When you add an E2E spec that only does its work on
+  macOS, add it to `macos` in `scripts/ci-e2e-spec-map.json`.
 - Linux runs the same Electron shards on three Ubuntu runners in `linux-e2e`,
   beside the packaging job rather than after it. Any `desktop` or `linux` change
-  selects it, so a renderer-only PR runs its E2E specs here. The required `Linux x64` and
-  `Linux arm64` checks fail if a selected shard does not pass. Each shard builds
-  the app itself, because waiting for the macOS `build` artifact would tie Linux
-  to the macOS queue.
+  selects `linux-build` and `linux-e2e`, so a renderer-only PR builds once on
+  `ubuntu-24.04` and runs its E2E specs across the three shards without waiting
+  on the macOS queue. `jobs.linux` uses `if: ${{ !failure() && !cancelled() }}`
+  so its matrix still expands when `linux-build` skips on non-desktop PRs, and
+  the required `Linux x64` and `Linux arm64` checks (`linux-required`) fail
+  closed if `changes`, `linux-build`, `linux`, or `linux-e2e` fails, cancels, or
+  unexpectedly skips.
 - Android retains unit tests, lint, test compilation and emulator coverage, with
-  Gradle's build cache enabled and APK publication only on main. Hosted iOS
-  compilation is not physical-device XCTest acceptance.
+  Gradle's build cache and an Android 36 SDK/system-image `actions/cache` step
+  enabled and APK publication only on main. Hosted iOS compilation is not
+  physical-device XCTest acceptance.
 
 On pull requests only, unit lanes run the registry files whose import graph
 reaches a changed path. A quoted path to a source file (`new URL("./x.tsx",
@@ -149,7 +177,13 @@ changes. Electron shards run the specs listed for those paths
 in `scripts/ci-e2e-spec-map.json`. Pushes to `main`, merge-group runs, releases,
 and `workflow_dispatch` keep the full suites. Selection also falls back to the
 full suite when a changed path is unmapped, or when shared config, fixtures,
-`package.json`, lockfiles, CI files, or test infra change. Empty unit lanes skip
+`package.json`, lockfiles, CI files, or test infra change. `scripts/ci-select-tests.mjs`
+also records `packages/cli` reachability (`cli.run`) in `ci-test-selection.json`:
+on pull requests whose changed paths neither lie under `packages/cli/` nor reach
+`packages/cli/` through the reverse import graph, `renderer-other` skips the
+preserved `cli-package` install/bundle/test command, whereas `push`,
+`merge_group`, `workflow_dispatch`, infrastructure PRs, and changes reaching
+`packages/cli` run `cli-package` unconditionally. Empty unit lanes skip
 their `tsx --test` invocation but still start. When you add a deterministic
 E2E spec, add it to `scripts/ci-e2e-spec-map.json` with the `renderer/` and
 `main/` prefixes it covers; CI policy fails if a runnable spec is missing, if
@@ -165,8 +199,9 @@ Use `node scripts/run-ci-tests.mjs --list` or `--dry-run` to inspect assignments
 Use `--lane core-git`, `--lane runtime-subagents`, `--lane renderer-other`, or
 `--lane macos` to reproduce a lane, and `--summary` to report timings. The `macos`
 lane needs a Mac. Existing focused npm commands remain available. Browser-dependent
-lanes explicitly install Chromium; a warm local browser cache is not proof that
-hosted prerequisites are present.
+lanes cache Playwright Chromium binaries and still run `npx playwright install-deps chromium`
+on Linux cache hits because a warm browser binary cache does not install host
+system libraries.
 
 ## Measurement and rollout
 

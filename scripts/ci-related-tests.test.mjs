@@ -9,6 +9,7 @@ import {
   planMacE2E,
   readE2ESpecMap,
   selectReachableTests,
+  selectRelatedCli,
   selectRelatedE2ESpecs,
   selectRelatedUnitFiles,
   validateE2ESpecMap,
@@ -205,6 +206,69 @@ test("main pushes and merge groups keep every test", () => {
     });
     assert.equal(selected.unit.mode, "all", eventName);
     assert.equal(selected.e2e.mode, "all", eventName);
+    assert.deepEqual(selected.cli, { run: true, reason: "forced-full" }, eventName);
+  }
+});
+
+test("pull requests run cli-package only when packages/cli or its import graph is reachable", () => {
+  const cliSources = {
+    ...files,
+    "packages/cli/src/server.ts": 'import { x } from "../../../main/services/x.js";\nexport const server = x;\n',
+  };
+  const readCliSource = (file) => {
+    if (!(file in cliSources)) throw new Error(`missing ${file}`);
+    return cliSources[file];
+  };
+  const sourceFiles = Object.keys(cliSources);
+  const specMap = {
+    version: 1,
+    full: [],
+    specs: {
+      "settings-unification.spec.ts": ["renderer/components/settings/"],
+      "chat-fork.spec.ts": ["main/services/"],
+    },
+  };
+
+  // Unreachable desktop renderer change skips preserved cli-package on pull requests.
+  const rendererPr = selectReachableTests({
+    eventName: "pull_request",
+    changedPaths: ["renderer/components/settings/about-settings.tsx"],
+    testFiles,
+    specs: ["settings-unification.spec.ts", "chat-fork.spec.ts"],
+    sourceFiles,
+    readFile: readCliSource,
+    map: specMap,
+  });
+  assert.deepEqual(rendererPr.cli, { run: false, reason: "unreachable" });
+
+  // Transitive dependency imported by packages/cli keeps cli-package active.
+  assert.deepEqual(
+    selectRelatedCli({
+      changedPaths: ["main/services/helper.ts"],
+      sourceFiles,
+      readFile: readCliSource,
+    }),
+    { run: true, reason: "related" },
+  );
+
+  // Direct packages/cli edits, lockfile edits, and infrastructure/unmapped paths keep cli-package active.
+  for (const [changedPath, reason] of [
+    ["packages/cli/src/server.ts", "related"],
+    ["packages/cli/Dockerfile", "related"],
+    ["packages/cli/package-lock.json", "infrastructure"],
+    ["package-lock.json", "infrastructure"],
+    ["renderer/styles.css", "infrastructure"],
+    ["main/services/brand-new.ts", "unmapped-path"],
+  ]) {
+    assert.deepEqual(
+      selectRelatedCli({
+        changedPaths: [changedPath],
+        sourceFiles,
+        readFile: readCliSource,
+      }),
+      { run: true, reason },
+      changedPath,
+    );
   }
 });
 

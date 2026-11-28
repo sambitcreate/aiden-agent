@@ -37,6 +37,9 @@ jobs:
         with:
           node-version: 22.23.4
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/cli/package-lock.json
 
       - name: Resolve the declared release version
         id: version
@@ -66,12 +69,47 @@ jobs:
           AIDEN_POSTHOG_PROJECT_KEY: ${{ secrets.AIDEN_POSTHOG_PROJECT_KEY }}
         run: test -n "$AIDEN_POSTHOG_PROJECT_KEY" || { echo "::error::The AIDEN_POSTHOG_PROJECT_KEY secret is missing."; exit 1; }
 
+      - name: Restore Electron and electron-builder caches
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+          key: electron-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-release-${{ runner.os }}-${{ runner.arch }}-
+            electron-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Restore Cargo cache
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            build/computer-use-broker-test
+            build/computer-use-broker-cargo
+          key: cargo-computer-use-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/computer-use-broker/rust-toolchain.toml', 'native/computer-use-broker/Cargo.lock') }}
+          restore-keys: |
+            cargo-computer-use-release-${{ runner.os }}-${{ runner.arch }}-
+            cargo-computer-use-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Install locked dependencies
         if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm ci
 
-      - name: Install Playwright Chromium for Generative UI containment
+      - name: Restore Playwright Chromium cache
+        id: playwright-cache
         if: ${{ steps.version.outputs.publish == 'true' }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/Library/Caches/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install Playwright Chromium for Generative UI containment
+        if: ${{ steps.version.outputs.publish == 'true' && steps.playwright-cache.outputs.cache-hit != 'true' }}
         run: npx playwright install chromium
 
       - name: Verify Homebrew and website release consumers
@@ -248,6 +286,31 @@ jobs:
       - name: Install Linux package dependencies
         if: ${{ steps.version.outputs.publish == 'true' }}
         run: sudo apt-get update && sudo apt-get install --yes rpm xvfb pkg-config libsecret-1-dev libselinux1-dev
+
+      - name: Restore Electron and electron-builder caches
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: electron-packaging-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-packaging-${{ runner.os }}-${{ runner.arch }}-
+            electron-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Restore Cargo cache
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            native/linux-managed-payload/target
+          key: cargo-linux-payload-ubuntu-24.04-${{ runner.arch }}-${{ hashFiles('native/linux-managed-payload/Cargo.lock') }}
+          restore-keys: |
+            cargo-linux-payload-ubuntu-24.04-${{ runner.arch }}-
 
       - name: Install locked dependencies
         if: ${{ steps.version.outputs.publish == 'true' }}
