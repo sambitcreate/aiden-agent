@@ -7,23 +7,25 @@ import {
 import { Button, toast } from "./ui";
 import { ChatContextPanel, type ChatContextDetails } from "./chat-context-panel";
 import { WorkspaceToolLauncher, WORKSPACE_TOOLS, workspaceToolLabel } from "./workspace-tool-launcher";
-import { ArtifactsPanel } from "./artifacts-panel";
 import { useWorkspaceArtifacts, type WorkspaceArtifactsState } from "../lib/use-workspace-artifacts";
 import { revealsWorkspaceArtifact, workspaceArtifactChangeRequest } from "../lib/workspace-artifacts-view";
 import { stageComposerText } from "../lib/composer-draft-store";
 import type { WorkspaceArtifactsChangedEvent, WorkspaceArtifactView } from "../shared/workspace-artifacts";
 import { sendPromptToChat } from "../lib/chat-prompt-bridge";
-import { TerminalSideTarget, useWorkspaceTerminal, TERMINAL_PANEL_EVENT } from "./terminal-drawer";
+import {
+  TerminalSideTarget,
+  useWorkspaceTerminal,
+  TERMINAL_PANEL_EVENT,
+} from "./workspace-terminal-provider";
 import type { BrowserState } from "../shared/browser";
 import { acceptBrowserState } from "../lib/browser-ui-state";
 import { cn } from "../lib/ui-utils";
 import { setRendererLifecycleGuard } from "../lib/lifecycle-guard";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { LinkOpenerProvider, useBrowserSurface } from "../lib/link-opener";
-import {
-  FilesPanel,
-  type FilesEditorState,
-  type FilesEditorStateChangeOptions,
+import type {
+  FilesEditorState,
+  FilesEditorStateChangeOptions,
 } from "./files-panel";
 import {
   ChangesRows,
@@ -52,8 +54,7 @@ import {
 } from "../lib/quick-view-layout";
 import { contextPressurePercent, type ChatContextPressureV1 } from "../shared/context-pressure";
 import type { Workspace } from "../lib/types";
-import { ReviewPanel } from "./review-panel";
-import { SubagentsPanel, type SubagentsPanelHelperChat } from "./subagents-panel";
+import type { SubagentsPanelHelperChat, SubagentsPanelProps } from "./subagents-panel";
 import {
   askMainChatToRetrySubagent,
   createSubagentHelperChatStore,
@@ -154,8 +155,21 @@ import {
   type WorkbenchWidthState,
 } from "./workbench-panel";
 
-// The browser and simulator tabs carry their own heavy dependencies and are
-// rarely opened, so their code loads with the panel instead of at startup.
+// Heavy workspace tool tabs carry their own dependencies (diff viewers, file
+// editors, subagent transcripts, artifact previews, browser, and simulator) and
+// load when their tab activates instead of at startup.
+const ArtifactsPanel = React.lazy(() =>
+  import("./artifacts-panel").then((module) => ({ default: module.ArtifactsPanel })),
+);
+const FilesPanel = React.lazy(() =>
+  import("./files-panel").then((module) => ({ default: module.FilesPanel })),
+);
+const ReviewPanel = React.lazy(() =>
+  import("./review-panel").then((module) => ({ default: module.ReviewPanel })),
+);
+const SubagentsPanel = React.lazy(() =>
+  import("./subagents-panel").then((module) => ({ default: module.SubagentsPanel })),
+);
 const BrowserPanel = React.lazy(() =>
   import("./browser-panel").then((module) => ({ default: module.BrowserPanel })),
 );
@@ -1584,17 +1598,32 @@ export function useEnvironmentPanelCore(): EnvironmentPanelContextValue {
  * helper's slices of the helper chat state, so another helper's streamed
  * tokens do not redraw the panel.
  */
+function SubagentsPanelReadyBeacon({
+  onReady,
+  children,
+}: {
+  onReady?: () => void;
+  children: React.ReactNode;
+}) {
+  React.useLayoutEffect(() => {
+    onReady?.();
+  }, [onReady]);
+  return <>{children}</>;
+}
+
 function HelperAwareSubagentsPanel({
   onClosePanel,
   onTranscriptIncomplete,
   transcriptRefetchFailures,
   onRetryTranscript,
+  onMounted,
   ...props
-}: Omit<React.ComponentProps<typeof SubagentsPanel>, "helperChat"> & {
+}: Omit<SubagentsPanelProps, "helperChat"> & {
   onClosePanel: () => void;
   onTranscriptIncomplete?: (runId: string, reason: string) => void;
   transcriptRefetchFailures: Readonly<Record<string, string>>;
   onRetryTranscript: (runId: string) => void;
+  onMounted?: () => void;
 }) {
   const store = useSubagentHelperChatStore();
   const chatId = props.chatId;
@@ -1663,12 +1692,16 @@ function HelperAwareSubagentsPanel({
     transcriptRefetchFailures,
   ]);
   return (
-    <SubagentsPanel
-      {...props}
-      runs={runs}
-      selectedRunSnapshot={selectedRunSnapshot}
-      helperChat={helperChat}
-    />
+    <React.Suspense fallback={null}>
+      <SubagentsPanelReadyBeacon onReady={onMounted}>
+        <SubagentsPanel
+          {...props}
+          runs={runs}
+          selectedRunSnapshot={selectedRunSnapshot}
+          helperChat={helperChat}
+        />
+      </SubagentsPanelReadyBeacon>
+    </React.Suspense>
   );
 }
 
@@ -1733,8 +1766,14 @@ function EnvironmentPanelSurface({
     setBrowserFocusRequest(null);
   }, [active?.id, fullOpen, panel.tab, panel.frontSurface, presented]);
   const handledSubagentFocusRef = React.useRef(0);
+  const [subagentsLoaded, setSubagentsLoaded] = React.useState(false);
+  const markSubagentsLoaded = React.useCallback(() => setSubagentsLoaded(true), []);
   const activeFileRequest =
     panel.fileRequest?.workspaceId === active?.id ? panel.fileRequest : null;
+  const mountedLazyTabsRef = React.useRef<Set<EnvironmentPanelTab>>(new Set());
+  if (fullOpen) mountedLazyTabsRef.current.add(panel.tab);
+  if (activeFileRequest) mountedLazyTabsRef.current.add("files");
+  if (panel.selectedArtifactId) mountedLazyTabsRef.current.add("artifacts");
   const availableTabs = availableEnvironmentPanelTabs(panel.subagentsEnabled, panel.devicesEnabled);
   const panelTabs = [...new Set([...panel.openTabs.filter((tab) => availableTabs.includes(tab)), panel.tab])];
   const runBrowser = async (command: Parameters<typeof browserApi.command>[1]) => {
@@ -1830,17 +1869,20 @@ function EnvironmentPanelSurface({
       panel.tab === "subagents" &&
       panel.subagentFocusDetailVersion > handledSubagentFocusRef.current
     ) {
-      handledSubagentFocusRef.current = panel.subagentFocusDetailVersion;
+      if (subagentsLoaded) {
+        handledSubagentFocusRef.current = panel.subagentFocusDetailVersion;
+      }
       const frame = window.requestAnimationFrame(() => {
         const heading = surfaceRef.current?.querySelector<HTMLElement>(
           "[data-subagent-detail-heading]",
         );
+        if (heading) handledSubagentFocusRef.current = panel.subagentFocusDetailVersion;
         (heading ?? activeTabRef.current)?.focus();
       });
       return () => window.cancelAnimationFrame(frame);
     }
     activeTabRef.current?.focus();
-  }, [fullOpen, panel.frontSurface, panel.subagentFocusDetailVersion, panel.tab, presented]);
+  }, [fullOpen, panel.frontSurface, panel.subagentFocusDetailVersion, panel.tab, presented, subagentsLoaded]);
 
   // Only a strip interaction requests this handoff. Wait for React to commit the
   // authoritative selection; a RAF after IPC can run before the new tab's ref.
@@ -1867,85 +1909,96 @@ function EnvironmentPanelSurface({
       <WorkspaceToolLauncher hasWorkspace={Boolean(active)} hasFolderAccess={Boolean(active?.folderPath && active.permission !== "none")} canOpenTerminal={terminal.canOpen} subagents={panel.subagentsEnabled} devices={panel.devicesEnabled} artifacts={panel.artifactsOffered} busy={panel.gitOperationBusy} onOpen={openTool} onQuickView={panel.showQuickView} onUrl={openBrowserUrl} />
     ),
     context: () => <ChatContextPanel details={panel.contextDetails} />,
-    artifacts: () => (
-      <ArtifactsPanel
-        workspace={active ?? null}
-        active={presented && panel.tab === "artifacts"}
-        artifacts={panel.artifacts}
-        selectedId={panel.selectedArtifactId}
-        onSelect={panel.selectArtifact}
-        onAskAiden={(view) => {
-          const chatId = artifactChat(view);
-          if (chatId) stageComposerText(chatId, workspaceArtifactChangeRequest(view), { notice: null });
-        }}
-        onAction={(view, action) => {
-          if (action.kind !== "send" && action.kind !== "compose") return;
-          const chatId = artifactChat(view);
-          if (!chatId) return;
-          // A confirmed follow-up sends through the chat's own path; compose only fills its composer.
-          if (action.kind === "compose" || !sendPromptToChat(chatId, action.text)) stageComposerText(chatId, action.text);
-        }}
-        onDraftNewPage={(request) => {
-          // Only ever staged: the person reads the request and sends it.
-          if (newPageChatId) stageComposerText(newPageChatId, request, { notice: null });
-        }}
-        newPageUnavailable={newPageChatId ? null : "Open a chat in this workspace first, then draft the page there."}
-      />
-    ),
+    artifacts: () =>
+      mountedLazyTabsRef.current.has("artifacts") ? (
+        <React.Suspense fallback={null}>
+          <ArtifactsPanel
+            workspace={active ?? null}
+            active={presented && panel.tab === "artifacts"}
+            artifacts={panel.artifacts}
+            selectedId={panel.selectedArtifactId}
+            onSelect={panel.selectArtifact}
+            onAskAiden={(view) => {
+              const chatId = artifactChat(view);
+              if (chatId) stageComposerText(chatId, workspaceArtifactChangeRequest(view), { notice: null });
+            }}
+            onAction={(view, action) => {
+              if (action.kind !== "send" && action.kind !== "compose") return;
+              const chatId = artifactChat(view);
+              if (!chatId) return;
+              // A confirmed follow-up sends through the chat's own path; compose only fills its composer.
+              if (action.kind === "compose" || !sendPromptToChat(chatId, action.text)) stageComposerText(chatId, action.text);
+            }}
+            onDraftNewPage={(request) => {
+              // Only ever staged: the person reads the request and sends it.
+              if (newPageChatId) stageComposerText(newPageChatId, request, { notice: null });
+            }}
+            newPageUnavailable={newPageChatId ? null : "Open a chat in this workspace first, then draft the page there."}
+          />
+        </React.Suspense>
+      ) : null,
     terminal: () => <TerminalSideTarget presented={presented && panel.tab === "terminal"} />,
-    review: () => (
-      <ReviewPanel
-        workspace={active}
-        chatId={panel.activeChat.chatId ?? undefined}
-        active={presented && panel.tab === "review"}
-        mode={panel.reviewMode}
-        onModeChange={panel.openReview}
-        onOpenFile={panel.openFile}
-      />
-    ),
-    subagents: () => (
-      <HelperAwareSubagentsPanel
-        onClosePanel={panel.closeTools}
-        onTranscriptIncomplete={panel.refetchSubagentTranscript}
-        transcriptRefetchFailures={panel.subagentTranscriptRefetchFailures}
-        onRetryTranscript={panel.retrySubagentTranscript}
-        chatId={panel.subagents.chatId}
-        workspaceId={panel.subagents.workspaceId}
-        runs={panel.subagentViews}
-        handoffSnapshots={panel.subagents.handoffSnapshots}
-        selectedRunId={panel.selectedSubagentRunId}
-        selectedRunSnapshot={
-          panel.subagentViews.find((run) => run.runId === panel.selectedSubagentRunId)
-            ?.snapshot
-        }
-        detailLoading={panel.subagentDetailLoading}
-        detailError={panel.subagentDetailError}
-        effectActivity={panel.subagentDetailEffects}
-        onSelectedRunChange={panel.selectSubagent}
-        onRetryDetail={panel.retrySubagentDetail}
-        onStopRun={panel.stopSubagent}
-        stopPendingRunIds={panel.subagentStopPendingRunIds}
-        stopErrorsByRunId={panel.subagentStopErrorsByRunId}
-        onDetailAnnouncement={panel.announceSubagentDetail}
-        detailRequestVersion={panel.subagentFocusDetailVersion}
-        compact={width < 620}
-        active={presented && panel.tab === "subagents"}
-        ownerReplacementFallbackFocusTarget={() => activeTabRef.current}
-      />
-    ),
-    files: () => (
-      <FilesPanel
-        workspace={active}
-        active={presented && panel.tab === "files"}
-        requestedPath={activeFileRequest?.path ?? null}
-        requestedPathKey={activeFileRequest?.id ?? 0}
-        compact={width < 540}
-        interactionBlockedReason={
-          panel.gitOperationBusy ? "Wait for the current Git operation to finish." : null
-        }
-        onEditorStateChange={panel.reportEditorState}
-      />
-    ),
+    review: () =>
+      mountedLazyTabsRef.current.has("review") ? (
+        <React.Suspense fallback={null}>
+          <ReviewPanel
+            workspace={active}
+            chatId={panel.activeChat.chatId ?? undefined}
+            active={presented && panel.tab === "review"}
+            mode={panel.reviewMode}
+            onModeChange={panel.openReview}
+            onOpenFile={panel.openFile}
+          />
+        </React.Suspense>
+      ) : null,
+    subagents: () =>
+      mountedLazyTabsRef.current.has("subagents") ? (
+        <HelperAwareSubagentsPanel
+          onClosePanel={panel.closeTools}
+          onTranscriptIncomplete={panel.refetchSubagentTranscript}
+          transcriptRefetchFailures={panel.subagentTranscriptRefetchFailures}
+          onRetryTranscript={panel.retrySubagentTranscript}
+          onMounted={markSubagentsLoaded}
+          chatId={panel.subagents.chatId}
+          workspaceId={panel.subagents.workspaceId}
+          runs={panel.subagentViews}
+          handoffSnapshots={panel.subagents.handoffSnapshots}
+          selectedRunId={panel.selectedSubagentRunId}
+          selectedRunSnapshot={
+            panel.subagentViews.find((run) => run.runId === panel.selectedSubagentRunId)
+              ?.snapshot
+          }
+          detailLoading={panel.subagentDetailLoading}
+          detailError={panel.subagentDetailError}
+          effectActivity={panel.subagentDetailEffects}
+          onSelectedRunChange={panel.selectSubagent}
+          onRetryDetail={panel.retrySubagentDetail}
+          onStopRun={panel.stopSubagent}
+          stopPendingRunIds={panel.subagentStopPendingRunIds}
+          stopErrorsByRunId={panel.subagentStopErrorsByRunId}
+          onDetailAnnouncement={panel.announceSubagentDetail}
+          detailRequestVersion={panel.subagentFocusDetailVersion}
+          compact={width < 620}
+          active={presented && panel.tab === "subagents"}
+          ownerReplacementFallbackFocusTarget={() => activeTabRef.current}
+        />
+      ) : null,
+    files: () =>
+      mountedLazyTabsRef.current.has("files") ? (
+        <React.Suspense fallback={null}>
+          <FilesPanel
+            workspace={active}
+            active={presented && panel.tab === "files"}
+            requestedPath={activeFileRequest?.path ?? null}
+            requestedPathKey={activeFileRequest?.id ?? 0}
+            compact={width < 540}
+            interactionBlockedReason={
+              panel.gitOperationBusy ? "Wait for the current Git operation to finish." : null
+            }
+            onEditorStateChange={panel.reportEditorState}
+          />
+        </React.Suspense>
+      ) : null,
     browser: () =>
       active && (
         <React.Suspense fallback={null}>

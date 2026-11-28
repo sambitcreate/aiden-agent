@@ -72,20 +72,15 @@ import {
   type ApprovalMode,
 } from "../shared/approval-mode";
 import { isEscapeKey } from "../lib/dismiss-key";
+import {
+  openWorkspaceSettings,
+  subscribeWorkspaceSettingsOpen,
+  type OpenWorkspaceSettingsRequest,
+} from "../lib/workspace-settings-dialog-state";
+
+export { openWorkspaceSettings };
 
 const IS_MAC = typeof navigator !== "undefined" && /Mac/u.test(navigator.userAgent);
-
-interface OpenRequest {
-  workspaceId: string;
-  tab: WorkspaceSettingsTab;
-}
-
-const openListeners = new Set<(request: OpenRequest) => void>();
-
-/** Opens Workspace settings for one workspace, on the given tab. */
-export function openWorkspaceSettings(workspaceId: string, tab: WorkspaceSettingsTab = "general"): void {
-  for (const listener of openListeners) listener({ workspaceId, tab });
-}
 
 const TABS: ReadonlyArray<{ id: WorkspaceSettingsTab; title: string; icon: React.ReactNode }> = [
   { id: "general", title: "General", icon: <SlidersHorizontal className="size-4" /> },
@@ -143,30 +138,31 @@ function useWorkspacePatch(workspaceId: string | undefined) {
   );
 }
 
-export function WorkspaceSettingsDialog() {
-  const [request, setRequest] = React.useState<OpenRequest | null>(null);
-  const [open, setOpen] = React.useState(false);
-  const [tab, setTab] = React.useState<WorkspaceSettingsTab>("general");
-  const returnTo = React.useRef<HTMLElement | null>(null);
+export function WorkspaceSettingsDialog({
+  initialRequest = null,
+}: {
+  initialRequest?: OpenWorkspaceSettingsRequest | null;
+} = {}) {
+  const [request, setRequest] = React.useState<OpenWorkspaceSettingsRequest | null>(initialRequest);
+  const [open, setOpen] = React.useState(Boolean(initialRequest));
+  const [tab, setTab] = React.useState<WorkspaceSettingsTab>(initialRequest?.tab ?? "general");
+  const returnTo = React.useRef<HTMLElement | null>(initialRequest?.returnFocus ?? null);
   const { active } = useActiveWorkspace();
   const workspaces = useWorkspaces();
   const found = workspaces.data?.find((candidate) => candidate.id === request?.workspaceId);
   // No workspace chats use the global settings, so they never get this pop-up.
   const workspace = workspaceHasOwnSettings(found) ? found : undefined;
 
-  const show = React.useCallback((next: OpenRequest) => {
-    returnTo.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const show = React.useCallback((next: OpenWorkspaceSettingsRequest) => {
+    returnTo.current =
+      next.returnFocus ??
+      (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     setRequest(next);
     setTab(next.tab);
     setOpen(true);
   }, []);
 
-  React.useEffect(() => {
-    openListeners.add(show);
-    return () => {
-      openListeners.delete(show);
-    };
-  }, [show]);
+  React.useEffect(() => subscribeWorkspaceSettingsOpen(show), [show]);
 
   const activeHasSettings = workspaceHasOwnSettings(active);
   useCommandHandler(

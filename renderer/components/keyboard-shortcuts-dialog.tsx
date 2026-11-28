@@ -56,8 +56,14 @@ export function KeyCombo({
   );
 }
 
-export function KeyboardShortcutsDialog() {
-  const [open, setOpen] = React.useState(false);
+export function KeyboardShortcutsDialog({
+  initialOpen = false,
+  initialReturnFocus = null,
+}: {
+  initialOpen?: boolean;
+  initialReturnFocus?: HTMLElement | null;
+} = {}) {
+  const [open, setOpen] = React.useState(initialOpen);
   const [query, setQuery] = React.useState("");
   const headingId = React.useId();
   const navigate = useNavigate();
@@ -65,7 +71,7 @@ export function KeyboardShortcutsDialog() {
   const { binding } = useCommandSystem();
   const capabilities = useAppCapabilities();
   // Esc gives focus back to where ⌘/ was pressed, such as the message box.
-  const returnTo = React.useRef<HTMLElement | null>(null);
+  const returnTo = React.useRef<HTMLElement | null>(initialReturnFocus);
   useCommandHandler("shortcuts.show", () => {
     returnTo.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;

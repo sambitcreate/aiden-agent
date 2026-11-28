@@ -212,6 +212,7 @@ test("a saved native visual renders after its tool row and sends follow-ups thro
       error={null}
     />,
   );
+  await waitFor(() => assert.ok(view.container.querySelector('[data-aiden-ui="ui-board"]')));
   const html = view.container.innerHTML;
   const activityAt = html.indexOf("render_ui");
   const visualAt = html.indexOf('data-aiden-ui="ui-board"');
@@ -223,7 +224,7 @@ test("a saved native visual renders after its tool row and sends follow-ups thro
   assert.deepEqual(prompts, ["Tell me more"]);
 });
 
-test("a reply starting or ending updates a saved visual's pending follow-up", () => {
+test("a reply starting or ending updates a saved visual's pending follow-up", async () => {
   const list = (busy: boolean) => (
     <MessageList
       chatId="chat-saved"
@@ -241,7 +242,7 @@ test("a reply starting or ending updates a saved visual's pending follow-up", ()
     />
   );
   const view = render(list(false));
-  fireEvent.click(view.getByRole("button", { name: "More" }));
+  fireEvent.click(await view.findByRole("button", { name: "More" }));
   assert.ok(view.getByRole("button", { name: "Send" }));
   view.rerender(list(true));
   assert.ok(view.getByRole("button", { name: "Add to draft" }));
@@ -250,7 +251,7 @@ test("a reply starting or ending updates a saved visual's pending follow-up", ()
   assert.ok(view.getByRole("button", { name: "Send" }));
 });
 
-test("a streaming native draft is inert in its row and the presented visual replaces it", () => {
+test("a streaming native draft is inert in its row and the presented visual replaces it", async () => {
   const step = toolStep("tool-1", "call-ui", "render_ui", 0);
   const timeline: GenerationTimeline = { version: 3, generationId: "g", status: "running", startedAt: 1, steps: [step] };
   const list = (presented: boolean) => (
@@ -270,6 +271,7 @@ test("a streaming native draft is inert in its row and the presented visual repl
     />
   );
   const view = render(list(false));
+  await waitFor(() => assert.ok(view.container.querySelector('[data-aiden-ui="draft-call-ui"]')));
   const draft = view.container.querySelector('[data-aiden-ui="draft-call-ui"]');
   assert.ok(draft);
   assert.equal(draft.getAttribute("aria-busy"), "true");
@@ -278,7 +280,7 @@ test("a streaming native draft is inert in its row and the presented visual repl
   assert.ok(view.container.querySelector('[data-aiden-ui="ui-board"]'));
 });
 
-test("a remote chat draws another computer's native visual as its text, after its tool row, with nothing to press inside", () => {
+test("a remote chat draws another computer's native visual as its text, after its tool row, with nothing to press inside", async () => {
   const intro = "Before the board.";
   const step = { ...toolStep("tool-1", "call-1", "render_ui", intro.length), status: "completed" as const, finishedAt: 2 };
   const message = mapRemoteMessage({
@@ -302,6 +304,7 @@ test("a remote chat draws another computer's native visual as its text, after it
       error={null}
     />,
   );
+  await waitFor(() => assert.ok(view.container.querySelector('[data-aiden-ui="ui-remote"]')));
   const block = view.container.querySelector('[data-aiden-ui="ui-remote"]');
   assert.ok(block, "the visual is drawn");
   const html = view.container.innerHTML;
@@ -349,7 +352,7 @@ test("a native visual offers Keep in Artifacts from its caption menu only once s
   });
   // Without a workspace to keep it in (a Bot, the Assistant, a remote chat), Copy stays the only action.
   const plain = render(savedList({ uiVisuals: [NATIVE] }));
-  assert.ok(screen.getByRole("button", { name: "Copy Board as text" }));
+  assert.ok(await screen.findByRole("button", { name: "Copy Board as text" }));
   assert.equal(screen.queryByRole("button", { name: "Actions for Board" }), null);
   plain.unmount();
 
@@ -371,10 +374,11 @@ test("a native visual offers Keep in Artifacts from its caption menu only once s
       />
     </KeepVisualChatContext.Provider>,
   );
-  assert.ok(screen.getByRole("button", { name: "Copy Board as text" }));
+  assert.ok(await screen.findByRole("button", { name: "Copy Board as text" }));
   live.unmount();
 
   render(savedList({ uiVisuals: [NATIVE] }, (list) => <KeepVisualChatContext.Provider value="chat-saved">{list}</KeepVisualChatContext.Provider>));
+  await screen.findByRole("button", { name: "Actions for Board" });
   assert.equal(screen.queryByRole("button", { name: "Copy Board as text" }), null);
   await openVisualMenu("Board");
   assert.ok(screen.getByRole("menuitem", { name: "Copy as text" }), "the visual's own action stays in the menu");
@@ -391,6 +395,7 @@ test("a refused keep tells the person why without the IPC wrapper", async () => 
     },
   });
   render(savedList({ uiVisuals: [NATIVE] }, (list) => <KeepVisualChatContext.Provider value="chat-saved">{list}</KeepVisualChatContext.Provider>));
+  await screen.findByRole("button", { name: "Actions for Board" });
   await openVisualMenu("Board");
   fireEvent.click(screen.getByRole("menuitem", { name: "Keep in Artifacts" }));
   await screen.findByText("This workspace already has 20 artifacts.");

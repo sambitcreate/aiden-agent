@@ -123,7 +123,7 @@ import {
   historyOptionId,
 } from "./composer-history-popover";
 import { isUsable } from "../lib/model-picker-data";
-import { openWorkspaceSettings } from "./workspace-settings-dialog";
+import { openWorkspaceSettings } from "../lib/workspace-settings-dialog-state";
 import { aidenLivePreferences } from "../shared/aiden-live-settings";
 import { parseGoalCommand } from "../shared/goal";
 import { goalBarView } from "../lib/goal-bar-view";

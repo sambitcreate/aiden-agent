@@ -40,6 +40,7 @@ async function loadComposer() {
     "../lib/queries":
       "export const useSettings=()=>({ data: globalThis.__composerSettings }); export const useProviders=()=>({ data: [] }); export const useDiscoveredSkills=(scope)=>{ (globalThis.__composerSkillScopes ??= []).push(scope ?? null); return {}; }; export const useWorkspaceFileIndex=()=>({});",
     "./workspace-settings-dialog": "export const openWorkspaceSettings=()=>{};",
+    "../lib/workspace-settings-dialog-state": "export const openWorkspaceSettings=()=>{};",
     "../lib/command-system":
       "export const useCommandSystem=()=>({canExecute:()=>false,execute:()=>false,binding:()=>null}); export const useCommandHandler=()=>{};",
     "../lib/ipc":

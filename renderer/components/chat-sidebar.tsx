@@ -5,7 +5,7 @@ import {
   requestChatDraftComposerFocus,
   subscribeChatDrafts,
 } from "../lib/chat-draft";
-import { openWorkspaceSettings } from "./workspace-settings-dialog";
+import { openWorkspaceSettings } from "../lib/workspace-settings-dialog-state";
 import { workspaceHasOwnSettings } from "../lib/workspace-settings-view";
 import { useNewChatActions } from "../lib/new-chat-actions";
 import { HistoryNavButtons } from "./history-nav";

@@ -16,8 +16,8 @@ import {
 } from "../lib/chat-title-reveal";
 import { queryKeys, useChats } from "../lib/queries";
 import { useActiveWorkspace } from "../lib/workspace-context";
-import { TerminalDrawer } from "../components/terminal-drawer";
-import { DesignChatBody, DesignWorkbench, useDesignChatState } from "../design/design-layout";
+import { useWorkspaceTerminal } from "../components/workspace-terminal-provider";
+import { DesignChatBody, DesignShell, useDesignChatState } from "../design/design-shell";
 import type { Chat, ChatMetadataUpdated, ChatMeta } from "../lib/types";
 import { applyChatMetaListUpdate, applyChatMetadataUpdate } from "../shared/chat-metadata-update";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
@@ -25,6 +25,28 @@ import { withForkLineage } from "../lib/chat-copy-view";
 import type { ChatForkSummaryChanged } from "../shared/chat-copy-contract";
 import { isStudioPath } from "../shared/studio-routes";
 import { isBotsPath, rememberRoute } from "../lib/bot-routes";
+
+const TerminalDrawer = React.lazy(() =>
+  import("../components/terminal-drawer").then((module) => ({ default: module.TerminalDrawer })),
+);
+const DesignWorkbench = React.lazy(() =>
+  import("../design/design-layout").then((module) => ({ default: module.DesignWorkbenchSurface })),
+);
+
+function DeferredTerminalDrawer() {
+  const terminal = useWorkspaceTerminal();
+  const active = terminal.open || terminal.requestedOpen || terminal.sessions.length > 0;
+  const [mounted, setMounted] = React.useState(active);
+  React.useLayoutEffect(() => {
+    if (active) setMounted(true);
+  }, [active]);
+  if (!mounted) return null;
+  return (
+    <React.Suspense fallback={null}>
+      <TerminalDrawer />
+    </React.Suspense>
+  );
+}
 
 export function ChatLayout() {
   const params = useParams({ strict: false }) as { chatId?: string; hostId?: string };
@@ -149,10 +171,19 @@ export function ChatLayout() {
       }
       sidebarSize={{ default: 272, min: 236, max: 340 }}
     >
-      <DesignWorkbench
-        chatId={localChatId}
+      <DesignShell
         design={design}
         suppressed={onRemoteHost || studioSurface || botsSurface}
+        renderActiveWorkbench={({ containerRef, onSnapshotChange }) => (
+          <React.Suspense fallback={null}>
+            <DesignWorkbench
+              chatId={localChatId}
+              state={design.state}
+              containerRef={containerRef}
+              onSnapshotChange={onSnapshotChange}
+            />
+          </React.Suspense>
+        )}
       >
         <div className="flex h-full min-h-0 flex-col">
           <div className="min-h-0 flex-1 overflow-hidden">
@@ -166,11 +197,11 @@ export function ChatLayout() {
             // The terminal belongs to the chat column, so stacked design mode
             // hides it with the chat body while the canvas shows.
             <DesignChatBody>
-              <TerminalDrawer />
+              <DeferredTerminalDrawer />
             </DesignChatBody>
           )}
         </div>
-      </DesignWorkbench>
+      </DesignShell>
     </SplitView>
   );
 }
