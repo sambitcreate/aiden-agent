@@ -4,6 +4,9 @@
 // starts, stops, restarts, retries, disconnects and connects, shows logs, and
 // opens the Choose and Connect sheets. Reads are cache-first; actions are
 // instant and settle on the invoke's own answer (the instant rule, B-M1).
+// 3d (S112): with no web app, its menu offers Add design app…, which raises
+// main's scaffold card, or says why it can't (a refusal, or a missing Node
+// with Retry).
 
 import * as React from "react";
 import {
@@ -26,14 +29,42 @@ import {
   designAppChip,
   designAppProblemMessage,
   designAppRetryable,
+  mockRefusalMessage,
+  toolchainProblemMessage,
   type DesignAppChip as ChipModel,
   type DesignAppProblem,
+  type DesignAppScaffoldResult,
   type DesignAppsSnapshot,
   type DesignAppStatus,
 } from "../shared/design-app";
 import { DesignAppChooseSheet, DesignAppConnectSheet } from "./design-app-sheets";
 
 const ACTION_FAILED = "Aiden couldn't do that.";
+const CANVAS_UNSAVED = "The canvas couldn't be saved, so the design app can't be added yet.";
+
+/** A scaffold's answers the person already saw: their own Not now, a card with no window, or an interrupted wait. */
+const QUIET_SCAFFOLD: ReadonlySet<DesignAppProblem["problem"]> = new Set([
+  "consent-declined",
+  "consent-unanswered",
+  "consent-unavailable",
+  "interrupted",
+]);
+
+const TOOLCHAIN: ReadonlySet<DesignAppProblem["problem"]> = new Set(["node-missing", "manager-missing"]);
+
+/** What the menu says when no design app can be added yet: the refusal's or the toolchain problem's fixed text. */
+function mockMenuLine(snapshot: DesignAppsSnapshot, local: DesignAppProblem | null): { message: string; retry: boolean } | null {
+  if (local) {
+    if (local.problem === "scaffold-refused") return { message: mockRefusalMessage(local.why), retry: false };
+    if (TOOLCHAIN.has(local.problem)) return { message: designAppProblemMessage(local), retry: true };
+    return { message: designAppProblemMessage(local), retry: false };
+  }
+  const mock = snapshot.mock;
+  if (!mock) return null;
+  if (mock.problem) return { message: toolchainProblemMessage(mock.problem), retry: true };
+  if (mock.offer === "refused") return { message: mockRefusalMessage(mock.why, mock.folder), retry: false };
+  return null;
+}
 const CRASHED = "The app's dev server stopped.";
 
 // ── The snapshot, cache-first ──
@@ -198,12 +229,27 @@ const TONE_DOT: Record<ChipModel["tone"], string> = {
   problem: "bg-status-red",
 };
 
-export function DesignAppStatusChip({ chatId, onShowLogs }: { chatId: string; onShowLogs?: (appRoot: string) => void }) {
+export function DesignAppStatusChip({
+  chatId,
+  onShowLogs,
+  pageId,
+  flush,
+}: {
+  chatId: string;
+  onShowLogs?: (appRoot: string) => void;
+  /** 3d: the page on screen, where a new design app's `/` goes. */
+  pageId?: string;
+  /** 3d: saves the canvas first, so main sees the page on screen. */
+  flush?: () => Promise<boolean>;
+}) {
   const { designLive } = useAppCapabilities();
   const snapshot = useDesignAppsSnapshot(chatId, designLive);
   const [pending, setPending] = React.useState<ReadonlyMap<string, Pending>>(new Map());
   const [problems, setProblems] = React.useState<ReadonlyMap<string, DesignAppProblem>>(new Map());
   const [announcement, setAnnouncement] = React.useState("");
+  /** 3d: a scaffold the service refused, shown in the menu; and whether one is on its way. */
+  const [mockProblem, setMockProblem] = React.useState<DesignAppProblem | null>(null);
+  const [scaffolding, setScaffolding] = React.useState(false);
   const [sheet, setSheet] = React.useState<{ kind: "choose" } | { kind: "connect"; filterRoot?: string } | null>(null);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
   const previous = React.useRef<Map<string, DesignAppStatus>>(new Map());
@@ -251,8 +297,35 @@ export function DesignAppStatusChip({ chatId, onShowLogs }: { chatId: string; on
   }
 
   const apps = snapshot.apps.map((app) => pending.get(app.appRoot)?.status ?? app);
-  const chip = designAppChip({ ...snapshot, apps });
-  if (!chip) return null;
+  const model = designAppChip({ ...snapshot, apps });
+  if (!model) return null;
+  const chip: ChipModel = scaffolding && model.connectOnly ? { ...model, label: "Adding design app…", tone: "busy" } : model;
+  const mockLine = chip.connectOnly ? mockMenuLine(snapshot, mockProblem) : null;
+  const canAdd =
+    chip.connectOnly && mockLine === null && pageId !== undefined && (snapshot.mock?.offer === "react-nonweb" || snapshot.mock?.offer === "starter");
+
+  /** Add design app… and its Retry: save the canvas, then ask main, which raises the card in this window. */
+  const scaffold = async () => {
+    if (pageId === undefined || scaffolding) return;
+    setMockProblem(null);
+    setScaffolding(true);
+    try {
+      const saved = flush ? await flush().catch(() => false) : true;
+      if (!saved) {
+        toast.error(CANVAS_UNSAVED);
+        return;
+      }
+      const result: DesignAppScaffoldResult = await designAppApi.scaffold(chatId, pageId);
+      if (result.status !== "problem" || QUIET_SCAFFOLD.has(result.problem.problem)) return;
+      const problem = result.problem;
+      if (problem.problem === "scaffold-refused" || TOOLCHAIN.has(problem.problem)) setMockProblem(problem);
+      else toast.error(designAppProblemMessage(problem));
+    } catch (error) {
+      toast.error(error instanceof Error && error.message ? error.message : ACTION_FAILED);
+    } finally {
+      setScaffolding(false);
+    }
+  };
 
   const act = async (app: DesignAppStatus, action: Action) => {
     const base = snapshot.apps.find((candidate) => candidate.appRoot === app.appRoot) ?? app;
@@ -369,7 +442,14 @@ export function DesignAppStatusChip({ chatId, onShowLogs }: { chatId: string; on
                   ))}
                 </React.Fragment>
               ))}
-          {chip.connectOnly ? null : <DropdownMenuSeparator />}
+          {mockLine ? (
+            <DropdownMenuLabel className="py-1.5 font-normal">
+              <span className="text-small whitespace-normal break-words text-secondary">{mockLine.message}</span>
+            </DropdownMenuLabel>
+          ) : null}
+          {mockLine?.retry ? <DropdownMenuItem onSelect={() => void scaffold()}>Retry</DropdownMenuItem> : null}
+          {canAdd ? <DropdownMenuItem onSelect={() => void scaffold()}>Add design app…</DropdownMenuItem> : null}
+          {chip.connectOnly && !(mockLine || canAdd) ? null : <DropdownMenuSeparator />}
           {chip.choose ? <DropdownMenuItem onSelect={() => setSheet({ kind: "choose" })}>Choose apps…</DropdownMenuItem> : null}
           <DropdownMenuItem onSelect={() => setSheet({ kind: "connect" })}>Connect running server…</DropdownMenuItem>
         </DropdownMenuContent>

@@ -379,3 +379,109 @@ test("attach problems and already-running never toast", async () => {
     assert.equal(screen.queryByText(text), null, String(text));
   }
 });
+
+// ── 3d: the scaffold card (S102, S106) ──
+
+type ScaffoldRequest = Extract<DesignAppConsentRequest, { kind: "scaffold" }>;
+
+function scaffold(overrides: Partial<ScaffoldRequest> = {}): ScaffoldRequest {
+  return {
+    kind: "scaffold",
+    requestId: "s1",
+    chatId: "chat-1",
+    workspaceId: "ws",
+    folder: "design-app",
+    mockKind: "react-nonweb",
+    shellLabel: "Electron",
+    installCommand: "npm ci",
+    runCommand: "npm run dev",
+    scripts: [{ name: "dev", text: "vite" }],
+    packages: [
+      { name: "react", version: "19.2.7" },
+      { name: "react-dom", version: "19.2.7" },
+      { name: "@vitejs/plugin-react", version: "6.0.3" },
+      { name: "vite", version: "8.3.5" },
+    ],
+    files: ["index.html", "package-lock.json", "package.json", "src/App.tsx", "src/routes/index.tsx", "vite.config.js"],
+    ...overrides,
+  };
+}
+
+const ELECTRON_QUESTION = "This is an Electron app, so it can't run on the canvas. Make React mocks of its screens in design-app/ to iterate on?";
+
+test("3d: the scaffold card names the folder, the files, the packages with versions, npm ci, npm run dev and the network sentence", async () => {
+  installBotTestIpc();
+  render(<ChatSlot chatId="chat-1" />);
+  ask(scaffold());
+  const shown = await screen.findByRole("group", { name: ELECTRON_QUESTION });
+  const text = shown.textContent ?? "";
+  for (const expected of [
+    ELECTRON_QUESTION,
+    "design-app/",
+    "src/routes/index.tsx",
+    "vite.config.js",
+    ".aiden/canvas.json",
+    "npm ci",
+    "react 19.2.7",
+    "@vitejs/plugin-react 6.0.3",
+    "vite 8.3.5",
+    "Downloads these from the npm registry with your npm settings.",
+    "The packages' install scripts don't run.",
+    "npm run dev",
+    "This approves the commands above.",
+  ]) {
+    assert.ok(text.includes(expected), `shows ${expected}`);
+  }
+  assert.ok(within(shown).getByRole("button", { name: "Add design app" }));
+  assert.equal(text.includes("Installing runs your dependencies' install scripts."), false, "2b's install note doesn't apply");
+});
+
+test("3d: a long file list shows 40 files, then how many more", async () => {
+  installBotTestIpc();
+  render(<ChatSlot chatId="chat-1" />);
+  ask(scaffold({ files: Array.from({ length: 45 }, (_, index) => `src/f${String(index).padStart(2, "0")}.ts`) }));
+  const text = (await screen.findByRole("group", { name: ELECTRON_QUESTION })).textContent ?? "";
+  assert.ok(text.includes("src/f39.ts"));
+  assert.equal(text.includes("src/f40.ts"), false);
+  assert.ok(text.includes("and 5 more"));
+});
+
+test("3d: Electron, Tauri and React Native questions differ; the starter asks the no-web-app question", async () => {
+  installBotTestIpc();
+  render(<ChatSlot chatId="chat-1" />);
+  ask(scaffold({ requestId: "a", shellLabel: "Tauri" }));
+  ask(scaffold({ requestId: "b", shellLabel: "React Native", folder: "design-app-2" }));
+  ask(scaffold({ requestId: "c", mockKind: "starter", shellLabel: undefined, folder: "design-app-3" }));
+  assert.ok(await screen.findByRole("group", { name: "This is a Tauri app, so it can't run on the canvas. Make React mocks of its screens in design-app/ to iterate on?" }));
+  assert.ok(screen.getByRole("group", { name: "This is a React Native app, so it can't run on the canvas. Make React mocks of its screens in design-app-2/ to iterate on?" }));
+  assert.ok(screen.getByRole("group", { name: "This folder has no web app. Add a small React app in design-app-3/ to design in?" }));
+});
+
+test("3d: the scaffold card's focus starts on Not now, Escape is Not now, and Add design app answers allow", async () => {
+  const calls = installBotTestIpc({ "designApp:consentAnswer": () => true });
+  render(<ChatSlot chatId="chat-1" />);
+  ask(scaffold());
+  const notNow = await screen.findByRole("button", { name: "Not now" });
+  await waitFor(() => assert.equal(document.activeElement, notNow));
+  fireEvent.keyDown(notNow, { key: "Escape" });
+  await waitFor(() => assert.ok(screen.getByText("No card for chat-1")));
+  ask(scaffold({ requestId: "s2" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Add design app" }));
+  await waitFor(() => assert.ok(screen.getByText("No card for chat-1")));
+  assert.deepEqual(
+    calls.filter((call) => call.channel === "designApp:consentAnswer").map((call) => call.args),
+    [
+      ["s1", "decline"],
+      ["s2", "allow"],
+    ],
+  );
+});
+
+test("3d: a malformed scaffold card never shows", async () => {
+  installBotTestIpc();
+  render(<ChatSlot chatId="chat-1" />);
+  ask({ ...scaffold(), packages: [{ name: "react" }] } as never);
+  ask({ ...scaffold({ requestId: "s3" }), folder: 7 } as never);
+  await act(() => new Promise<void>((resolve) => setTimeout(resolve, 20)));
+  assert.ok(screen.getByText("No card for chat-1"));
+});

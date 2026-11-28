@@ -57,11 +57,18 @@ async function until<T>(get: () => T, tries = 100): Promise<T> {
   }
 }
 
-function Chip({ designLive = true, onShowLogs }: { designLive?: boolean; onShowLogs?: (appRoot: string) => void }) {
+type ChipProps = { designLive?: boolean; onShowLogs?: (appRoot: string) => void; pageId?: string; flush?: () => Promise<boolean> };
+
+function Chip({ designLive = true, onShowLogs, pageId, flush }: ChipProps) {
   return (
     <AppCapabilitiesProvider capabilities={{ ...DISABLED_APP_CAPABILITIES, designMode: true, designLive }}>
       <Toaster />
-      <DesignAppStatusChip chatId="chat-1" {...(onShowLogs ? { onShowLogs } : {})} />
+      <DesignAppStatusChip
+        chatId="chat-1"
+        {...(onShowLogs ? { onShowLogs } : {})}
+        {...(pageId !== undefined ? { pageId } : {})}
+        {...(flush ? { flush } : {})}
+      />
     </AppCapabilitiesProvider>
   );
 }
@@ -69,7 +76,7 @@ function Chip({ designLive = true, onShowLogs }: { designLive?: boolean; onShowL
 function mount(
   read: DesignAppsSnapshot | (() => unknown),
   handlers: Record<string, (...args: unknown[]) => unknown> = {},
-  props: { designLive?: boolean; onShowLogs?: (appRoot: string) => void } = {},
+  props: ChipProps = {},
 ) {
   const calls = installBotTestIpc({ "designApp:status:get": typeof read === "function" ? read : () => read, ...handlers });
   render(<Chip {...props} />);
@@ -459,4 +466,103 @@ test("closing the Connect sheet returns focus to the chip", async () => {
   });
   await until(() => assert.equal(screen.queryByRole("dialog") === null, true));
   await until(() => assert.equal(document.activeElement === button, true, "focus is on the chip"));
+});
+
+// ── 3d: Add design app… (S112) ──
+
+const NO_WEB_APP = (mock: DesignAppsSnapshot["mock"]) => snapshot([], { target: "none", candidates: [], ...(mock ? { mock } : {}) });
+
+test("3d: no web app: Add design app… comes first, and the chip flushes the canvas before it asks with the page on screen", async () => {
+  const order: string[] = [];
+  const calls = mount(
+    NO_WEB_APP({ offer: "starter", folder: "design-app" }),
+    {
+      "designApp:scaffold": () => {
+        order.push("scaffold");
+        return { status: "problem", problem: { problem: "consent-declined" } };
+      },
+    },
+    {
+      pageId: "page-2",
+      flush: async () => {
+        order.push("flush");
+        return true;
+      },
+    },
+  );
+  const menu = await openMenu();
+  assert.deepEqual(menuItems(menu), ["Add design app…", "Connect running server…"]);
+  await choose(menu, "Add design app…");
+  const call = await until(() => {
+    const found = calls.find((candidate) => candidate.channel === "designApp:scaffold");
+    assert.ok(found);
+    return found;
+  });
+  assert.deepEqual(call.args, ["chat-1", { pageId: "page-2" }]);
+  assert.deepEqual(order, ["flush", "scaffold"]);
+  await until(() => assert.equal(screen.queryByRole("menu") === null, true));
+  assert.equal(document.querySelector("[data-sonner-toast]") === null, true, "the person's own Not now raises no toast");
+});
+
+test("3d: a canvas that can't be saved asks nothing and says why", async () => {
+  const calls = mount(NO_WEB_APP({ offer: "react-nonweb", folder: "design-app", source: ".", shell: "electron" }), {}, { pageId: "page-1", flush: async () => false });
+  await choose(await openMenu(), "Add design app…");
+  await until(() => assert.equal(document.querySelector("[data-sonner-toast]") !== null, true));
+  assert.equal(calls.some((call) => call.channel === "designApp:scaffold"), false);
+});
+
+test("3d: a refused offer shows its message as a row that isn't a menu item", async () => {
+  mount(NO_WEB_APP({ offer: "refused", why: "workspace-runner" }));
+  const menu = await openMenu();
+  assert.deepEqual(menuItems(menu), ["Connect running server…"]);
+  assert.match(menu.textContent ?? "", /workspace runner/u);
+});
+
+test("3d: node-missing shows the install text with Retry, and Retry asks again", async () => {
+  const calls = mount(
+    NO_WEB_APP({ offer: "starter", folder: "design-app", problem: { problem: "node-missing", manager: "npm" } as never }),
+    { "designApp:scaffold": () => ({ status: "problem", problem: { problem: "node-missing", manager: "npm" } }) },
+    { pageId: "page-1" },
+  );
+  const menu = await openMenu();
+  assert.match(menu.textContent ?? "", /Node/u);
+  assert.deepEqual(menuItems(menu), ["Retry", "Connect running server…"]);
+  await choose(menu, "Retry");
+  await until(() => assert.equal(calls.some((call) => call.channel === "designApp:scaffold"), true));
+});
+
+test("3d: a scaffold the service refuses shows the refusal in the menu, not a toast; a rejected call is one toast", async () => {
+  const asked = pending<unknown>();
+  mount(NO_WEB_APP({ offer: "starter", folder: "design-app" }), {
+    "designApp:scaffold": () => asked.promise,
+  }, { pageId: "page-1" });
+  await choose(await openMenu(), "Add design app…");
+  await until(() => assert.equal(screen.queryByRole("menu") === null, true));
+  await act(async () => asked.resolve({ status: "problem", problem: { problem: "scaffold-refused", why: "in-workspaces" } }));
+  assert.match(await menuText(), /!design-app/u);
+  assert.equal(document.querySelector("[data-sonner-toast]") === null, true);
+  cleanup();
+  resetDesignAppChipForTests();
+  mount(NO_WEB_APP({ offer: "starter", folder: "design-app" }), {
+    "designApp:scaffold": () => {
+      throw new Error("That page isn't on this chat's canvas.");
+    },
+  }, { pageId: "page-1" });
+  await choose(await openMenu(), "Add design app…");
+  await until(() => assert.equal(document.querySelectorAll("[data-sonner-toast]").length, 1));
+});
+
+test("3d: once the design app runs, the chip is the ordinary app chip", async () => {
+  mount(NO_WEB_APP({ offer: "starter", folder: "design-app" }), {}, { pageId: "page-1" });
+  assert.equal((await trigger()).textContent, "Connect");
+  broadcast(
+    snapshot([status({ appRoot: "design-app", mock: true, frameworkLabel: "Design app", phase: "running", origin: "http://127.0.0.1:5173", port: 5173, revision: 3 })], {
+      candidates: [{ appRoot: "design-app", framework: "vite", frameworkLabel: "Design app", script: "dev", mock: true }],
+      mock: { offer: "existing", folder: "design-app" },
+    }),
+  );
+  await until(() => assert.equal(screen.getByRole("button", { name: /^Live app:/u }).textContent, "Design app · :5173"));
+  const items = menuItems(await openMenu());
+  assert.equal(items.includes("Add design app…"), false);
+  assert.ok(items.includes("Stop"));
 });

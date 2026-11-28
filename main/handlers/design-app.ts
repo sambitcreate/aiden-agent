@@ -3,8 +3,9 @@
 // these), and the answer to a run-app card. Every request must come from a
 // window's current main frame, for an attended desktop chat whose workspace
 // has a folder, while the live flag is on. 2c adds running (the Connect
-// sheet's scan), connect (a pick from it) and retry. Production wiring is in
-// design-canvas-main.ts.
+// sheet's scan), connect (a pick from it) and retry. 3d adds scaffold, the
+// chip's Add design app…, for a design-mode chat and the page on screen.
+// Production wiring is in design-canvas-main.ts.
 
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { chatRunsDesignApps, DESIGN_APP_CHANNELS } from "../../renderer/shared/design-app.js";
@@ -21,6 +22,8 @@ export interface DesignAppChat {
   workspaceId?: string;
   botId?: string;
   owner?: unknown;
+  /** 3d: scaffold is only for a chat in design mode. */
+  designMode?: boolean;
 }
 
 export interface DesignAppHandlerDeps<Event> {
@@ -31,7 +34,9 @@ export interface DesignAppHandlerDeps<Event> {
   owner(event: Event): DesignAppConsentOwner;
   getChat(chatId: string): Promise<DesignAppChat | null>;
   workspace(workspaceId: string): Promise<{ id: string; folderPath?: string; permission: WorkspaceGatePermission } | null | undefined>;
-  servers: Pick<DesignAppServers, "snapshot" | "start" | "stop" | "restart" | "choose" | "logs" | "running" | "connect" | "retry">;
+  servers: Pick<DesignAppServers, "snapshot" | "start" | "stop" | "restart" | "choose" | "logs" | "running" | "connect" | "retry" | "scaffold">;
+  /** 3d: whether the chat's canvas has this page, so the design app's `/` goes on the page the person sees. */
+  pageOnScreen(chatId: string, pageId: string): Promise<boolean>;
   consent: Pick<DesignAppConsent, "answer">;
 }
 
@@ -75,6 +80,7 @@ export function registerDesignAppHandlers<Event>(deps: DesignAppHandlerDeps<Even
     if (!workspace?.folderPath) throw new Error("This chat's workspace has no folder on this computer.");
     return {
       owner,
+      chat,
       base: { workspaceId: workspace.id, chatId, by: "person" as const, owner, permission: workspace.permission },
     };
   };
@@ -146,6 +152,17 @@ export function registerDesignAppHandlers<Event>(deps: DesignAppHandlerDeps<Even
     const root = appRootOf(appRoot);
     const { base } = await person(event, chatId);
     return deps.servers.retry({ ...base, appRoot: root });
+  });
+
+  // 3d (S112): the chip's Add design app… and its toolchain Retry. The service's answers
+  // (a refused offer, a declined card, a missing Node) resolve; the chip reads them.
+  deps.handle(DESIGN_APP_CHANNELS.scaffold, async (event, chatId, options) => {
+    const { pageId } = optionsOf(options);
+    if (typeof pageId !== "string" || pageId.length === 0 || pageId.length > MAX_ID_CHARS) throw new Error('Expected a page id for "pageId".');
+    const { base, chat } = await person(event, chatId);
+    if (chat.designMode !== true) throw new Error("This chat isn't in design mode.");
+    if (!(await deps.pageOnScreen(base.chatId, pageId))) throw new Error("That page isn't on this chat's canvas.");
+    return deps.servers.scaffold({ ...base, page: { pageId } });
   });
 
   // The person's answer on a run-app card; only the window that shows the card may answer it.

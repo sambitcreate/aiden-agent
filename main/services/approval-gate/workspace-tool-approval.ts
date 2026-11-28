@@ -63,9 +63,15 @@ export function stricterPageRule(
  * or Ask, and they are never judged. `design_app` runs only the app's own dev
  * script, which the run-app card shows the person before the first start
  * (and again whenever it changes); other commands go through run_command.
+ * Its `scaffold` (3d, S102) writes a design app and installs it only after the
+ * person's Allow on main's own scaffold card, which names the folder, files,
+ * packages and commands.
  */
 export const REVIEWED_CARDLESS_TOOLS: ReadonlyMap<string, string> = new Map([
-  ["design_app", "design-mode dev-server control: per-call approval skipped after workspace consent"],
+  [
+    "design_app",
+    "design-mode dev-server control and design app scaffolding: per-call approval skipped after workspace consent; main's own card asks before any start or scaffold",
+  ],
 ]);
 
 export type WorkspaceGatePermission = "full" | "ask" | "read-only" | "none";

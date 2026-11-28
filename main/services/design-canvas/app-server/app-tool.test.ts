@@ -6,7 +6,8 @@ import type {
   DesignAppStatus,
 } from "../../../../renderer/shared/design-app.js";
 import { createDesignAppTool, type DesignAppToolServers } from "./app-tool.js";
-import type { DesignAppChooseInput, DesignAppRoutesResult, DesignAppStartInput } from "./app-server-main.js";
+import type { DesignAppChooseInput, DesignAppRoutesResult, DesignAppScaffoldInput, DesignAppStartInput } from "./app-server-main.js";
+import type { DesignAppScaffoldResult } from "../../../../renderer/shared/design-app.js";
 
 type Call = { method: string; input: unknown };
 
@@ -50,6 +51,11 @@ class FakeServers implements DesignAppToolServers {
   async routes(workspaceId: string, appRoot?: string) {
     this.calls.push({ method: "routes", input: { workspaceId, ...(appRoot !== undefined ? { appRoot } : {}) } });
     return this.routeAnswer;
+  }
+  scaffoldAnswer: (input: DesignAppScaffoldInput) => Promise<DesignAppScaffoldResult> = async () => scaffolded();
+  scaffold(input: DesignAppScaffoldInput) {
+    this.calls.push({ method: "scaffold", input });
+    return this.scaffoldAnswer(input);
   }
   private listeners = new Set<(snapshot: DesignAppsSnapshot) => void>();
 
@@ -96,6 +102,22 @@ class FakeServers implements DesignAppToolServers {
   }
 }
 
+function scaffolded(overrides: Partial<Extract<DesignAppScaffoldResult, { status: "scaffolded" }>> = {}): DesignAppScaffoldResult {
+  return {
+    status: "scaffolded",
+    root: "design-app",
+    kind: "react-nonweb",
+    app: status({ appRoot: "design-app", mock: true, phase: "running", origin: "http://127.0.0.1:5173", port: 5173 }),
+    placed: "placed",
+    aliases: { "@app": "src/renderer" },
+    stubs: { electron: "src/stubs/electron.ts" },
+    globals: ["api"],
+    designMd: "drafted",
+    styleSources: ["src/renderer/styles.css"],
+    ...overrides,
+  };
+}
+
 const owner = { id: 7, documentId: "doc-a", kind: "window" as const };
 
 function harness(
@@ -103,9 +125,11 @@ function harness(
     available?: () => Promise<boolean>;
     waits?: { consentMs: number; settleMs: number; graceMs?: number };
     permission?: "full" | "ask" | "read-only" | "none";
+    onScaffolded?: () => void;
   } = {},
 ) {
   const servers = new FakeServers();
+  const turnPages = { resolver: async () => () => ({ pageId: "page-1" }), show: async () => undefined } as never;
   const tool = createDesignAppTool({
     workspaceId: "ws",
     chatId: "chat-1",
@@ -113,6 +137,8 @@ function harness(
     owner: () => owner as never,
     stillAvailable: options.available ?? (async () => true),
     servers,
+    scaffoldPage: () => ({ pages: turnPages }),
+    ...(options.onScaffolded ? { onScaffolded: options.onScaffolded } : {}),
     ...(options.waits ? { waits: options.waits } : {}),
   });
   const run = async (args: Record<string, unknown>, signal?: AbortSignal) => {
@@ -498,4 +524,148 @@ test("3b: a route that reads like an instruction round-trips as a JSON value, un
   servers.routeAnswer = { appRoot: ".", source: "config", truncated: false, routes: [{ route: hostile, source: "config" }] };
   const reply = await run({ action: "routes" });
   assert.deepEqual(reply.routes, [{ route: hostile }]);
+});
+
+// ---- 3d: scaffold (S102, S112, S113) ----
+
+test("3d: status carries the mock offer, a refusal's message and a toolchain problem", async () => {
+  const { servers, run } = harness();
+  servers.snap = { workspaceId: "ws", target: "none", apps: [], candidates: [], chosen: [], mock: { offer: "react-nonweb", folder: "design-app", source: ".", shell: "electron" } };
+  assert.deepEqual((await run({ action: "status" })).mock, { offer: "react-nonweb", folder: "design-app", source: ".", shell: "electron" });
+
+  servers.snap = { ...servers.snap, mock: { offer: "refused", why: "workspace-runner" } };
+  const refused = (await run({ action: "status" })).mock as Record<string, unknown>;
+  assert.equal(refused.offer, "refused");
+  assert.equal(refused.why, "workspace-runner");
+  assert.match(String(refused.message), /workspace runner/u);
+
+  servers.snap = { ...servers.snap, mock: { offer: "starter", folder: "design-app", problem: { problem: "node-missing", manager: "npm" } as never } };
+  const missing = (await run({ action: "status" })).mock as Record<string, unknown>;
+  assert.equal(missing.problem, "node-missing");
+  assert.match(String(missing.message), /Node/u);
+
+  servers.snap = { ...servers.snap, mock: undefined };
+  assert.equal("mock" in (await run({ action: "status" })), false, "no mock field without an offer");
+});
+
+test("3d: scaffold needs no root, passes Aiden's turn page and answers the root, kind, placement, aliases and draft", async () => {
+  let resets = 0;
+  const { servers, run } = harness({ onScaffolded: () => resets++ });
+  const result = await run({ action: "scaffold" });
+  assert.deepEqual(result, {
+    status: "scaffolded",
+    root: "design-app",
+    kind: "react-nonweb",
+    phase: "running",
+    url: "http://127.0.0.1:5173",
+    placed: "placed",
+    aliases: { "@app": "src/renderer" },
+    stubs: { electron: "src/stubs/electron.ts" },
+    globals: ["api"],
+    designMd: "drafted",
+    styleSources: ["src/renderer/styles.css"],
+  });
+  const input = servers.serviceCalls("scaffold")[0]!.input as DesignAppScaffoldInput;
+  assert.equal(input.by, "aiden");
+  assert.equal(input.chatId, "chat-1");
+  assert.ok("pages" in input.page, "Aiden's page is the turn's");
+  assert.equal(resets, 1, "the turn's written routes are read again after the write");
+});
+
+test("3d: a scaffold whose start failed answers the problem with its message, and the folder", async () => {
+  const { servers, run } = harness();
+  servers.scaffoldAnswer = async () =>
+    scaffolded({ placed: "pending", app: status({ appRoot: "design-app", mock: true, phase: "stopped", problem: { problem: "install-failed", exitCode: 1, tail: "npm ERR! code ENOTFOUND" } }) });
+  const result = await run({ action: "scaffold" });
+  assert.equal(result.status, "scaffolded");
+  assert.equal(result.root, "design-app");
+  assert.equal(result.placed, "pending");
+  assert.equal(result.problem, "install-failed");
+  assert.match(String(result.message), /npm registry/u, "the mock's network hint");
+  assert.match(String(result.output), /ENOTFOUND/u);
+});
+
+test("3d: scaffold counts toward four starts a turn", async () => {
+  const { servers, run } = harness();
+  for (let index = 0; index < 4; index++) await run({ action: index % 2 ? "scaffold" : "start" });
+  const fifth = await run({ action: "scaffold" });
+  assert.equal(fifth.status, "error");
+  assert.equal(servers.serviceCalls("scaffold").length, 2);
+});
+
+test("3d: scaffold refuses with the refusal's message, and a decline tells Aiden not to ask again", async () => {
+  const { servers, run } = harness();
+  servers.scaffoldAnswer = async () => ({ status: "problem", problem: { problem: "scaffold-refused", why: "in-workspaces" } });
+  const refused = await run({ action: "scaffold" });
+  assert.equal(refused.status, "refused");
+  assert.equal(refused.why, "in-workspaces");
+  assert.match(String(refused.message), /!design-app/u);
+
+  servers.scaffoldAnswer = async () => ({ status: "problem", problem: { problem: "consent-declined" } });
+  const declined = await run({ action: "scaffold" });
+  assert.equal(declined.status, "declined");
+  assert.match(String(declined.next), /Not now/u);
+  assert.match(String(declined.next), /don't ask again/u);
+
+  servers.scaffoldAnswer = async () => ({ status: "existing", root: "design-app", app: status({ appRoot: "design-app", mock: true }) });
+  const existing = await run({ action: "scaffold" });
+  assert.equal(existing.status, "existing");
+  assert.equal(existing.root, "design-app");
+  assert.match(String(existing.next), /start/u);
+});
+
+test("3d: scaffold with stillAvailable false or no write access does nothing", async () => {
+  const off = harness({ available: async () => false });
+  assert.equal((await off.run({ action: "scaffold" })).status, "unavailable");
+  assert.equal(off.servers.serviceCalls("scaffold").length, 0);
+  const readOnly = harness({ permission: "read-only" });
+  assert.equal((await readOnly.run({ action: "scaffold" })).problem, "no-access");
+  assert.equal(readOnly.servers.serviceCalls("scaffold").length, 0);
+});
+
+test("3d: scaffold after the turn's signal aborts stops waiting, not the scaffold", async () => {
+  const { servers, run } = harness();
+  let settle!: (value: DesignAppScaffoldResult) => void;
+  servers.scaffoldAnswer = () => new Promise((resolve) => (settle = resolve));
+  const controller = new AbortController();
+  const pending = run({ action: "scaffold" }, controller.signal);
+  setTimeout(() => controller.abort(), 5);
+  const result = await pending;
+  assert.equal(result.status, "error");
+  assert.match(String(result.message), /go on/u);
+  const input = servers.serviceCalls("scaffold")[0]!.input as DesignAppScaffoldInput;
+  assert.equal(input.signal, undefined, "the service never sees the turn's signal: the card and install go on");
+  settle(scaffolded());
+});
+
+test("3d: scaffold's wait outlives the settle time while the card is open, then follows the start", async () => {
+  const { servers, run } = harness({ waits: { consentMs: 80, settleMs: 30, graceMs: 10 } });
+  servers.scaffoldAnswer = (input) =>
+    new Promise((resolve) => {
+      setTimeout(() => input.onPhase?.("card"), 5);
+      // Answered well past the settle time, inside the card's own time.
+      setTimeout(() => resolve(scaffolded()), 70);
+    });
+  assert.equal((await run({ action: "scaffold" })).status, "scaffolded");
+
+  let resets = 0;
+  const later = harness({ waits: { consentMs: 80, settleMs: 30, graceMs: 10 }, onScaffolded: () => resets++ });
+  later.servers.scaffoldAnswer = (input) =>
+    new Promise(() => {
+      setTimeout(() => input.onPhase?.("card"), 5);
+      setTimeout(() => input.onPhase?.("app"), 20);
+    });
+  const started = await later.run({ action: "scaffold" });
+  assert.equal(started.status, "starting");
+  assert.match(String(started.next), /status/u);
+  assert.equal(resets, 1, "the files are written, so the turn's routes are read again");
+
+  const unanswered = harness({ waits: { consentMs: 30, settleMs: 20, graceMs: 5 } });
+  unanswered.servers.scaffoldAnswer = (input) =>
+    new Promise(() => {
+      input.onPhase?.("card");
+    });
+  const open = await unanswered.run({ action: "scaffold" });
+  assert.equal(open.status, "consent");
+  assert.match(String(open.next), /don't scaffold again/u);
 });

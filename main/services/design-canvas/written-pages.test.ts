@@ -1438,3 +1438,25 @@ test("3b: a forgotten run's route files aren't placed; flag off, route files nev
 function withNoteFrame(doc: DesignCanvas): DesignCanvas {
   return { ...doc, frames: [...doc.frames, { id: "note", kind: "note", title: "Note", text: "hi", x: 0, y: 0, w: 200, h: 120, pageId: "page-1", createdBy: "person" }] };
 }
+
+test("3d: a route written after a scaffold in the same turn is placed once the turn resets", async () => {
+  const mockData = writtenRouteData(
+    { apps: [], candidates: [{ appRoot: "design-app", framework: "vite", frameworkLabel: "Vite", script: "dev", mock: true }] },
+    null,
+  );
+  let scaffoldedYet = false;
+  let loads = 0;
+  const turn = createWrittenRouteTurn({
+    load: async () => {
+      loads += 1;
+      return scaffoldedYet ? mockData : writtenRouteData({ apps: [], candidates: [] }, null);
+    },
+  });
+  // A write before the scaffold loads the workspace with no apps.
+  assert.equal(await turn.routeFor("notes/todo.tsx"), null);
+  scaffoldedYet = true;
+  assert.equal(await turn.routeFor("design-app/src/routes/settings.tsx"), null, "the turn's first read is kept");
+  turn.reset();
+  assert.deepEqual(await turn.routeFor("design-app/src/routes/settings.tsx"), { appRoot: "design-app", route: "/settings" });
+  assert.equal(loads, 2);
+});

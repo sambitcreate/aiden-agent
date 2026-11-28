@@ -7,6 +7,11 @@
 // script, so the approval gate lets its calls through without a per-call card
 // (`REVIEWED_CARDLESS_TOOLS`).
 //
+// 3d (S102, S112, S113): `scaffold` adds a design app to a workspace with no
+// web app, after the person's Allow on the scaffold card, which is also the
+// launch consent. It takes no root, counts as a start, and its wait follows the
+// card, then the write and the start.
+//
 // 2c (D11): a root with a url in `.aiden/canvas.json` is a server the person
 // runs. `start` connects to it after the attach card, `stop` disconnects, and
 // `logs` is refused: Aiden never starts, stops or reads that server.
@@ -15,9 +20,13 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import {
   designAppProblemMessage,
+  mockRefusalMessage,
+  toolchainProblemMessage,
   type DesignAppProblem,
+  type DesignAppScaffoldResult,
   type DesignAppsSnapshot,
   type DesignAppStatus,
+  type DesignMockState,
 } from "../../../../renderer/shared/design-app.js";
 import { fenceAsData } from "../../../../renderer/shared/agent-notices.js";
 import { declareOnDemandSummary } from "../../on-demand-tools.js";
@@ -26,7 +35,7 @@ import type { WorkspaceGatePermission } from "../../approval-gate/workspace-tool
 import { isSafeWorkspaceRelativePath } from "../canvas-config.js";
 import { DESIGN_APP_CONSENT_TIMEOUT_MS, type DesignAppConsentOwner } from "./app-consent.js";
 import { lastLines, missingModuleHint } from "./app-launch-core.js";
-import { DESIGN_APP_LOG_MAX_BYTES, type DesignAppServers } from "./app-server-main.js";
+import { DESIGN_APP_LOG_MAX_BYTES, type DesignAppScaffoldPage, type DesignAppServers } from "./app-server-main.js";
 
 export const DESIGN_APP_TOOL_NAME = "design_app";
 /** D16: starts, restarts and chooses per turn; the fifth is refused without acting. */
@@ -40,13 +49,15 @@ const LOG_LINES_MAX = 200;
 const LOG_CHARS_MAX = 8_000;
 const TAIL_CHARS_MAX = 2_000;
 
-const ACTIONS = ["status", "start", "stop", "restart", "logs", "choose", "routes"] as const;
+const ACTIONS = ["status", "start", "stop", "restart", "logs", "choose", "routes", "scaffold"] as const;
 type Action = (typeof ACTIONS)[number];
-const STARTING_ACTIONS: ReadonlySet<Action> = new Set(["start", "restart", "choose"]);
+const STARTING_ACTIONS: ReadonlySet<Action> = new Set(["start", "restart", "choose", "scaffold"]);
+/** The actions that take no root. */
+const ROOTLESS_ACTIONS: ReadonlySet<Action> = new Set(["status", "start", "routes", "scaffold"]);
 
 export type DesignAppToolServers = Pick<
   DesignAppServers,
-  "snapshot" | "start" | "stop" | "restart" | "choose" | "logs" | "onStatus" | "routes"
+  "snapshot" | "start" | "stop" | "restart" | "choose" | "logs" | "onStatus" | "routes" | "scaffold"
 >;
 
 export interface DesignAppToolDeps {
@@ -59,6 +70,10 @@ export interface DesignAppToolDeps {
   /** Design mode is still on in this chat, in the same folder, with access, and the flag is on. */
   stillAvailable(): Promise<boolean>;
   servers: DesignAppToolServers;
+  /** 3d: the page a design app's `/` goes on, the turn's (S84). Without it, `scaffold` is unavailable. */
+  scaffoldPage?(): DesignAppScaffoldPage;
+  /** 3d: after a scaffold wrote its files, so the turn's later route writes find the new app. */
+  onScaffolded?(): void;
   /** For tests: the card's own time, the settle time after it, and the grace past the card's time. */
   waits?: { consentMs: number; settleMs: number; graceMs?: number };
 }
@@ -106,7 +121,7 @@ function trouble(app: DesignAppStatus): Json {
       : app.problem && "tail" in app.problem
         ? app.problem.tail
         : undefined;
-  const message = app.problem ? designAppProblemMessage(app.problem) : app.phase === "crashed" ? crashMessage(app) : undefined;
+  const message = app.problem ? designAppProblemMessage(app.problem, { mock: app.mock === true }) : app.phase === "crashed" ? crashMessage(app) : undefined;
   const kept = tail ? lastLines(tail, LOG_LINES_MAX, TAIL_CHARS_MAX) : "";
   const hint = kept ? missingModuleHint(kept) : undefined;
   return {
@@ -204,6 +219,115 @@ function waitForAttempt(
   });
 }
 
+/** The snapshot's design app offer, for status: the refusal's and the toolchain problem's fixed messages. */
+function describeMock(mock: DesignMockState): Json {
+  const { problem, ...offer } = mock;
+  return {
+    ...offer,
+    ...(offer.offer === "refused" ? { message: mockRefusalMessage(offer.why, offer.folder) } : {}),
+    ...(problem ? { problem: problem.problem, message: toolchainProblemMessage(problem) } : {}),
+  };
+}
+
+/** What a scaffold's card answered when it wasn't Allow, and the problems before it, each with what Aiden does next. */
+const SCAFFOLD_OUTCOMES: Partial<Record<DesignAppProblem["problem"], { status: string; next: string }>> = {
+  "consent-declined": {
+    status: "declined",
+    next: "The person chose Not now for adding a design app. Carry on without one and don't ask again; they can add it from the canvas's app chip.",
+  },
+  "consent-unanswered": {
+    status: "unanswered",
+    next: "Nobody answered the design app card, so nothing was written. Carry on without a design app; the person can add one from the canvas.",
+  },
+  "consent-unavailable": {
+    status: "unavailable",
+    next: "No Aiden window could show the design app card, so nothing was written. Carry on without a design app.",
+  },
+  "desktop-only": {
+    status: "desktop-only",
+    next: "Only an Aiden window on this computer can add a design app. Carry on without one.",
+  },
+};
+
+function scaffoldResult(answer: DesignAppScaffoldResult): Json {
+  if (answer.status === "problem") {
+    const { problem } = answer;
+    const outcome = SCAFFOLD_OUTCOMES[problem.problem];
+    if (outcome) return outcome;
+    if (problem.problem === "unavailable") return UNAVAILABLE;
+    if (problem.problem === "scaffold-refused") return { status: "refused", why: problem.why, message: mockRefusalMessage(problem.why) };
+    return { status: "failed", problem: problem.problem, message: designAppProblemMessage(problem) };
+  }
+  if (answer.status === "existing") {
+    return {
+      status: "existing",
+      root: answer.root,
+      phase: answer.app.phase,
+      ...(answer.app.phase === "running" && answer.app.origin ? { url: answer.app.origin } : {}),
+      next: "This workspace already has a design app. Use design_app start with this root, and write its pages in src/routes.",
+    };
+  }
+  const { app } = answer;
+  return {
+    status: "scaffolded",
+    root: answer.root,
+    kind: answer.kind,
+    phase: app.phase,
+    ...(app.phase === "running" && app.origin ? { url: app.origin } : {}),
+    placed: answer.placed,
+    aliases: answer.aliases,
+    stubs: answer.stubs,
+    globals: answer.globals,
+    designMd: answer.designMd,
+    styleSources: answer.styleSources,
+    ...trouble(app),
+  };
+}
+
+type ScaffoldPhase = "card" | "writing" | "app";
+
+/**
+ * A scaffold's wait (S102): up to the settle time before the card, the card's
+ * own time and a grace while it's open, then the settle time from the write
+ * and again from the start. Ends with null when the turn is aborted; the card,
+ * the write and the start go on either way.
+ */
+function waitForScaffold(
+  start: (onPhase: (phase: ScaffoldPhase) => void) => Promise<DesignAppScaffoldResult>,
+  waits: { consentMs: number; settleMs: number; graceMs?: number },
+  signal: AbortSignal | undefined,
+): Promise<{ done: DesignAppScaffoldResult; phase: ScaffoldPhase | undefined } | { phase: ScaffoldPhase | undefined } | null> {
+  return new Promise((resolve) => {
+    let phase: ScaffoldPhase | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let finished = false;
+    type Ending = { done: DesignAppScaffoldResult; phase: ScaffoldPhase | undefined } | { phase: ScaffoldPhase | undefined } | null;
+    const finish = (value: Ending) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", aborted);
+      resolve(value);
+    };
+    const arm = (ms: number) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => finish({ phase }), ms);
+    };
+    const aborted = () => finish(null);
+    signal?.addEventListener("abort", aborted, { once: true });
+    if (signal?.aborted) return finish(null);
+    arm(waits.settleMs);
+    start((next) => {
+      if (finished) return;
+      phase = next;
+      arm(next === "card" ? waits.consentMs + (waits.graceMs ?? DESIGN_APP_CONSENT_GRACE_MS) : waits.settleMs);
+    }).then(
+      (done) => finish({ done, phase }),
+      () => finish({ phase }),
+    );
+  });
+}
+
 /**
  * 3b (S82): an app's pages, read-only. Route strings come from the person's
  * files and config, so they go back only as JSON values, never as prose.
@@ -236,6 +360,48 @@ export function createDesignAppTool(deps: DesignAppToolDeps): AgentTool {
       ...(candidatesOnly ? [] : [...snapshot.apps.map((app) => app.appRoot), ...snapshot.chosen]),
     ]);
 
+  const noAccess = (appRoot?: string) =>
+    deps.permission === "read-only" || deps.permission === "none"
+      ? result({
+          status: "failed",
+          ...(appRoot !== undefined ? { root: appRoot } : {}),
+          problem: "no-access",
+          message: designAppProblemMessage({ problem: "no-access" }),
+        })
+      : undefined;
+
+  const scaffold = async (signal: AbortSignal | undefined) => {
+    const refused = noAccess();
+    if (refused) return refused;
+    const page = deps.scaffoldPage?.();
+    if (!page) return result(UNAVAILABLE);
+    starts += 1;
+    const owner = deps.owner();
+    // No signal for the service: an aborted turn stops this wait, never the card, the write or the start.
+    const waited = await waitForScaffold(
+      (onPhase) =>
+        deps.servers.scaffold({
+          workspaceId: deps.workspaceId,
+          chatId: deps.chatId,
+          by: "aiden",
+          permission: deps.permission,
+          ...(owner ? { owner } : {}),
+          page,
+          onPhase,
+        }),
+      waits,
+      signal,
+    );
+    const wrote = waited !== null && (("done" in waited && waited.done.status === "scaffolded") || waited.phase === "app");
+    if (wrote) deps.onScaffolded?.();
+    if (waited === null) return error("The turn stopped while the design app was being added; the card and the start go on. Check status later.");
+    if ("done" in waited) return result(scaffoldResult(waited.done));
+    if (waited.phase === "card") {
+      return result({ status: "consent", next: "The person hasn't answered the design app card yet; check status in a moment and don't scaffold again." });
+    }
+    return result({ status: "starting", next: "The design app is being written and started; check with status in a moment, and don't scaffold again." });
+  };
+
   const execute = async (args: Json, signal: AbortSignal | undefined) => {
     const action = args.action as Action;
     if (!ACTIONS.includes(action)) return error(`action must be one of ${ACTIONS.join(", ")}.`);
@@ -243,7 +409,7 @@ export function createDesignAppTool(deps: DesignAppToolDeps): AgentTool {
     if (root !== undefined && (!isSafeWorkspaceRelativePath(root) || root.length > 200)) {
       return error('root must be an app root from status, such as "." or "apps/web".');
     }
-    if (action !== "status" && action !== "start" && action !== "routes" && root === undefined) return error(`${action} needs root, an app root from status.`);
+    if (!ROOTLESS_ACTIONS.has(action) && root === undefined) return error(`${action} needs root, an app root from status.`);
     if (install !== undefined && typeof install !== "boolean") return error("install must be true or false.");
     if (script !== undefined && (typeof script !== "string" || script.length === 0 || script.length > 200)) {
       return error("script must name a script in the app's package.json.");
@@ -273,8 +439,10 @@ export function createDesignAppTool(deps: DesignAppToolDeps): AgentTool {
           ...(candidate.name ? { name: candidate.name } : {}),
         })),
         chosen: snapshot.chosen,
+        ...(snapshot.mock ? { mock: describeMock(snapshot.mock) } : {}),
       });
     }
+    if (action === "scaffold") return scaffold(signal);
     const appRoot = root as string | undefined;
     if (appRoot !== undefined && !knownRoots(snapshot, action === "choose").has(appRoot)) {
       return error(
@@ -305,14 +473,8 @@ export function createDesignAppTool(deps: DesignAppToolDeps): AgentTool {
     }
 
     // A turn that can't write to the workspace never runs its app: the same answer the service gives.
-    if (deps.permission === "read-only" || deps.permission === "none") {
-      return result({
-        status: "failed",
-        ...(appRoot !== undefined ? { root: appRoot } : {}),
-        problem: "no-access",
-        message: designAppProblemMessage({ problem: "no-access" }),
-      });
-    }
+    const refused = noAccess(appRoot);
+    if (refused) return refused;
     starts += 1;
     const base = {
       workspaceId: deps.workspaceId,
@@ -341,7 +503,7 @@ export function createDesignAppTool(deps: DesignAppToolDeps): AgentTool {
         name: DESIGN_APP_TOOL_NAME,
         label: "Design app",
         description:
-          "Run this workspace's web app for design mode: status, start, stop, restart, logs, or choose which app in a monorepo. routes lists the app's pages (from its files or .aiden/canvas.json); a route with [brackets] is a pattern that needs a value. The first start asks the person on a card. It runs only the app's own dev script, never other commands; use run_command for those. A root with a url in .aiden/canvas.json is a server the person runs: start connects to it after the person approves, stop disconnects, and Aiden never starts, stops or reads the output of that server.",
+          "Run this workspace's web app for design mode: status, start, stop, restart, logs, or choose which app in a monorepo. routes lists the app's pages (from its files or .aiden/canvas.json); a route with [brackets] is a pattern that needs a value. The first start asks the person on a card. It runs only the app's own dev script, never other commands; use run_command for those. When status says there's no web app and offers a design app (mock), scaffold adds a small React app in design-app/ after the person allows it on a card (don't ask first; the card is the question), starts it and puts its / on the canvas; then each design is a route file in its src/routes. A root with a url in .aiden/canvas.json is a server the person runs: start connects to it after the person approves, stop disconnects, and Aiden never starts, stops or reads the output of that server.",
         parameters: Type.Object({
           action: Type.Union(ACTIONS.map((name) => Type.Literal(name))),
           root: Type.Optional(Type.String({ maxLength: 200, description: 'An app root from status, such as "." or "apps/web".' })),
@@ -359,6 +521,6 @@ export function createDesignAppTool(deps: DesignAppToolDeps): AgentTool {
       },
       "never",
     ),
-    "Run this workspace's web app for design mode: status, start, stop, restart, logs, choose the app, or list its routes.",
+    "Run this workspace's web app for design mode: status, start, stop, restart, logs, choose the app, list its routes, or add a design app.",
   );
 }

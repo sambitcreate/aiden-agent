@@ -64,6 +64,11 @@ export function registerDesignCanvasIpc(): void {
     getChat: (chatId) => chatStore.getMeta(chatId),
     workspace: (workspaceId) => configStore.getWorkspace(workspaceId),
     servers: designAppServers,
+    // 3d (S112): the page on screen must be one of this chat's canvas pages.
+    pageOnScreen: async (chatId, pageId) => {
+      const { doc } = await designCanvasStore.get(chatId);
+      return doc.pages.some((page) => page.id === pageId);
+    },
     consent: designAppConsent,
   });
   registerDesignCanvasHandlers<Electron.IpcMainInvokeEvent>({

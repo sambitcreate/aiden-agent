@@ -4,9 +4,9 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
-import type { DesignAppRunningScan, DesignAppsSnapshot, DesignAppStatus } from "../../renderer/shared/design-app.js";
+import type { DesignAppRunningScan, DesignAppScaffoldResult, DesignAppsSnapshot, DesignAppStatus } from "../../renderer/shared/design-app.js";
 import { DesignAppConsent } from "../services/design-canvas/app-server/app-consent.js";
-import type { DesignAppChooseInput, DesignAppConnectInput, DesignAppStartInput } from "../services/design-canvas/app-server/app-server-main.js";
+import type { DesignAppChooseInput, DesignAppConnectInput, DesignAppScaffoldInput, DesignAppStartInput } from "../services/design-canvas/app-server/app-server-main.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { createDesignModeCardEnter, registerDesignAppHandlers, type DesignAppHandlerDeps } from "./design-app.js";
 
@@ -34,14 +34,15 @@ function status(overrides: Partial<DesignAppStatus> = {}): DesignAppStatus {
   return { workspaceId: "site", appRoot: ".", source: "started", frameworkLabel: "Vite", phase: "running", since: 1, revision: 1, ...overrides };
 }
 
-const CHATS: Record<string, { id: string; workspaceId?: string; botId?: string; owner?: unknown }> = {
-  "site-chat": { id: "site-chat", workspaceId: "site" },
+const CHATS: Record<string, { id: string; workspaceId?: string; botId?: string; owner?: unknown; designMode?: boolean }> = {
+  "site-chat": { id: "site-chat", workspaceId: "site", designMode: true },
+  "chat-chat": { id: "chat-chat", workspaceId: "site" },
   "bot-chat": { id: "bot-chat", workspaceId: "site", botId: "bot-1" },
   "routine-chat": { id: "routine-chat", workspaceId: "site", owner: { kind: "design-project" } },
   "folderless-chat": { id: "folderless-chat", workspaceId: "remote-only" },
 };
 
-function harness(options: { enabled?: boolean } = {}) {
+function harness(options: { enabled?: boolean; scaffold?: (input: DesignAppScaffoldInput) => Promise<DesignAppScaffoldResult> } = {}) {
   const handlers = new Map<string, Handler>();
   const calls: Array<{ method: string; input: unknown }> = [];
   const consent = new DesignAppConsent();
@@ -94,7 +95,12 @@ function harness(options: { enabled?: boolean } = {}) {
         calls.push({ method: "retry", input });
         return status();
       },
+      scaffold: async (input: DesignAppScaffoldInput) => {
+        calls.push({ method: "scaffold", input });
+        return options.scaffold ? options.scaffold(input) : { status: "existing", root: "design-app", app: status({ appRoot: "design-app", mock: true }) };
+      },
     },
+    pageOnScreen: async (chatId, pageId) => chatId === "site-chat" && pageId === "page-1",
     consent,
   };
   registerDesignAppHandlers(deps);
@@ -116,6 +122,7 @@ const PERSON_CHANNELS: Array<[string, unknown[]]> = [
   ["designApp:running", ["site-chat"]],
   ["designApp:connect", ["site-chat", { port: 5173, pid: 300 }]],
   ["designApp:retry", ["site-chat", "."]],
+  ["designApp:scaffold", ["site-chat", { pageId: "page-1" }]],
 ];
 
 const SCAN: DesignAppRunningScan = {
@@ -352,4 +359,43 @@ test("Enter on Aiden's design-mode card starts no app for a chat the designApp:*
     assert.equal(entered.includes(chatId), !refused, `${chatId}: Enter starts an app exactly when the channel would`);
   }
   assert.deepEqual(entered, ["site-chat"]);
+});
+
+// ---- 3d: designApp:scaffold (S102, S112) ----
+
+test("3d: designApp:scaffold passes by person, the sender's owner, the permission and the page on screen", async () => {
+  const { invoke, calls } = harness();
+  const window = windowContents(1);
+  const answer = (await invoke("designApp:scaffold", window.fromMain, "site-chat", { pageId: "page-1" })) as DesignAppScaffoldResult;
+  assert.equal(answer.status, "existing");
+  const input = calls.find((call) => call.method === "scaffold")!.input as DesignAppScaffoldInput;
+  assert.deepEqual(
+    { workspaceId: input.workspaceId, chatId: input.chatId, by: input.by, permission: input.permission, page: input.page },
+    { workspaceId: "site", chatId: "site-chat", by: "person", permission: "ask", page: { pageId: "page-1" } },
+  );
+  assert.equal(input.owner?.id, 1);
+  assert.equal(input.owner?.documentId, rendererDocumentOwner(window.fromMain, () => new Error("x")).documentId);
+});
+
+test("3d: a page id that isn't on screen, or a chat not in design mode, is refused before the service", async () => {
+  const { invoke, calls } = harness();
+  const window = windowContents(1);
+  await assert.rejects(Promise.resolve(invoke("designApp:scaffold", window.fromMain, "site-chat", { pageId: "page-9" })), /page/u);
+  await assert.rejects(Promise.resolve(invoke("designApp:scaffold", window.fromMain, "chat-chat", { pageId: "page-1" })), /design mode/u);
+  for (const bad of [undefined, {}, { pageId: 3 }, { pageId: "" }, { pageId: "x".repeat(201) }, "page-1"]) {
+    await assert.rejects(Promise.resolve(invoke("designApp:scaffold", window.fromMain, "site-chat", bad)), Error, JSON.stringify(bad));
+  }
+  assert.deepEqual(calls, []);
+});
+
+test("3d: the service's own answers resolve, a refused offer and a declined card included", async () => {
+  const answers: DesignAppScaffoldResult[] = [
+    { status: "problem", problem: { problem: "scaffold-refused", why: "workspace-runner" } },
+    { status: "problem", problem: { problem: "consent-declined" } },
+    { status: "problem", problem: { problem: "node-missing", manager: "npm" } as never },
+  ];
+  for (const expected of answers) {
+    const { invoke } = harness({ scaffold: async () => expected });
+    assert.deepEqual(await invoke("designApp:scaffold", windowContents(1).fromMain, "site-chat", { pageId: "page-1" }), expected);
+  }
 });

@@ -445,6 +445,7 @@ test("the Design toggle starts no app for a chat the designApp:* channels refuse
         return undefined;
       },
     } as unknown as DesignAppHandlerDeps<IpcMainInvokeEvent>["servers"],
+    pageOnScreen: async () => false,
     consent: { answer: () => false },
   });
   const entered: string[] = [];

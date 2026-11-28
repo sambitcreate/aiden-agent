@@ -1451,7 +1451,7 @@ function LoadedDesignCanvas({
             presenting={presentation !== null}
             actions={
               <div className="flex items-center gap-2">
-                <DesignAppStatusChip chatId={chatId} onShowLogs={setLogsRoot} />
+                <DesignAppStatusChip chatId={chatId} onShowLogs={setLogsRoot} pageId={pageId} flush={flush} />
                 <div
                   role="toolbar"
                   aria-label="Canvas view"

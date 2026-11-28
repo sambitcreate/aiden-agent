@@ -2709,8 +2709,8 @@ test("3d: Allow writes, approves the written fingerprint, installs with npm ci a
   assert.equal(result.status, "scaffolded");
   assert.ok(result.status === "scaffolded");
   assert.deepEqual(
-    { root: result.root, kind: result.kind, phase: result.app.phase, mock: result.app.mock, placed: result.placed, designMd: result.designMd, aliases: result.aliases },
-    { root: "design-app", kind: "react-nonweb", phase: "running", mock: true, placed: "placed", designMd: "starter", aliases: { "@app": "src/renderer" } },
+    { root: result.root, kind: result.kind, phase: result.app.phase, mock: result.app.mock, label: result.app.frameworkLabel, placed: result.placed, designMd: result.designMd, aliases: result.aliases },
+    { root: "design-app", kind: "react-nonweb", phase: "running", mock: true, label: "Design app", placed: "placed", designMd: "starter", aliases: { "@app": "src/renderer" } },
   );
   assert.deepEqual(phases, ["card", "writing", "app"]);
   assert.deepEqual(h.order.filter((step) => step.startsWith("write:") || step.startsWith("spawn:")).map((step) => step.split(" ")[0]), ["write:design-app", "spawn:ci", "spawn:run"]);

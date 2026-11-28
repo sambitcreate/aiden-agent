@@ -3182,6 +3182,9 @@ async function prepareGeneration(
               owner: () => getOwner(),
               stillAvailable: async () => designLiveEnabled() && (await canvasStillAvailable()),
               servers: designAppServers,
+              // 3d (S113): the design app's `/` goes on the turn's page.
+              scaffoldPage: () => ({ pages: designPages }),
+              onScaffolded: () => resetWrittenRoutes?.(),
             }),
           ]
         : []),
@@ -3252,6 +3255,8 @@ async function prepareGeneration(
    * app routes lands as an `app` frame, at most 12 a turn. Never inspected.
    */
   let placeWrittenRoute: ((relativePath: string) => void) | undefined;
+  /** 3d: forgets the turn's route read after design_app scaffold wrote a design app. */
+  let resetWrittenRoutes: (() => void) | undefined;
   /** Inspects each page `placeWrittenPage` placed; its reports join the next request (see `withDesignInspectNote`). */
   let writtenPageInspector: WrittenPageInspector | undefined;
   /** Puts the design/ pages a terminal command made or changed on the canvas, as `placeWrittenPage` does for file tools. */
@@ -3336,6 +3341,7 @@ async function prepareGeneration(
           return writtenRouteData(snapshot, config);
         },
       });
+      resetWrittenRoutes = () => routeTurn.reset();
       placeWrittenRoute = (relativePath) => {
         pagesPlaced = pagesPlaced
           .then(async () => {

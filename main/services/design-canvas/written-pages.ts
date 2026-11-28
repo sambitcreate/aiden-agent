@@ -417,6 +417,8 @@ export function createWrittenRouteTurn(deps: { load(): Promise<WrittenRouteData>
   routeFor(relativePath: string): Promise<WrittenAppRoute | null>;
   room(): number;
   placed(count: number): void;
+  /** 3d (S113): forgets the turn's read, so a design app written this turn is found by the next write. */
+  reset(): void;
 } {
   const limit = deps.limit ?? EARLIER_PAGES_LIMIT;
   let data: Promise<WrittenRouteData> | undefined;
@@ -431,6 +433,9 @@ export function createWrittenRouteTurn(deps: { load(): Promise<WrittenRouteData>
     room: () => Math.max(0, limit - placed),
     placed(count) {
       placed += count;
+    },
+    reset() {
+      data = undefined;
     },
   };
 }

@@ -22,6 +22,7 @@ import type {
   DesignAppConsentRequest,
   DesignAppLogs,
   DesignAppRunningScan,
+  DesignAppScaffoldResult,
   DesignAppsSnapshot,
   DesignAppStatus,
 } from "../shared/design-app";
@@ -3025,6 +3026,8 @@ export const designAppApi = {
     invoke<DesignAppStatus>("designApp:connect", chatId, { port: pick.port, pid: pick.pid }),
   /** 2c: the right next step after a failure; main decides whether to reinstall or which script to run. */
   retry: (chatId: string, appRoot: string) => invoke<DesignAppStatus>("designApp:retry", chatId, appRoot),
+  /** 3d: Add design app… for a workspace with no web app; its `/` goes on this page. The card comes to this window first. */
+  scaffold: (chatId: string, pageId: string) => invoke<DesignAppScaffoldResult>("designApp:scaffold", chatId, { pageId }),
   /** The person's answer to a run-app card. False when the card no longer waits. */
   answerConsent: (requestId: string, answer: DesignAppConsentAnswer) =>
     invoke<boolean>("designApp:consentAnswer", requestId, answer),

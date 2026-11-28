@@ -8,7 +8,10 @@
 // It also raises one toast when an app the person started fails or stops on
 // its own. 2c adds the attach card: before design mode connects to a server
 // the person runs that `.aiden/canvas.json` names, it shows the address, the
-// process and its folder.
+// process and its folder. 3d (S102) adds the scaffold card: before Aiden adds
+// a design app, it asks the question and shows the folder, the files, what
+// `npm ci` downloads and what `npm run dev` runs; its Allow is the launch
+// consent too.
 
 import { AppWindow } from "lucide-react";
 import * as React from "react";
@@ -22,6 +25,8 @@ import {
   designAppRootText,
   DESIGN_APP_INSTALL_NOTE,
   DESIGN_APP_SAVES_CHOICE,
+  DESIGN_APP_SCAFFOLD_NETWORK,
+  DESIGN_APP_SCAFFOLD_NO_SCRIPTS,
   consentDisplayText,
   consentScriptParts,
   designAppProblemMessage,
@@ -33,6 +38,10 @@ import {
 
 export type DesignAppLaunchRequest = Extract<DesignAppConsentRequest, { kind: "launch" }>;
 export type DesignAppAttachRequest = Extract<DesignAppConsentRequest, { kind: "attach" }>;
+export type DesignAppScaffoldRequest = Extract<DesignAppConsentRequest, { kind: "scaffold" }>;
+
+/** The scaffold card shows this many files, then "and N more". */
+const SCAFFOLD_FILES_SHOWN = 40;
 
 const ANSWER_FAILED = "Aiden couldn't send your answer.";
 const CRASHED = "The app's dev server stopped.";
@@ -115,12 +124,41 @@ function isAttachRequest(request: unknown): request is DesignAppAttachRequest {
   );
 }
 
+function isScaffoldRequest(request: unknown): request is DesignAppScaffoldRequest {
+  if (!request || typeof request !== "object") return false;
+  const candidate = request as Partial<DesignAppScaffoldRequest>;
+  return (
+    candidate.kind === "scaffold" &&
+    typeof candidate.requestId === "string" &&
+    typeof candidate.chatId === "string" &&
+    typeof candidate.folder === "string" &&
+    (candidate.mockKind === "react-nonweb" || candidate.mockKind === "starter") &&
+    (candidate.shellLabel === undefined || typeof candidate.shellLabel === "string") &&
+    typeof candidate.installCommand === "string" &&
+    typeof candidate.runCommand === "string" &&
+    Array.isArray(candidate.scripts) &&
+    candidate.scripts.every((script) => typeof script?.name === "string" && typeof script.text === "string") &&
+    Array.isArray(candidate.packages) &&
+    candidate.packages.every((entry) => typeof entry?.name === "string" && typeof entry.version === "string") &&
+    Array.isArray(candidate.files) &&
+    candidate.files.every((file) => typeof file === "string")
+  );
+}
+
+/** The scaffold card's question (S102): React mocks of a desktop or native app's screens, or a starter app. */
+export function scaffoldQuestion(request: Pick<DesignAppScaffoldRequest, "mockKind" | "shellLabel" | "folder">): string {
+  const folder = `${consentDisplayText(request.folder)}/`;
+  if (request.mockKind === "starter") return `This folder has no web app. Add a small React app in ${folder} to design in?`;
+  const what = request.shellLabel ? `an ${request.shellLabel} app`.replace(/^an (?=[^AEIOU])/u, "a ") : "a React app that isn't a web app";
+  return `This is ${what}, so it can't run on the canvas. Make React mocks of its screens in ${folder} to iterate on?`;
+}
+
 function install() {
   if (installed) return;
   installed = true;
   designAppApi.onConsent((request) => {
     // A malformed card is never shown half-filled.
-    if (!isLaunchRequest(request) && !isAttachRequest(request)) return;
+    if (!isLaunchRequest(request) && !isAttachRequest(request) && !isScaffoldRequest(request)) return;
     waiting.set(request.requestId, request);
     changed();
   });
@@ -239,7 +277,7 @@ function useCardAnswer(requestId: string) {
 }
 
 export function DesignAppConsentCard({ request, stacked = false }: { request: DesignAppConsentRequest; stacked?: boolean }) {
-  if (request.kind === "scaffold") return null;
+  if (request.kind === "scaffold") return <DesignAppScaffoldCard request={request} stacked={stacked} />;
   return request.kind === "attach" ? <DesignAppAttachCard request={request} /> : <DesignAppLaunchCard request={request} stacked={stacked} />;
 }
 
@@ -357,6 +395,80 @@ function DesignAppLaunchCard({ request, stacked = false }: { request: DesignAppL
         </Button>
         <Button variant="accent" size="small" disabled={answering !== null} onClick={() => void answer("allow")}>
           {answering === "allow" ? "Starting…" : "Allow"}
+        </Button>
+      </div>
+    </Callout>
+  );
+}
+
+/**
+ * 3d (S102): before Aiden adds a design app. Nothing is written, installed or
+ * started until Add design app; its Allow also approves the launch, so no
+ * run-app card follows.
+ */
+function DesignAppScaffoldCard({ request, stacked = false }: { request: DesignAppScaffoldRequest; stacked?: boolean }) {
+  const { answering, notNowRef, answer, onKeyDown } = useCardAnswer(request.requestId);
+  const detailsRef = React.useRef<HTMLDivElement>(null);
+  const [more, measure] = useMoreBelow(detailsRef);
+  const title = scaffoldQuestion(request);
+  const shown = request.files.slice(0, SCAFFOLD_FILES_SHOWN);
+  const hidden = request.files.length - shown.length;
+  return (
+    <Callout role="group" aria-label={title} data-design-app-card="" onKeyDown={onKeyDown}>
+      <div className="flex items-start gap-2">
+        <AppWindow className="mt-0.5 size-3.5 shrink-0 text-secondary" aria-hidden="true" />
+        <div className="min-w-0 flex-1">
+          <p className="text-small font-medium break-words text-primary">{title}</p>
+          <p className="mt-0.5 text-small break-words text-secondary">
+            Adds <span className="font-mono">{consentDisplayText(request.folder)}/</span> and an entry in{" "}
+            <span className="font-mono">.aiden/canvas.json</span>
+          </p>
+        </div>
+      </div>
+      <div
+        ref={detailsRef}
+        role="region"
+        aria-label="What Add design app does"
+        tabIndex={0}
+        onScroll={measure}
+        className={`${stacked ? "max-h-[25vh]" : "max-h-[50vh]"} min-w-0 overflow-y-auto rounded-control pl-5.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring`}
+      >
+        <ScriptWell label="Installs" text={request.installCommand} />
+        <p className="mt-1 text-small break-words text-secondary">
+          {request.packages.map((entry, index) => (
+            <React.Fragment key={entry.name}>
+              {index > 0 ? ", " : null}
+              <span className="font-mono">
+                {consentDisplayText(entry.name)} {consentDisplayText(entry.version)}
+              </span>
+            </React.Fragment>
+          ))}
+        </p>
+        <p className="mt-1 text-small text-tertiary">
+          {DESIGN_APP_SCAFFOLD_NETWORK} {DESIGN_APP_SCAFFOLD_NO_SCRIPTS}
+        </p>
+        <ScriptWell label="Runs" text={request.runCommand} />
+        {request.scripts.map((script) => (
+          <ScriptWell key={script.name} label={`Script ${consentDisplayText(script.name)}`} text={script.text} countLines />
+        ))}
+        <p className="mt-2 text-small text-secondary">Writes</p>
+        <ul aria-label="Files it writes" className="mt-0.5 text-small break-words text-secondary">
+          {shown.map((file) => (
+            <li key={file} className="font-mono">
+              {consentDisplayText(file)}
+            </li>
+          ))}
+          {hidden > 0 ? <li>and {hidden} more</li> : null}
+        </ul>
+        <p className="mt-2 text-small text-tertiary">{DESIGN_APP_CONSENT_SCOPE}</p>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
+        {more ? <p className="mr-auto pl-5.5 text-small text-tertiary">Scroll for more</p> : null}
+        <Button ref={notNowRef} variant="transparent" size="small" disabled={answering !== null} onClick={() => void answer("decline")}>
+          Not now
+        </Button>
+        <Button variant="accent" size="small" disabled={answering !== null} onClick={() => void answer("allow")}>
+          {answering === "allow" ? "Adding…" : "Add design app"}
         </Button>
       </div>
     </Callout>

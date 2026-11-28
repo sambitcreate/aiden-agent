@@ -392,6 +392,12 @@ function frameworkLabel(framework: FrameworkId | undefined): string {
   return FRAMEWORKS.find((spec) => spec.id === framework)?.label ?? "App";
 }
 
+/** 3d: a design app reads "Design app" on the chip, the cards and to Aiden; any other app, its framework. */
+export const DESIGN_APP_LABEL = "Design app";
+function appLabel(app: { framework?: FrameworkId; mock?: true } | undefined): string {
+  return app?.mock ? DESIGN_APP_LABEL : frameworkLabel(app?.framework);
+}
+
 function defaultPort(framework: FrameworkId | undefined): number {
   return FRAMEWORKS.find((spec) => spec.id === framework)?.defaultPort ?? 5173;
 }
@@ -1040,7 +1046,7 @@ export class DesignAppServers {
       appRoot,
       source,
       ...(app?.framework ? { framework: app.framework } : {}),
-      frameworkLabel: frameworkLabel(app?.framework),
+      frameworkLabel: appLabel(app),
       ...(app?.packageManager.name ? { manager: app.packageManager.name } : {}),
       ...(app?.script ? { script: app.script } : {}),
       ...(app?.mock ? { mock: true as const } : {}),
@@ -1177,7 +1183,7 @@ export class DesignAppServers {
         entry.meta = {
           ...entry.meta,
           ...(app.framework ? { framework: app.framework } : {}),
-          frameworkLabel: frameworkLabel(app.framework),
+          frameworkLabel: appLabel(app),
           script: app.script!,
           ...(app.packageManager.name ? { manager: app.packageManager.name } : {}),
           ...(app.mock ? { mock: true as const } : {}),
@@ -1231,7 +1237,7 @@ export class DesignAppServers {
             workspaceId: entry.workspaceId,
             appRoot: entry.appRoot,
             ...(surface.packageName ? { packageName: surface.packageName } : {}),
-            frameworkLabel: frameworkLabel(app.framework),
+            frameworkLabel: appLabel(app),
             reason,
             runCommand: surface.surface.runArgv.join(" "),
             ...(willInstall ? { installCommand: (() => {
@@ -1490,7 +1496,7 @@ export class DesignAppServers {
   ): DesignAppStatus {
     const port = Number(new URL(found.origin).port);
     const app = detection.apps.find((candidate) => candidate.root === entry.appRoot && candidate.kind === "web");
-    entry.meta = { ...(app?.framework ? { framework: app.framework } : {}), frameworkLabel: frameworkLabel(app?.framework), startedBy: by };
+    entry.meta = { ...(app?.framework ? { framework: app.framework } : {}), frameworkLabel: appLabel(app), startedBy: by };
     entry.source = "attached";
     entry.attached = { pid: found.pid, ppid: found.ppid, ident: found.ident, port, origin: found.origin, held: [...found.held], workspacePath, failedLooks: 0, lostTicks: 0, lost: false };
     this.serveAttached(entry, entry.attached);
@@ -1983,7 +1989,7 @@ export class DesignAppServers {
         candidates.push({
           appRoot: app.root,
           ...(app.framework ? { framework: app.framework } : {}),
-          frameworkLabel: frameworkLabel(app.framework),
+          frameworkLabel: appLabel(app),
           ...(app.script ? { script: app.script } : {}),
           ...(app.name ? { name: app.name } : {}),
           ...(app.mock ? { mock: true as const } : {}),
