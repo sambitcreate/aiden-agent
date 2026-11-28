@@ -13,17 +13,16 @@ We welcome **bug fixes** and **documentation improvements** via pull requests. F
 
 ## Local setup and verification
 
-Follow [Development and architecture](docs/development.md) to install dependencies and run Aiden locally (`npm install && npm run dev`).
+Follow [Development and architecture](docs/development.md) to install dependencies and run Aiden locally (`npm install && npm run dev`). `npm install` configures local `core.hooksPath` to `.githooks`, enabling `pre-commit` staged checks and `pre-push` static verification automatically.
 
-Before opening a PR, run the checks relevant to the areas you changed:
+Before opening a PR, run the static gates and the tests relevant to the areas you changed:
 
 ```bash
+npm run verify:static     # runs test:ci-policy, type-check, type-check:e2e, lint, and check:aiden-rules
 npm test
-npm run type-check
-npm run lint
 ```
 
-For faster scoped runs, you can use `npm run test:ci:core-git`, `npm run test:ci:runtime-subagents`, or `npm run test:ci:renderer-other` (see [docs/development.md](docs/development.md)).
+Individual static and policy gates can also be run directly (`npm run test:ci-policy`, `npm run type-check`, `npm run type-check:e2e`, `npm run lint`, `npm run check:aiden-rules`). For faster scoped test runs, you can use `npm run test:ci:core-git`, `npm run test:ci:runtime-subagents`, or `npm run test:ci:renderer-other` (see [docs/development.md](docs/development.md)).
 
 - For UI work, follow [docs/design-guide.md](docs/design-guide.md), [GUI.md](GUI.md), and [docs/settings-design-system.md](docs/settings-design-system.md), and attach before/after screenshots (or a short recording for motion/interaction changes) in your PR.
 - If your change alters behavior, platform support, settings, commands, or contracts, update the affected docs in the same PR.

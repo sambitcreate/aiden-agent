@@ -81,6 +81,8 @@ test("changed-area classification is conservative and table-driven", () => {
     ["resources/model-capabilities.json", select("catalog")],
     ["resources/generative-ui/runtime.js", allTrue],
     ["scripts/ci-changes.mjs", allTrue],
+    [".githooks/pre-commit", allTrue],
+    [".githooks/pre-push", allTrue],
     ["scripts/ci-test-registry.json", desktopOnly],
     [".github/workflows/ci.yml", allTrue],
     ["package.json", allTrue],

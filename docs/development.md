@@ -52,12 +52,13 @@ Native builds discover the newest compatible full Xcode without changing the mac
 ## Verify changes
 
 ```bash
+npm run verify:static     # runs test:ci-policy, type-check, type-check:e2e, lint, and check:aiden-rules
 npm test                  # full CI suite (includes lanes needing Ruby, Cargo, Playwright Chromium)
 npm run test:native       # macOS + Xcode 26+ only (Apple Foundation Models Swift tests)
-npm run type-check
-npm run lint
 npm run build
 ```
+
+`npm run verify:static` runs every portable CI policy and static gate sequentially: `npm run test:ci-policy`, `npm run type-check`, `npm run type-check:e2e`, `npm run lint`, and `npm run check:aiden-rules`. Running `npm install` configures repository-local `core.hooksPath` to `.githooks`, where `.githooks/pre-commit` checks staged files (`eslint`, `check:aiden-rules`, and `test:ci-policy` when policy surfaces are staged) and `.githooks/pre-push` runs `npm run verify:static`.
 
 For faster local iteration, run a scoped lane (`npm run test:ci:core-git`, `npm run test:ci:runtime-subagents`, or `npm run test:ci:renderer-other`).
 
