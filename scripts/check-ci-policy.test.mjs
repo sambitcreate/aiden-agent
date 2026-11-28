@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import test from "node:test";
 import { URL } from "node:url";
+import ts from "typescript";
 import { parse } from "yaml";
 import { spawnSync } from "node:child_process";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { AREA_NAMES } from "./ci-changes.mjs";
 import { PLAN_DECISIONS, REQUIRED_JOB_RULES } from "./ci-required.mjs";
-import { readRegistry } from "./ci-test-registry.mjs";
+import { readPackageManifest, readRegistry, validateRegistry } from "./ci-test-registry.mjs";
 
 const workflowUrl = new URL("../.github/workflows/ci.yml", import.meta.url);
 const releaseWorkflowUrl = new URL("../.github/workflows/release.yml", import.meta.url);
@@ -109,6 +111,223 @@ test("Linux managed-payload contracts install the native SELinux build dependenc
   assert.match(rpmJob, /dnf install --assumeyes[^\n]*\blibselinux-devel\b/u);
   assert.match(rpmJob, /dnf install --assumeyes[^\n]*\bcargo\b/u);
   assert.match(rpmJob, /dnf install --assumeyes[^\n]*\brust\b/u);
+  assert.match(rpmJob, /dnf install --assumeyes[^\n]*\bclippy\b/u);
+  assert.match(rpmJob, /dnf install --assumeyes[^\n]*\brustfmt\b/u);
+});
+
+function extractShellCargoInvocations(scriptCommand) {
+  const invocations = [];
+  for (const rawSegment of scriptCommand.split("&&")) {
+    const tokens = rawSegment.trim().split(/\s+/u).filter(Boolean);
+    let index = 0;
+    while (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(tokens[index] ?? "")) index += 1;
+    if (tokens[index] === "cargo") {
+      invocations.push(tokens.slice(index + 1));
+    }
+  }
+  return invocations;
+}
+
+function arrayLiteralTokens(node) {
+  if (!ts.isArrayLiteralExpression(node)) return null;
+  return node.elements.map((element) =>
+    ts.isStringLiteralLike(element) ? element.text : "<expr>",
+  );
+}
+
+function extractJsCargoSurface(filePath, sourceText) {
+  const sourceFile = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const stringLiterals = [];
+  const arrayBindings = new Map();
+  const invocations = [];
+
+  const visit = (node) => {
+    if (ts.isStringLiteralLike(node)) {
+      stringLiterals.push(node.text);
+    }
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      if (ts.isArrayLiteralExpression(node.initializer)) {
+        const direct = arrayLiteralTokens(node.initializer);
+        const nested = node.initializer.elements.map(arrayLiteralTokens).filter(Boolean);
+        arrayBindings.set(
+          node.name.text,
+          nested.length === node.initializer.elements.length && nested.length > 0 ? nested : [direct],
+        );
+      }
+    }
+    if (ts.isForOfStatement(node) && ts.isVariableDeclarationList(node.initializer)) {
+      const decl = node.initializer.declarations[0];
+      if (decl && ts.isIdentifier(decl.name)) {
+        if (ts.isArrayLiteralExpression(node.expression)) {
+          const nested = node.expression.elements.map(arrayLiteralTokens).filter(Boolean);
+          if (nested.length > 0) arrayBindings.set(decl.name.text, nested);
+        } else if (ts.isIdentifier(node.expression) && arrayBindings.has(node.expression.text)) {
+          arrayBindings.set(decl.name.text, arrayBindings.get(node.expression.text));
+        }
+      }
+    }
+    if (ts.isCallExpression(node)) {
+      const callee = ts.isIdentifier(node.expression)
+        ? node.expression.text
+        : ts.isPropertyAccessExpression(node.expression)
+          ? node.expression.name.text
+          : "";
+      const [cmdArg, argsArg] = node.arguments;
+      if (
+        (callee === "spawnSync" || callee === "execFileSync") &&
+        cmdArg &&
+        ts.isStringLiteralLike(cmdArg) &&
+        cmdArg.text === "cargo" &&
+        argsArg
+      ) {
+        const direct = arrayLiteralTokens(argsArg);
+        if (direct) {
+          invocations.push(direct);
+        } else if (ts.isIdentifier(argsArg) && arrayBindings.has(argsArg.text)) {
+          invocations.push(...arrayBindings.get(argsArg.text));
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return { stringLiterals, invocations };
+}
+
+function hasCargoFmtCheck(args) {
+  const separator = args.indexOf("--");
+  return args[0] === "fmt" && separator > 0 && args.slice(separator + 1).includes("--check");
+}
+
+function hasCargoTestLocked(args) {
+  const separator = args.indexOf("--");
+  const cargoFlags = separator === -1 ? args.slice(1) : args.slice(1, separator);
+  return args[0] === "test" && cargoFlags.includes("--locked");
+}
+
+function hasCargoClippyDenyWarnings(args) {
+  const separator = args.indexOf("--");
+  if (args[0] !== "clippy" || separator <= 0) return false;
+  const lintFlags = args.slice(separator + 1);
+  if (lintFlags.includes("-Dwarnings")) return true;
+  return lintFlags.some((flag, index) => flag === "-D" && lintFlags[index + 1] === "warnings");
+}
+
+function assertRustCrateGuardrails({ crates, surfaces }) {
+  assert.ok(crates.length > 0, "Expected at least one native/*/Cargo.toml crate");
+  for (const crate of crates) {
+    const marker = `native/${crate}`;
+    const matching = surfaces.filter((surface) => surface.references.some((ref) => ref.includes(marker)));
+    assert.ok(matching.length > 0, `${marker}/Cargo.toml is not covered by any CI-executed script or test`);
+    const invocations = matching.flatMap((surface) => surface.invocations);
+    assert.ok(
+      invocations.some(hasCargoFmtCheck),
+      `${marker}/Cargo.toml must enforce 'cargo fmt -- --check' in CI`,
+    );
+    assert.ok(
+      invocations.some(hasCargoTestLocked),
+      `${marker}/Cargo.toml must enforce 'cargo test --locked' in CI`,
+    );
+    assert.ok(
+      invocations.some(hasCargoClippyDenyWarnings),
+      `${marker}/Cargo.toml must enforce 'cargo clippy ... -- -D warnings' in CI`,
+    );
+  }
+}
+
+test("every native Rust crate enforces cargo fmt -- --check and cargo clippy with -D warnings in CI", async () => {
+  const nativeDir = new URL("../native/", import.meta.url);
+  const nativeEntries = await readdir(nativeDir, { withFileTypes: true });
+  const crates = nativeEntries
+    .filter((entry) => entry.isDirectory() && existsSync(new URL(`${entry.name}/Cargo.toml`, nativeDir)))
+    .map((entry) => entry.name)
+    .sort();
+  assert.deepEqual(crates, ["computer-use-broker", "linux-managed-payload"]);
+
+  const registry = readRegistry();
+  const packageManifest = readPackageManifest();
+  const validation = validateRegistry({ registry, packageManifest });
+  const ciScripts = new Set([
+    ...validation.visitedScripts,
+    ...(registry.workflowScripts ?? []).map((entry) => entry.script),
+  ]);
+  const ciScriptFiles = [...new Set([...validation.sourceFiles, ...validation.workflowFiles])]
+    .filter((file) => file.startsWith("scripts/"))
+    .sort();
+
+  const surfaces = [];
+  for (const scriptName of [...ciScripts].sort()) {
+    const command = packageManifest.scripts?.[scriptName];
+    if (typeof command !== "string" || !command.includes("cargo")) continue;
+    surfaces.push({
+      id: `package.json#${scriptName}`,
+      references: [command],
+      invocations: extractShellCargoInvocations(command),
+    });
+  }
+  const fileTexts = new Map();
+  for (const file of ciScriptFiles) {
+    const text = await readFile(new URL(`../${file}`, import.meta.url), "utf8");
+    if (!text.includes("cargo")) continue;
+    fileTexts.set(file, text);
+    const parsed = extractJsCargoSurface(file, text);
+    surfaces.push({
+      id: file,
+      references: parsed.stringLiterals,
+      invocations: parsed.invocations,
+    });
+  }
+
+  assertRustCrateGuardrails({ crates, surfaces });
+
+  const payloadFile = "scripts/linux-managed-payload.test.mjs";
+  const payloadSource = fileTexts.get(payloadFile);
+  assert.ok(payloadSource, `${payloadFile} must be part of the CI-executed test inventory`);
+  const rebuildPayloadSurface = (mutatedSource) => {
+    const parsed = extractJsCargoSurface(payloadFile, mutatedSource);
+    return surfaces.map((surface) =>
+      surface.id === payloadFile
+        ? { id: payloadFile, references: parsed.stringLiterals, invocations: parsed.invocations }
+        : surface,
+    );
+  };
+
+  assert.throws(
+    () => assertRustCrateGuardrails({ crates: [...crates, "unguarded-crate"], surfaces }),
+    /native\/unguarded-crate\/Cargo\.toml is not covered/u,
+  );
+  assert.throws(
+    () =>
+      assertRustCrateGuardrails({
+        crates,
+        surfaces: rebuildPayloadSurface(payloadSource.replace('"fmt",', '"check",')),
+      }),
+    /linux-managed-payload\/Cargo\.toml must enforce 'cargo fmt -- --check'/u,
+  );
+  assert.throws(
+    () =>
+      assertRustCrateGuardrails({
+        crates,
+        surfaces: rebuildPayloadSurface(payloadSource.replace('"--check"', '"--version"')),
+      }),
+    /linux-managed-payload\/Cargo\.toml must enforce 'cargo fmt -- --check'/u,
+  );
+  assert.throws(
+    () =>
+      assertRustCrateGuardrails({
+        crates,
+        surfaces: rebuildPayloadSurface(payloadSource.replace('"clippy",', '"check",')),
+      }),
+    /linux-managed-payload\/Cargo\.toml must enforce 'cargo clippy \.\.\. -- -D warnings'/u,
+  );
+  assert.throws(
+    () =>
+      assertRustCrateGuardrails({
+        crates,
+        surfaces: rebuildPayloadSurface(payloadSource.replace('"-D", "warnings"', '"-W", "warnings"')),
+      }),
+    /linux-managed-payload\/Cargo\.toml must enforce 'cargo clippy \.\.\. -- -D warnings'/u,
+  );
 });
 
 test("Fedora installs the baseline-verified RPM instead of rebuilding native modules", async () => {

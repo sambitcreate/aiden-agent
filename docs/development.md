@@ -26,7 +26,7 @@ Core technologies include Electron 43, React 19, TypeScript, Vite, Tailwind CSS,
 - macOS or a glibc 2.34+ x64/arm64 Linux desktop
 - Node.js 22.22 or newer and npm (CI pins `22.23.4`; use the newest release of your Node line)
 - A C17 compiler (`clang`/`gcc` or Xcode Command Line Tools), plus `pkg-config`, `libsecret-1` headers (`libsecret-1-dev`), and `gio-unix-2.0` headers (`libglib2.0-dev`) on Linux (`rpm` and `libselinux1-dev` for Linux packaging checks)
-- Rust and Cargo (`rustup`, in `~/.cargo/bin` or on `PATH`, or set `CARGO`) for macOS Computer Use helper tests, packaged macOS builds, and Linux `native/linux-managed-payload` contract tests (`npm run test:linux-contracts`)
+- Rust and Cargo with the `rustfmt` and `clippy` components (`rustup`, in `~/.cargo/bin` or on `PATH`, or set `CARGO`; `cargo`, `rust`, `rustfmt`, and `clippy` on Fedora) for macOS Computer Use helper tests, packaged macOS builds, and Linux `native/linux-managed-payload` contract tests (`npm run test:linux-contracts`)
 - A full Xcode installation for macOS native helpers (`npm run build:native` / `npm run package`), with Xcode 26 or newer required for Apple Foundation Models builds
 - An Apple signing identity only for packaged macOS distribution builds
 
