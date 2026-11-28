@@ -30,6 +30,8 @@ import type { AssistantMessage, TranscriptContext } from "@earendil-works/pi-ai"
 import type { AgentTurnDecision, StreamFn } from "@earendil-works/pi-agent-core";
 import { createChatStore } from "../../../main/services/chat-store-core.js";
 import { ChatActivityRegistry } from "../../../main/services/chat-activity-core.js";
+import { commandReadingForCall } from "../../../renderer/shared/command-reading.js";
+import { homedir } from "node:os";
 import type { ChatActivitySnapshot } from "../../../renderer/shared/chat-activity.js";
 import { HostRunRegistry } from "../../../main/services/host-run-registry.js";
 import { createHostRunRecorders } from "../../../main/services/host-runs.js";
@@ -61,15 +63,19 @@ import { createGenerationWatchdog } from "./generation-watchdog.ts";
 /**
  * The approval summary a paired phone shows. A call with only a command or path reads
  * like the desktop host's ("Run command: npm test"); anything else stays the exact
- * request, so nothing the call would do is hidden.
+ * request, so nothing the call would do is hidden. A command's `description` is the
+ * model's plain words, shown beside the command (never instead of it), so it may
+ * come with the command.
  */
 export function daemonApprovalSummary(toolName: string, input: unknown): string {
   const args = input !== null && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : undefined;
-  const only = (key: string) => {
-    const value = args && Object.keys(args).length === 1 ? args[key] : undefined;
+  const only = (key: string, alongside: readonly string[] = []) => {
+    const keys = args ? Object.keys(args) : [];
+    const value = args && keys.every((name) => name === key || (alongside.includes(name) && typeof args[name] === "string")) ? args[key] : undefined;
     return typeof value === "string" && value.trim() ? value : undefined;
   };
-  const readable = toolName === "run_command" ? only("command") && `Run command: ${only("command")}`
+  const command = only("command", ["description"]);
+  const readable = toolName === "run_command" ? command && `Run command: ${command}`
     : toolName === "read_file" ? only("path") && `Read file: ${only("path")}`
       : toolName === "list_dir" ? only("path") && `List folder: ${only("path")}`
         : undefined;
@@ -439,8 +445,9 @@ export function createDaemonChats(agentDir: string) {
               const original = JSON.stringify(event.input);
               if (Buffer.byteLength(original) > 1_700) return { block: true, reason: "The tool request exceeds the remote approval display budget." };
               timeline.toolAwaitingApproval(event.toolCallId);
-              const outcome = await approvals.request({ streamId, toolCallId: event.toolCallId, toolName: event.toolName, summary: hookAsks ? `${daemonApprovalSummary(event.toolName, event.input)}\n\n${hookAskText(hooked).slice(0, HOOK_ASK_SUMMARY_CHARS)}` : daemonApprovalSummary(event.toolName, event.input) }, entry.abort.signal, owner.documentId,
-                ({ approvalId, toolCallId, toolName, summary }) => send("chat:approval", { streamId, approvalId, toolCallId, toolName, summary }));
+              const reading = commandReadingForCall(event.toolName, event.input, { workspaceRoot: cwd, home: homedir() });
+              const outcome = await approvals.request({ streamId, toolCallId: event.toolCallId, toolName: event.toolName, summary: hookAsks ? `${daemonApprovalSummary(event.toolName, event.input)}\n\n${hookAskText(hooked).slice(0, HOOK_ASK_SUMMARY_CHARS)}` : daemonApprovalSummary(event.toolName, event.input), ...(reading ? { reading } : {}) }, entry.abort.signal, owner.documentId,
+                ({ approvalId, toolCallId, toolName, summary, reading: shown }) => send("chat:approval", { streamId, approvalId, toolCallId, toolName, summary, ...(shown ? { reading: shown } : {}) }));
               await assertAuthority();
               if (outcome !== "allowed" || JSON.stringify(event.input) !== original || accessFor(agentDir, cwd) === "none") return { block: true, reason: "The tool request was denied, changed or expired." };
             }

@@ -669,6 +669,28 @@ body {
   }
 }
 
+/* A command card turns over between its plain words and the exact command.
+   Only a flip the person made animates; Reduce Motion lands it at once. */
+.approval-flip-face[data-flipped] {
+  animation: approval-flip-in var(--motion-duration) var(--motion-decelerate-easing);
+  transform-origin: 50% 50%;
+}
+
+@keyframes approval-flip-in {
+  from {
+    opacity: 0;
+    transform: perspective(640px) rotateX(-60deg);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+:root[data-reduce-motion="true"] .approval-flip-face[data-flipped] {
+  animation: none;
+}
+
 /* A diff's line bands run to the well's edge; a scrollbar appears only when it overflows. */
 .approval-diff {
   scrollbar-gutter: auto;
@@ -676,6 +698,26 @@ body {
 
 .composer-shell:focus-within {
   background-color: color-mix(in srgb, var(--surface-popover) 98%, var(--text-primary));
+}
+
+/* Go to approval: a brief accent tint that fades back, so a pointer user (no
+   focus ring) sees where they landed. Under Reduce Motion the same tint holds
+   still for as long, then goes, with no fade. `revealApprovalCard` removes the
+   attribute after 1.2 s. */
+@keyframes approval-arrival {
+  from {
+    background-color: var(--approval-arrival-tint);
+  }
+}
+
+[data-approval-arrival] {
+  --approval-arrival-tint: color-mix(in srgb, var(--surface-popover) 88%, var(--status-accent));
+  animation: approval-arrival 1200ms var(--motion-decelerate-easing);
+}
+
+:root[data-reduce-motion="true"] [data-approval-arrival] {
+  animation: none;
+  background-color: var(--approval-arrival-tint);
 }
 
 .ask-user-question-shell {
@@ -1060,6 +1102,15 @@ textarea {
 
 .transcript-sticky-header:focus-visible {
   --transcript-sticky-state: var(--color-list-selection);
+}
+
+/* The side panel's helper chat sits on the popover surface, so its stuck step
+   headers use that base instead of the main pane's background. */
+[data-subagent-helper-chat]:not([data-subagent-helper-expanded]) .transcript-sticky-header {
+  background:
+    linear-gradient(var(--transcript-sticky-state), var(--transcript-sticky-state)),
+    linear-gradient(var(--transcript-sticky-surface), var(--transcript-sticky-surface)),
+    var(--color-popover);
 }
 
 /* A collapse from a stuck header brings its section back into view below the

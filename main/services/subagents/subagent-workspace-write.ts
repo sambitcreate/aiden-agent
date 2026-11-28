@@ -21,6 +21,7 @@ import {
   type SubagentWorkspaceWriteApprovalDetails,
   type SubagentRunGrantApprovalDetails,
 } from "../../../renderer/shared/assistant.js";
+import { lineChangeCounts } from "../coding-tools.js";
 import type { Workspace, WorkspacePermission } from "../types.js";
 import type { ToolApprovalPrompt } from "../tool-approval.js";
 import {
@@ -83,6 +84,16 @@ interface PendingMutation {
   client: SubagentFileMutatorClient;
   lifecycle: MutationLifecycle;
   signal: AbortSignal;
+  /** Counted at approval time; reported once the change commits. */
+  lineChanges: SubagentFileLineChanges;
+}
+
+/** Line counts only, never contents, as the main chat's file tools report. */
+export interface SubagentFileLineChanges {
+  kind: "file_line_changes";
+  version: 1;
+  additions: number;
+  deletions: number;
 }
 
 export interface SubagentWorkspaceWriteApprovalGateV2 {
@@ -95,7 +106,7 @@ export interface SubagentWorkspaceWriteApprovalGateV2 {
     toolName: string;
     arguments: unknown;
     signal?: AbortSignal;
-  }): Promise<AgentToolResult<null>>;
+  }): Promise<AgentToolResult<SubagentFileLineChanges | null>>;
   shutdown(): Promise<void>;
 }
 
@@ -121,10 +132,6 @@ export interface SubagentWorkspaceWriteApprovalBrokerV2Input {
   implementerRunGrant?: boolean;
   registry?: WorkspaceOperationRegistry;
   now?: () => number;
-}
-
-function textResult(text: string): AgentToolResult<null> {
-  return { content: [{ type: "text", text }], details: null };
 }
 
 function blocked(reason: string): BeforeToolCallResult {
@@ -231,6 +238,25 @@ function parseArguments(toolName: WorkspaceWriteToolName, value: unknown): Mutat
     });
   }
   throw new SubagentFilePreparationError("invalid_input");
+}
+
+/**
+ * The canonical workspace-relative path a `write_file` or `edit_file` call
+ * names, or undefined for any other tool or malformed arguments. Used to tell
+ * the parent which files a stopped helper changed.
+ */
+export function subagentWorkspaceWriteTargetPath(
+  toolName: string,
+  args: unknown,
+): string | undefined {
+  if (toolName !== SUBAGENT_WRITE_FILE_TOOL_NAME && toolName !== SUBAGENT_EDIT_FILE_TOOL_NAME) {
+    return undefined;
+  }
+  try {
+    return parseArguments(toolName, args).path;
+  } catch {
+    return undefined;
+  }
 }
 
 function argumentDigest(toolName: WorkspaceWriteToolName, args: MutationArguments): string {
@@ -645,6 +671,11 @@ export function createSubagentWorkspaceWriteApprovalBrokerV2(
         client,
         lifecycle,
         signal,
+        lineChanges: {
+          kind: "file_line_changes",
+          version: 1,
+          ...lineChangeCounts(inspection.currentContent ?? "", effect.postimage.content),
+        },
       };
       const prepared = input.ledger.prepare(
         ledgerInput(authority, pending, context.toolCall.id, binding.toolName),
@@ -766,7 +797,10 @@ export function createSubagentWorkspaceWriteApprovalBrokerV2(
         effect.signal ? AbortSignal.any([pending.signal, effect.signal]) : pending.signal,
       );
       if (outcome.kind === "committed") {
-        return textResult("The approved workspace file change was committed.");
+        return {
+          content: [{ type: "text", text: "The approved workspace file change was committed." }],
+          details: pending.lineChanges,
+        };
       }
       if (outcome.kind === "not_committed" || outcome.kind === "unknown") throw outcome.error;
       throw new CommittedCleanupError(outcome.kind);

@@ -71,6 +71,11 @@ import { registerPeerHostHandlers } from "./peer-hosts.js";
 import { registerLocalRunIpc } from "./local-runs-main.js";
 import { registerChatPendingAttentionIpc } from "./chat-pending-attention-main.js";
 import { registerBotHandlers } from "./bots.js";
+import { registerBotBubbleHandlers } from "./bot-bubbles.js";
+import { parseBotId } from "./bot-params.js";
+import { botBubbleService } from "../services/bot-bubbles/bot-bubbles-main.js";
+import { botBubbleOverlayAccess, botBubbleWindowPort, isBotBubbleOverlayEvent } from "../windows/bot-bubbles-window.js";
+import { guardBotBubbleOverlayHandlers } from "../windows/bot-bubbles-overlay-access.js";
 import { registerBotRoutineHandlers } from "./bot-routines.js";
 import { registerBotComputerHandlers } from "./bot-computers.js";
 import { botComputerHandlerDependencies } from "../services/bot-computers/bot-computers-main.js";
@@ -234,7 +239,29 @@ export function registerHandlers(
   });
   registerPeerHostHandlers();
   registerLocalRunIpc();
-  if (hostPlatformCapabilities().bots) registerBotHandlers();
+  if (hostPlatformCapabilities().bots) {
+    registerBotHandlers();
+    registerBotBubbleHandlers<IpcMainInvokeEvent>({
+      // An overlay may close, open, move or bring back only its own heads.
+      handle: guardBotBubbleOverlayHandlers<IpcMainInvokeEvent>(
+        (channel, handler) => ipcMain.handle(channel, handler),
+        botBubbleOverlayAccess(),
+      ),
+      isMainWindow,
+      isBubbleOverlayEvent: isBotBubbleOverlayEvent,
+      // Resolved per call: the service reads userData, which is final only once the app starts.
+      service: {
+        state: () => botBubbleService().state(),
+        bubble: (botId, options) => botBubbleService().bubble(botId, options),
+        close: (botId) => botBubbleService().close(botId),
+        open: (botId, options) => botBubbleService().open(botId, options),
+        move: (botId, placement) => botBubbleService().move(botId, placement),
+        forgetRecent: (botId) => botBubbleService().forgetRecent(botId),
+      },
+      windows: botBubbleWindowPort,
+      parseBotId,
+    });
+  }
   registerBtwHandlers();
   registerFollowThroughHandlers();
   registerGoalHandlers({

@@ -125,6 +125,10 @@ test("daemon approval summaries read like the desktop's without hiding any argum
   assert.equal(api.daemonApprovalSummary("run_command", { command: "npm test" }), "Run command: npm test");
   assert.equal(api.daemonApprovalSummary("read_file", { path: "src/a.ts" }), "Read file: src/a.ts");
   assert.equal(api.daemonApprovalSummary("list_dir", { path: "src" }), "List folder: src");
+  // The model's plain words ride beside the command (the card shows them); they never replace it.
+  assert.equal(api.daemonApprovalSummary("run_command", { command: "npm test", description: "Runs the tests" }), "Run command: npm test");
+  assert.equal(api.daemonApprovalSummary("run_command", { command: "npm test", description: 7 }), 'run_command: {"command":"npm test","description":7}');
+  assert.equal(api.daemonApprovalSummary("read_file", { path: "a.ts", description: "x" }), 'read_file: {"path":"a.ts","description":"x"}');
   // Any other argument, tool or shape keeps the exact request.
   assert.equal(api.daemonApprovalSummary("run_command", { command: "sleep 9", timeout: 5 }), 'run_command: {"command":"sleep 9","timeout":5}');
   assert.equal(api.daemonApprovalSummary("read_file", { path: "a.ts", offset: 40 }), 'read_file: {"path":"a.ts","offset":40}');
@@ -1117,7 +1121,8 @@ test("isolated subagent inference executes only parent-owned tools with immutabl
     const expectedStatus = reason === "length" ? "failed" : "completed";
     const terminal = await api.runCliSubagent(dir, { runtime: { model: runtime.getModel("cli-test", "test") }, workspaceRoot: dir, permission: "ask", thinkingLevel: "off", context: { mode: "fork", revisionHash: "terminal", messages: context }, request: { role: "scout", label: "Terminal probe", task: "Explain the fix" }, policy: { deadlineMs: 15000 } }, [], async () => {});
     assert.equal(terminal.status, expectedStatus, `${reason}: ${JSON.stringify(terminal)}`);
-    assert.equal(terminal.summary, reason === "length" ? "The subagent did not complete this investigation." : "Parent-owned tools succeeded");
+    assert.equal(terminal.summary, reason === "length" ? "" : "Parent-owned tools succeeded");
+    if (reason === "length") assert.equal(terminal.warning, "The subagent did not complete this investigation.");
     assert.equal(requests.length, before + 1, "terminal output must not trigger an automatic retry");
     const report = await botTool.execute(`bot-${reason}`, { tasks: [{ role: "scout", label: "Bot terminal", task: "Explain the fix" }] });
     const reportText = report.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
@@ -1125,6 +1130,137 @@ test("isolated subagent inference executes only parent-owned tools with immutabl
     if (reason === "length") assert.ok(!reportText.includes("Incomplete finding"), "failed child retains the existing generic summary policy");
     assert.equal(requests.length, before + 2, "Bot child must make exactly one request with no retry");
   }
+});
+
+test("a CLI helper's conversation is recorded with its edits, and a broken recorder never stops the helper", async (t) => {
+  const dir = temporary(t), original = process.env.AIDEN_CLI_ENTRY;
+  process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
+  const server = createServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    const parsed = JSON.parse(body);
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    const first = !parsed.messages.some((message) => message.role === "tool");
+    const delta = first ? { role: "assistant", tool_calls: [{ index: 0, id: "edit-test", type: "function", function: { name: "edit_file", arguments: JSON.stringify({ path: "note.txt" }) } }] } : { role: "assistant", content: "Updated the note." };
+    response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: first ? "tool_calls" : "stop" }], usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 } })}\n\n`);
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  const runtime = await api.createCliModelRuntime(dir);
+  const tools = [{
+    name: "edit_file", description: "Edit the note", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+    execute: async () => ({ content: [{ type: "text", text: "Edited note.txt" }], details: { kind: "file_line_changes", version: 1, additions: 2, deletions: 1 } }),
+  }];
+  const run = (transcript, diagnostics) => api.runCliSubagent(dir, { runtime: { model: runtime.getModel("cli-test", "test") }, workspaceRoot: dir, permission: "ask", thinkingLevel: "off", context: { mode: "fresh", revisionHash: "record", messages: [] }, request: { role: "implementer", label: "Editor", task: "Update the note" }, policy: { deadlineMs: 15000 }, transcript }, tools, async () => {}, (error) => diagnostics.push(error.message));
+
+  const saved = [];
+  const recorder = new api.SubagentTranscriptRecorder({ runId: "run-cli", task: "Update the note", sink: { persist: async (transcript, final) => { saved.push({ transcript, final }); } } });
+  const diagnostics = [];
+  const result = await run(recorder, diagnostics);
+  assert.equal(result.status, "completed", JSON.stringify({ result, diagnostics }));
+  await recorder.finish("completed");
+  const last = saved.at(-1);
+  assert.equal(last.final, true);
+  const entries = last.transcript.entries.slice(1);
+  const step = entries.flatMap((entry) => entry.steps).find((candidate) => candidate.kind === "tool");
+  assert.deepEqual(step && [step.label, step.target, step.status, step.lineChanges], ["Edit file", "note.txt", "completed", { additions: 2, deletions: 1 }]);
+  assert.equal(entries.at(-1).text, "Updated the note.");
+  assert.deepEqual(diagnostics, []);
+
+  // A recorder that throws on every call is reported once and the helper still finishes.
+  const broken = new Proxy({}, { get: () => () => { throw new Error("recorder broke"); } });
+  const brokenDiagnostics = [];
+  const brokenResult = await run(broken, brokenDiagnostics);
+  assert.equal(brokenResult.status, "completed", JSON.stringify({ brokenResult, brokenDiagnostics }));
+  assert.equal(brokenResult.summary, "Updated the note.");
+  assert.equal(brokenDiagnostics.filter((message) => /recorder broke|transcript/iu.test(message)).length, 1, JSON.stringify(brokenDiagnostics));
+});
+
+test("a CLI subagent that runs out of time hands over what it streamed, filtered and marked unverified", async (t) => {
+  const dir = temporary(t), original = process.env.AIDEN_CLI_ENTRY, secret = `ghp_${"a1B2c3D4e5".repeat(4)}`;
+  process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
+  const server = createServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    if (!JSON.parse(body).messages.some((message) => message.role === "tool")) {
+      // The first turn says what it checked, with no trailing newline, then reads a file.
+      response.write(`data: ${JSON.stringify({ id: "slow", object: "chat.completion.chunk", choices: [{ index: 0, delta: { role: "assistant", content: "Checked the parser tests.", tool_calls: [{ index: 0, id: "read-slow", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "parser.ts" }) } }] }, finish_reason: null }] })}\n\n`);
+      response.write(`data: ${JSON.stringify({ id: "slow", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] })}\n\n`);
+      response.end("data: [DONE]\n\n");
+      return;
+    }
+    // The next turn streams a finding and a token, then never finishes.
+    response.write(`data: ${JSON.stringify({ id: "slow", object: "chat.completion.chunk", choices: [{ index: 0, delta: { role: "assistant", content: `Found the bug in parser.ts\ntoken ${secret}\n` }, finish_reason: null }] })}\n\n`);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  const runtime = await api.createCliModelRuntime(dir);
+  const result = await api.runCliSubagent(dir, { runtime: { model: runtime.getModel("cli-test", "test") }, workspaceRoot: dir, permission: "ask", thinkingLevel: "off", context: { mode: "fork", revisionHash: "slow", messages: [{ role: "user", content: "Find the bug", timestamp: 1 }] }, request: { role: "scout", label: "Slow scout", task: "Find the bug" }, policy: { deadlineMs: 3000 } }, [{
+    name: "read_file", description: "Read a file", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+    execute: async () => ({ content: [{ type: "text", text: "export function parse() {}" }], details: {} }),
+  }], async () => {});
+  assert.equal(result.status, "timed_out", JSON.stringify(result));
+  // Text from the two turns stays apart rather than running into one sentence.
+  assert.match(result.summary, /Checked the parser tests\.\s+Found the bug in parser\.ts/u);
+  assert.ok(!result.summary.includes(secret), result.summary);
+  assert.match(result.warning, /did not complete/u);
+  assert.match(result.warning, /incomplete, unverified partial findings/u);
+});
+
+test("a durable CLI Bot's helpers share one 60-minute clock across every subagent call in a turn", async (t) => {
+  const dir = temporary(t), daemon = api.createDaemonChats(dir), parentRequests = [], childRequests = [];
+  const original = process.env.AIDEN_CLI_ENTRY, realNow = performance.now;
+  process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { performance.now = realNow; if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
+  const toolResult = (parsed, id) => parsed.messages.find((message) => message.role === "tool" && message.tool_call_id === id);
+  const server = createServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    const parsed = JSON.parse(body);
+    // Children get only the parent's read tools; the Bot itself loads `subagent` on demand.
+    const parent = (parsed.tools ?? []).some((tool) => tool.function.name === "load_tools");
+    (parent ? parentRequests : childRequests).push(parsed);
+    let call;
+    if (parent && !toolResult(parsed, "load")) call = "load";
+    else if (parent && !toolResult(parsed, "helper-1")) call = "helper-1";
+    else if (parent && !toolResult(parsed, "helper-2")) {
+      // 61 minutes pass between the turn's first and second helper call.
+      const offset = 61 * 60_000; performance.now = () => realNow.call(performance) + offset;
+      call = "helper-2";
+    }
+    const invocation = call === "load" ? { name: "load_tools", arguments: { names: ["subagent"] } } : { name: "subagent", arguments: { tasks: [{ role: "scout", label: call, task: "Look around" }] } };
+    const delta = call ? { role: "assistant", tool_calls: [{ index: 0, id: call, type: "function", function: { name: invocation.name, arguments: JSON.stringify(invocation.arguments) } }] }
+      : { role: "assistant", content: parent ? "Bot finished" : "Child finding" };
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(`data: ${JSON.stringify({ id: "clock", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "clock", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: call ? "tool_calls" : "stop" }] })}\n\n`);
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  let host = await api.createCliBots(dir, daemon);
+  t.after(async () => { await host.stop(); await daemon.stop(); });
+  daemon.setBots(host);
+  const audienceId = "cli:local", notice = await host.application.noticeStatus(audienceId);
+  await host.application.acknowledgeNotice(audienceId, { version: notice.version, decision: "customize_first", confirmedForeground: true });
+  const catalog = await host.application.capabilityCatalog(audienceId), provider = catalog.providers.find((item) => item.label === "cli-test");
+  const subagents = catalog.otherCapabilities.find((item) => item.label === "Subagents"); assert.ok(subagents?.available, JSON.stringify(catalog.otherCapabilities));
+  const bot = await host.application.createBot({ audienceId, bot: { name: "Clocked", instructions: "Delegate", avatar: { version: 1, shape: "wisp", color: "lilac" } }, access: { accessMode: "custom", catalogRevision: catalog.revision, custom: {
+    providerId: provider.id, modelId: provider.models[0].id, fileScopeIds: catalog.fileScopes.filter((item) => item.kind === "bot_home").map((item) => item.id), shellEnabled: false, connectionIds: [], skillIds: [], otherCapabilityIds: [subagents.id] } } });
+  await host.command(["enable-durable"]); await host.stop();
+  host = await api.createCliBots(dir, daemon); daemon.setBots(host);
+  const sent = await host.durable.runtime.send(bot.id, { text: "Use two helpers", requestId: "two-helpers" });
+  assert.equal((await host.durable.runtime.awaitReply(bot.id, sent.submissionId, AbortSignal.timeout(30_000))).kind, "completed");
+  assert.equal(childRequests.length, 1, "only the first helper reaches the model");
+  const content = (message) => typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+  const final = parentRequests.at(-1);
+  assert.match(content(toolResult(final, "helper-1")), /Status: completed/u);
+  assert.ok(content(toolResult(final, "helper-2")).includes(api.BOT_SUBAGENT_LIMIT_REACHED_RESULT), content(toolResult(final, "helper-2")));
 });
 
 test("an Anthropic subagent sends its whole conversation on every model round, never a message thread", async (t) => {
@@ -1184,14 +1320,40 @@ test("a subagent that hits its deadline during an unanswered approval settles an
   t.after(() => { server.closeAllConnections(); server.close(); });
   api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
   const runtime = await api.createCliModelRuntime(dir); let effects = 0, gateSignal;
-  // The gate stands in for a "Subagent: allow read_file once?" prompt nobody answers.
-  const result = await api.runCliSubagent(dir, { runtime: { model: runtime.getModel("cli-test", "test") }, workspaceRoot: dir, permission: "ask", thinkingLevel: "off", context: { mode: "fresh", revisionHash: "gate", messages: [] }, request: { role: "scout", label: "Gate", task: "Read the note" }, policy: { deadlineMs: 4000 } }, [{
+  const saved = [];
+  const recorder = new api.SubagentTranscriptRecorder({ runId: "run-gate", task: "Read the note", sink: { persist: async (transcript, final) => { saved.push({ transcript, final }); } } });
+  // The gate stands in for a "Subagent: allow read_file once?" prompt nobody
+  // answers; like a real prompt, it gives up with the stop's reason.
+  const result = await api.runCliSubagent(dir, { runtime: { model: runtime.getModel("cli-test", "test") }, workspaceRoot: dir, permission: "ask", thinkingLevel: "off", context: { mode: "fresh", revisionHash: "gate", messages: [] }, request: { role: "scout", label: "Gate", task: "Read the note" }, policy: { deadlineMs: 4000 }, transcript: recorder }, [{
     name: "read_file", description: "Read the note", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
     execute: async () => { effects++; return { content: [{ type: "text", text: "Apricot" }], details: {} }; },
-  }], (_name, _id, _args, _context, signal) => { gateSignal = signal; return new Promise(() => {}); });
+  }], (_name, _id, _args, _context, signal) => { gateSignal = signal; return new Promise((_resolve, reject) => signal?.addEventListener("abort", () => reject(signal.reason), { once: true })); });
   assert.equal(result.status, "timed_out");
   assert.equal(effects, 0);
   assert.equal(gateSignal?.aborted, true);
+  await recorder.finish("cancelled");
+  // The saved conversation shows the stopped call as cancelled, not refused.
+  const steps = saved.at(-1).transcript.entries.flatMap((entry) => entry.steps ?? []).filter((step) => step.kind === "tool");
+  assert.deepEqual(steps.map((step) => step.status), ["cancelled"]);
+
+  // An allowed call still running at the deadline shows as cancelled even when
+  // it then succeeds, as in the main chat.
+  const runningSaved = [];
+  const runningRecorder = new api.SubagentTranscriptRecorder({ runId: "run-running", task: "Read the note", sink: { persist: async (transcript, final) => { runningSaved.push({ transcript, final }); } } });
+  let finishedAfterStop = false;
+  const running = await api.runCliSubagent(dir, { runtime: { model: runtime.getModel("cli-test", "test") }, workspaceRoot: dir, permission: "ask", thinkingLevel: "off", context: { mode: "fresh", revisionHash: "running", messages: [] }, request: { role: "scout", label: "Running", task: "Read the note" }, policy: { deadlineMs: 1500 }, transcript: runningRecorder }, [{
+    name: "read_file", description: "Read the note", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+    execute: async (_id, _args, signal) => {
+      await new Promise((resolve) => signal?.addEventListener("abort", resolve, { once: true }));
+      finishedAfterStop = true;
+      return { content: [{ type: "text", text: "Apricot" }], details: {} };
+    },
+  }], async () => {});
+  assert.equal(running.status, "timed_out");
+  assert.equal(finishedAfterStop, true);
+  await runningRecorder.finish("cancelled");
+  const runningSteps = runningSaved.at(-1).transcript.entries.flatMap((entry) => entry.steps ?? []).filter((step) => step.kind === "tool");
+  assert.deepEqual(runningSteps.map((step) => step.status), ["cancelled"]);
 });
 
 test("shared auth coordinator commits a returned credential once and suppresses a cancelled login", async () => {

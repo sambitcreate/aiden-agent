@@ -21,6 +21,7 @@ import {
   type ApprovalCardButton,
 } from "../../renderer/shared/approval-card-model.js";
 import { APPROVAL_MODES, type ApprovalMode } from "../../renderer/shared/approval-mode.js";
+import { commandExplanation, type CommandTag } from "../../renderer/shared/command-reading.js";
 import type { BotTranscriptEntry } from "../../renderer/shared/bot-live.js";
 import {
   BOT_SETTINGS_FIELDS,
@@ -105,7 +106,7 @@ function parseCardButton(value: unknown, index: number): ApprovalCardButton {
 /** Strict parse of the typed card, as a revision-61 client decodes it. */
 export function parseAidenRemoteApprovalCard(value: unknown): ApprovalCard {
   if (!isRecord(value)) throw new Error("Approval card must be an object.");
-  exactKeys(value, ["kind", "mac", "title", "arguments", "body", "previous", "rows", "notes", "buttons", "allowOnMac"], "Approval card");
+  exactKeys(value, ["kind", "mac", "title", "arguments", "body", "explanation", "tags", "previous", "rows", "notes", "buttons", "allowOnMac"], "Approval card");
   const kind = member(value.kind, APPROVAL_CARD_KINDS, "Approval card kind");
   if (has(value, "mac") && kind !== "mac") throw new Error("Only a Mac card names a part of the Mac.");
   const buttons = list(value.buttons, "Approval card buttons", 5, parseCardButton);
@@ -122,6 +123,9 @@ export function parseAidenRemoteApprovalCard(value: unknown): ApprovalCard {
       return { key: text(entry.key, "Approval card argument key", APPROVAL_CARD_LIMITS.key), value: text(entry.value, "Approval card argument value", APPROVAL_CARD_LIMITS.value) };
     }),
     ...(has(value, "body") ? { body: parseCardText(value.body, "Approval card body") } : {}),
+    // Revision 69 (`approval:plain-words`): a shell card's plain words, beside its command.
+    ...(has(value, "explanation") ? { explanation: parseCardExplanation(value) } : {}),
+    ...(has(value, "tags") ? { tags: parseCardTags(value) } : {}),
     ...(has(value, "previous") ? { previous: parseCardText(value.previous, "Approval card previous") } : {}),
     ...(has(value, "rows") ? {
       rows: list(value.rows, "Approval card rows", APPROVAL_CARD_LIMITS.rows, (row) => {
@@ -134,6 +138,32 @@ export function parseAidenRemoteApprovalCard(value: unknown): ApprovalCard {
     buttons,
     ...(has(value, "allowOnMac") ? { allowOnMac: text(value.allowOnMac, "Approval card allowOnMac", 120) } : {}),
   };
+}
+
+/** A plain-words explanation: one bounded line, only on a shell card with a command body. */
+function parseCardExplanation(card: Record<string, unknown>): string {
+  plainWordsCard(card);
+  const value = text(card.explanation, "Approval card explanation", APPROVAL_CARD_LIMITS.explanation);
+  if (commandExplanation(value) !== value) throw new Error("Approval card explanation must be one plain line.");
+  return value;
+}
+
+function parseCardTags(card: Record<string, unknown>): CommandTag[] {
+  plainWordsCard(card);
+  const tags = list(card.tags, "Approval card tags", APPROVAL_CARD_LIMITS.tags, (entry) => {
+    if (!isRecord(entry)) throw new Error("Approval card tag must be an object.");
+    exactKeys(entry, ["label", "tone"], "Approval card tag");
+    return { label: text(entry.label, "Approval card tag label", APPROVAL_CARD_LIMITS.tagLabel), tone: member(entry.tone, ["calm", "risk"] as const, "Approval card tag tone") };
+  });
+  if (tags.length === 0) throw new Error("Approval card tags, when sent, are not empty.");
+  return tags;
+}
+
+function plainWordsCard(card: Record<string, unknown>): void {
+  const body = isRecord(card.body) ? card.body : undefined;
+  if (card.kind !== "mac" || card.mac !== "shell" || body?.format !== "command") {
+    throw new Error("Only a shell card with a command carries plain words.");
+  }
 }
 
 /** A Bot approval's card as one device reads it: Always only for a `bot:allowed` holder. */

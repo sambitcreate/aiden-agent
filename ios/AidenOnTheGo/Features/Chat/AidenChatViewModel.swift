@@ -56,6 +56,29 @@ final class AidenChatViewModel {
     /// Set once the user picks a model in this chat; from then on the
     /// in-session choice wins over the remembered per-host preference.
     @ObservationIgnored private var hasExplicitModelSelection = false
+    /// A pick made on this phone that the Mac hasn't accepted yet. Only then
+    /// does a send ask the Mac to keep its level as the chat's own.
+    @ObservationIgnored private var hasUnsentModelPick = false
+    @ObservationIgnored private var resolvedWithAgentSlider = false
+    /// Counts the person's model picks in this chat, so a send can tell
+    /// whether one was made while it was out.
+    @ObservationIgnored private var modelPickGeneration = 0
+    /// The pick count when the saved send with this key was first built, so
+    /// its retry still loses to a pick made while it waited. A send loaded
+    /// from disk has none here and counts as older than every pick made since
+    /// the chat opened.
+    @ObservationIgnored private var sendPickGeneration: (key: UUID, generation: Int)?
+    /// Whether this chat's unsent pick came back from disk when the chat
+    /// opened. Such a pick postdates any saved send that started where new
+    /// chats start (a chat pick exists only once the chat has messages, and
+    /// that send was built with none of the person's), so it beats that
+    /// send's hold. A send that carried a pick was built after it, and its
+    /// own pick is what comes back, so the hold still keeps it.
+    @ObservationIgnored private var restoredChatPick = false
+    /// The send being built or out right now, from the moment its optimistic
+    /// message fills the chat until it returns. A catalog landing meanwhile
+    /// resolves the chip from this send's intent, not from that message.
+    @ObservationIgnored private var sendInFlight: AidenChatDraftStore.PendingSend?
     let hapticScope: UUID
     @ObservationIgnored private var deletionLifetime: AidenChatCache.ChatLifetime?
     // Deterministic test seam immediately before consumer admission.
@@ -173,6 +196,9 @@ final class AidenChatViewModel {
         guard !isStarting, !isSubmittingRunInput, let session = draftSession else { return }
         do {
             try await pendingSendCoordinator.discard(session: session)
+            // The chip may have shown what the dismissed send meant to keep;
+            // with it gone the chat follows its own model and level again.
+            resolveModelSelection()
         } catch {
             presentedError = error.localizedDescription
         }
@@ -346,6 +372,12 @@ final class AidenChatViewModel {
     var selectedProviderId: String?
     var selectedModelId: String?
     var selectedThinkingLevel: String?
+    /// The Agent Slider sheet. Kept here, with the shell-owned model, so an
+    /// iPhone Duo fold that rebuilds the chat's views opens it again.
+    var agentSliderPresentation = AidenAgentSliderPresentationState()
+    /// The stop the person last put this chat on, by id. Two stops can name
+    /// the same model and level; this keeps the chat on the one they chose.
+    var agentSliderChosenStopId: String?
     var presentedError: String?
 
     var isReadOnlyFixture: Bool {
@@ -398,6 +430,11 @@ final class AidenChatViewModel {
 
     private var ownerConnection: AidenHostConnection? {
         isReadOnlyFixture ? nil : coordinator.hosts.connection(for: owner.instanceId)
+    }
+
+    /// The owner Mac's name, as a summary Live Activity names it.
+    var ownerMachineName: String {
+        ownerConnection?.installation.name ?? String(localized: "your computer")
     }
 
     /// The owner's `/server` answer. Nil until that machine has connected,
@@ -813,7 +850,9 @@ final class AidenChatViewModel {
         }
     }
 
-    private var turnModelSelection: AidenChatModelSelection {
+    /// What the next turn sends. `send` reads it once, before any wait, so a
+    /// stop picked while the send is in flight never changes that send.
+    var turnModelSelection: AidenChatModelSelection {
         AidenChatModelAuthority.turnSelection(
             chat: chat,
             selectedProviderId: selectedProviderId,
@@ -909,7 +948,7 @@ final class AidenChatViewModel {
 
     /// Local run alert while the user is away; the notifier owns dedupe,
     /// permission timing, and the inactive-only / Quiet Open Chat policy.
-    private func alertRun(_ kind: AidenRunAlertKind, id: String) {
+    private func alertRun(_ kind: AidenRunAlertKind, id: String, detail: AidenRunAlertDetail? = nil) {
         let instanceID = instanceId
         let chatID = chat.id
         let title = chat.title
@@ -921,7 +960,8 @@ final class AidenChatViewModel {
                 instanceID: instanceID,
                 chatID: chatID,
                 chatTitle: title,
-                isChatOnScreen: isChatOnScreen
+                isChatOnScreen: isChatOnScreen,
+                detail: detail
             )
         }
     }
@@ -1619,7 +1659,9 @@ final class AidenChatViewModel {
     /// chat alone until its next send, so reopening the chat still shows it and
     /// the model other chats start with never changes.
     private func rememberExplicitModelSelection() {
+        modelPickGeneration &+= 1
         hasExplicitModelSelection = true
+        hasUnsentModelPick = true
         guard !isReadOnlyFixture, !isRemoved, !chat.isBotChat,
               let context = liveOwner else { return }
         let selection = AidenChatModelSelection(
@@ -1706,13 +1748,39 @@ final class AidenChatViewModel {
         let submittedAttachments = retryAttempt?.attachments ?? pendingAttachments
         let submittedSkill = selectedSkill
         let modelSelection = turnModelSelection
+        // A pick the person made here asks the Mac to keep the level as the
+        // chat's own, and so does a new chat's first send: the Mac stores no
+        // level when it creates a chat, so without it the chat would come back
+        // off the stop it started on. Any other send runs at that level for
+        // this turn only. Decided once, when the send is built: a retry keeps
+        // the answer its first attempt got, even if a refresh has filled the
+        // chat since.
+        let keepsSelection = retryAttempt.map { $0.keepsSelection == true }
+            ?? (!chat.isBotChat && (hasUnsentModelPick || chat.messages.isEmpty))
+        // What the send keeps: the pick it carries, or, with no pick made,
+        // where a new chat starts. Captured here, before the optimistic
+        // message fills the chat, and resolved against the catalog whenever
+        // it lands.
+        let startsWhereNewChatsStart = retryAttempt.map { $0.startsWhereNewChatsStart == true }
+            ?? (keepsSelection && !hasUnsentModelPick)
+        // Where new chats start, frozen now: a pick in another new chat can
+        // change the remembered choice while this send waits.
+        let newChatStart = retryAttempt.map(\.newChatStart)
+            ?? (startsWhereNewChatsStart && !isReadOnlyFixture ? modelPreferenceStore.selection(for: instanceId) : nil)
+        // A retry counts picks from when its send was first built, so a pick
+        // made while it waited still wins.
+        let pickGeneration = retryAttempt.map { retry in
+            sendPickGeneration.flatMap { $0.key == retry.key ? $0.generation : nil } ?? 0
+        } ?? modelPickGeneration
+        let savesSelection = agentSlider != nil && keepsSelection
         let request = retryAttempt?.request ?? AidenTurnRequestBuilder.make(
             text: text,
             providerId: modelSelection.providerId,
             modelId: modelSelection.modelId,
             thinkingLevel: modelSelection.thinkingLevel,
             attachments: submittedAttachments,
-            skill: submittedSkill.map(AidenSkillInvocation.init(entry:))
+            skill: submittedSkill.map(AidenSkillInvocation.init(entry:)),
+            saveSelection: savesSelection
         )
         let makesWorktree = retryAttempt == nil && startsInNewWorktree && offersNewWorktree
         let previousUpdatedAt = chat.updatedAt
@@ -1760,8 +1828,14 @@ final class AidenChatViewModel {
         let attempt = retryAttempt ?? pendingSendCoordinator.makeTurnAttempt(
             deviceId: context.deviceId,
             request: request,
-            attachments: submittedAttachments
+            attachments: submittedAttachments,
+            keepsSelection: keepsSelection,
+            startsWhereNewChatsStart: startsWhereNewChatsStart,
+            newChatStart: newChatStart
         )
+        sendPickGeneration = (attempt.key, pickGeneration)
+        sendInFlight = attempt
+        defer { if sendInFlight?.key == attempt.key { sendInFlight = nil } }
         let idempotencyKey = attempt.key
         /// Takes the message back out of the chat. A Cancel can come long after
         /// the send (New worktree waits on a fetch), so anything typed meanwhile
@@ -1836,8 +1910,25 @@ final class AidenChatViewModel {
                 request: request,
                 idempotencyKey: idempotencyKey
             )
-            // The Mac now holds this pick as the chat's own model.
-            if !chat.isBotChat {
+            // A pick made after this send was built may name the very level the
+            // send carried. If the send couldn't ask the Mac to keep that
+            // level, the pick wasn't delivered: it stays the chat's unsent
+            // pick, so the next send asks. A pick counted in this session is
+            // newer when the count moved. A pick restored from disk is newer
+            // than a send that carried none of the person's: one that kept
+            // where new chats start, or a plain send that kept nothing. A send
+            // that carried a pick restores that same pick, so it isn't newer.
+            // A record from before `keepsSelection` was saved can't tell.
+            let pickPostdatesSend = modelPickGeneration != pickGeneration
+                || (restoredChatPick && (attempt.startsWhereNewChatsStart == true || attempt.keepsSelection == false))
+            let pickUndelivered = pickPostdatesSend && agentSlider != nil
+                && request.saveSelection != true && request.thinkingLevel != nil
+            // Otherwise the Mac now holds this pick as the chat's own model.
+            if !pickUndelivered, request.providerId == selectedProviderId, request.modelId == selectedModelId,
+               request.thinkingLevel == selectedThinkingLevel {
+                hasUnsentModelPick = false
+            }
+            if !chat.isBotChat, !pickUndelivered {
                 modelPreferenceStore.forgetChat(
                     for: context.instanceId,
                     chatID: chat.id,
@@ -1847,6 +1938,29 @@ final class AidenChatViewModel {
                         thinkingLevel: request.thinkingLevel
                     )
                 )
+            }
+            // A saved send can't change under its Idempotency-Key (the Mac
+            // refuses a different body for the same key), so a send built
+            // before the Mac granted the slider goes out without saveSelection
+            // and the Mac keeps no level. Hold what the send meant to keep as
+            // the chat's unsent pick instead, resolved from the send's own
+            // intent, not from the chat or the chip: the chat doesn't fall to
+            // Custom, and the next send asks the Mac to keep it. A pick the
+            // person made while this send was out wins.
+            if keepsSelection, agentSlider != nil, request.saveSelection != true, !chat.isBotChat,
+               !hasUnsentModelPick, modelPickGeneration == pickGeneration, !isRemoved,
+               !(restoredChatPick && attempt.startsWhereNewChatsStart == true),
+               let sent = keptSelection(for: attempt) {
+                selectedProviderId = sent.providerId
+                selectedModelId = sent.modelId
+                selectedThinkingLevel = sent.thinkingLevel
+                hasExplicitModelSelection = true
+                hasUnsentModelPick = true
+                // A Mac forgotten or re-paired while the send was out keeps
+                // nothing here.
+                if coordinator.isRetained(context) {
+                    modelPreferenceStore.rememberChat(sent, for: context.instanceId, chatID: chat.id)
+                }
             }
             guard !isRemoved else { return }
             for reference in submittedAttachments { ownedUploadReferences.removeValue(forKey: reference.id) }
@@ -1905,7 +2019,8 @@ final class AidenChatViewModel {
                     deviceID: context.deviceId,
                     chatID: chat.id,
                     title: chat.displayTitle,
-                    streamID: response.streamId
+                    streamID: response.streamId,
+                    machineName: ownerMachineName
                 )
             }
             accepted = accepted && cache.isChatWriteRetained(acceptedWriteToken, instanceId: instanceId, chatId: chat.id)
@@ -1959,6 +2074,12 @@ final class AidenChatViewModel {
                    error: rateLimit,
                    session: session,
                    isContextLive: { self.coordinator.isLive(context) },
+                   onReplaced: { freshKey in
+                       // The resend still loses to a pick made while it waited.
+                       if let carried = self.sendPickGeneration, carried.key == attempt.key {
+                           self.sendPickGeneration = (freshKey, carried.generation)
+                       }
+                   },
                    onRetry: { [weak self] in
                        await self?.send(retry: true, automatic: true, authority: context)
                    }
@@ -2814,7 +2935,58 @@ final class AidenChatViewModel {
         }
     }
 
+    /// What a send asked the chat to keep, resolved against the catalog the
+    /// phone holds now. Normally the provider, model and level the send
+    /// named. A send built before `GET /models` answered names the chat's
+    /// model with no level only because the phone knew none; if it carried
+    /// no pick of the person's, it meant where new chats started on this
+    /// phone, so that is the new-chat choice frozen into the send, never the
+    /// chat's current state, the remembered choice now or the Mac's
+    /// `defaults`. Nil when the send froze no choice, when that choice lands
+    /// on another model or on no stop, so nothing in Custom is held, and once
+    /// the Mac has given the chat a level or moved it to another model: the
+    /// chat is then its own.
+    private func keptSelection(for attempt: AidenChatDraftStore.PendingSend) -> AidenChatModelSelection? {
+        guard attempt.keepsSelection == true, !chat.isBotChat, let slider = agentSlider, let catalog,
+              let providerId = attempt.request.providerId,
+              let modelId = attempt.request.modelId else { return nil }
+        let sent = AidenChatModelSelection(providerId: providerId, modelId: modelId, thinkingLevel: attempt.request.thinkingLevel)
+        let model = catalog.providers.first { $0.id == providerId }?.models.first { $0.id == modelId }
+        if sent.thinkingLevel != nil || (model != nil && model?.thinkingLevels?.isEmpty != false) {
+            return sent
+        }
+        // With no choice of the phone's frozen into the send, the send carried
+        // nothing and the Mac decides the level when it runs the turn, so the
+        // chat's own metadata is the authority: nothing is held, and the
+        // Mac's `defaults`, which can change while the send waits, are never
+        // read here.
+        guard attempt.startsWhereNewChatsStart == true, chat.thinkingLevel == nil,
+              chat.providerId == nil || chat.providerId == providerId,
+              chat.modelId == nil || chat.modelId == modelId,
+              let start = AidenChatModelAuthority.rememberedSelection(attempt.newChatStart, in: catalog, exactLevels: true),
+              start.providerId == providerId, start.modelId == modelId,
+              AidenAgentSliderState(slider: slider, catalog: catalog, selection: start).currentStop != nil
+        else { return nil }
+        return start
+    }
+
+    /// Re-resolves the chat's selection when the slider comes or goes, for
+    /// example when `/server` grants `chat:agent-slider` after the catalog
+    /// loaded: with the slider, a chat runs at exactly its own level.
+    func reconcileAgentSliderAvailability() {
+        guard (agentSlider != nil) != resolvedWithAgentSlider else { return }
+        resolveModelSelection()
+    }
+
     private func resolveModelSelection() {
+        // The slider came or went since the last resolution, whichever refresh
+        // brought it. The level the model menu filled in was derived, not
+        // chosen: resolve afresh so the chat lands on the slider's terms.
+        if catalog != nil, (agentSlider != nil) != resolvedWithAgentSlider, !hasExplicitModelSelection {
+            selectedProviderId = nil
+            selectedModelId = nil
+            selectedThinkingLevel = nil
+        }
         // An unsent pick made in this chat before it was last closed wins
         // like a pick made now.
         if !hasExplicitModelSelection, !isReadOnlyFixture, !chat.isBotChat, !chat.messages.isEmpty,
@@ -2823,8 +2995,10 @@ final class AidenChatViewModel {
             selectedModelId = pick.modelId
             selectedThinkingLevel = pick.thinkingLevel
             hasExplicitModelSelection = true
+            hasUnsentModelPick = true
+            restoredChatPick = true
         }
-        let selection = AidenChatModelAuthority.resolvedSelection(
+        var selection = AidenChatModelAuthority.resolvedSelection(
             chat: chat,
             catalog: catalog,
             selectedProviderId: selectedProviderId,
@@ -2833,8 +3007,20 @@ final class AidenChatViewModel {
             remembered: hasExplicitModelSelection || isReadOnlyFixture || chat.isBotChat
                 ? nil
                 : modelPreferenceStore.selection(for: instanceId),
-            hasExplicitSelection: hasExplicitModelSelection
+            hasExplicitSelection: hasExplicitModelSelection,
+            exactLevels: agentSlider != nil
         )
+        // A new chat's first send that named no level, out or waiting to
+        // retry, keeps its own intent: the chat its optimistic message filled
+        // is not one the Mac has given a level yet. A pick the person made
+        // since wins, and so does a level or model the Mac has given the chat
+        // since (`keptSelection` then holds nothing).
+        if !hasExplicitModelSelection, let attempt = sendInFlight ?? pendingSend,
+           attempt.startsWhereNewChatsStart == true, attempt.request.saveSelection != true,
+           attempt.request.thinkingLevel == nil, let kept = keptSelection(for: attempt) {
+            selection = kept
+        }
+        resolvedWithAgentSlider = agentSlider != nil
         selectedProviderId = selection.providerId
         selectedModelId = selection.modelId
         selectedThinkingLevel = selection.thinkingLevel
@@ -2878,7 +3064,8 @@ final class AidenChatViewModel {
                     deviceID: context.deviceId,
                     chatID: chat.id,
                     title: chat.displayTitle,
-                    streamID: stream.streamId
+                    streamID: stream.streamId,
+                    machineName: ownerMachineName
                 )
             }
             guard !isRemoved, activeStreamID == stream.streamId else {
@@ -3445,7 +3632,17 @@ final class AidenChatViewModel {
             }
             pendingApproval = approval
             streamState = .waitingForApproval
-            alertRun(.needsApproval, id: approval.id)
+            alertRun(
+                .needsApproval,
+                id: approval.id,
+                detail: approval.canRespond
+                    ? .approval(
+                        target: AgentRunApprovalTarget(approvalID: approval.id, runID: nil),
+                        summary: approval.summary,
+                        canAllow: approval.alertCanAllow
+                    )
+                    : nil
+            )
             if announce {
                 coordinator.haptics.play(
                     .warning,
@@ -3453,7 +3650,11 @@ final class AidenChatViewModel {
                     dedupeKey: "approval-required:\(approval.id)"
                 )
             }
-            await liveActivities.approvalRequired(instanceID: instanceId, streamID: streamID)
+            await liveActivities.approvalRequired(
+                instanceID: instanceId,
+                streamID: streamID,
+                target: approval.canRespond ? AgentRunApprovalTarget(approvalID: approval.id, runID: nil) : nil
+            )
             // A question prompt may be pending alongside the approval; a nil
             // snapshot simply clears stale card state without touching status.
             await restorePendingQuestion(
@@ -3471,6 +3672,14 @@ final class AidenChatViewModel {
                 isRemoved: isRemoved,
                 isContextLive: coordinator.isLive(context)
             ) else { return }
+            if error is URLError {
+                // The Mac never answered, as when the app opens from its Live
+                // Activity before the link is back. The run may still be
+                // waiting, so the card and its state stay for the next
+                // reload to ask again, and the Live Activity reads as old.
+                await liveActivities.markStale(instanceID: instanceId, streamID: streamID)
+                return
+            }
             pendingApproval = nil
             await restorePendingQuestion(
                 streamID: streamID,
@@ -3538,7 +3747,18 @@ final class AidenChatViewModel {
                 hasPendingQuestion: true
             ) == .waitingForAnswer {
                 await liveActivities.questionRequired(instanceID: instanceId, streamID: streamID)
-                alertRun(.needsAnswer, id: question.id)
+                alertRun(
+                    .needsAnswer,
+                    id: question.id,
+                    detail: question.canRespond
+                        ? .question(
+                            promptID: question.id,
+                            runID: nil,
+                            text: question.questions.first?.question ?? "",
+                            acceptsReply: question.questions.count == 1
+                        )
+                        : nil
+                )
             }
             if announce {
                 coordinator.haptics.play(
@@ -3556,6 +3776,12 @@ final class AidenChatViewModel {
                 streamState: streamState,
                 isContextLive: coordinator.isLive(context)
             ) else { return }
+            if error is URLError {
+                // The Mac never answered; as for an approval, the question
+                // and its state stay for the next reload to ask again.
+                await liveActivities.markStale(instanceID: instanceId, streamID: streamID)
+                return
+            }
             pendingQuestion = nil
             if reconcilesOnNil && pendingApproval == nil {
                 streamState = .reconciling

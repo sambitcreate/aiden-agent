@@ -25,6 +25,7 @@ import {
   Hourglass,
   Bot,
   HardDrive,
+  MessageCircle,
   Webhook,
 } from "lucide-react";
 import { ProvidersSettings } from "../components/settings/providers-settings";
@@ -39,6 +40,7 @@ import { TtsSettings } from "../components/settings/tts-settings";
 import { ShortcutSettings } from "../components/settings/shortcut-settings";
 import { ComputerUseSettings } from "../components/settings/computer-use-settings";
 import { BotComputersSettings } from "../components/settings/bot-computers-settings";
+import { BotBubblesSettings } from "../components/settings/bot-bubbles-settings";
 import { AgentSliderSettings } from "../components/settings/agent-slider-settings";
 import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
@@ -100,6 +102,7 @@ const NAV_ICONS: Record<SettingsPageId, React.ReactNode> = {
   approvals: <Bot className="size-5" />,
   scheduledTasks: <Clock3 className="size-5" />,
   computers: <Monitor className="size-5" />,
+  botBubbles: <MessageCircle className="size-5" />,
   simulator: <TabletSmartphone className="size-5" />,
   voiceSpeech: <Mic className="size-5" />,
   connections: <Smartphone className="size-5" />,
@@ -138,6 +141,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   computerUse: ComputerUseSettings,
   bots: ApprovalsSettings,
   botComputers: BotComputersSettings,
+  botBubbles: BotBubblesSettings,
   simulator: SimulatorSettingsPage,
   memory: MemorySettings,
   scheduledTasks: ScheduledTasksSettings,
@@ -218,6 +222,7 @@ const settingsDescriptions = (computer: LocalComputerNoun): Record<SettingsSecti
   computerUse: "Manage Aiden’s access to native apps and your screen.",
   bots: "Choose when Aiden asks before acting, and review what it may repeat without asking.",
   botComputers: "Give a Bot its own macOS computer to work in, apart from yours.",
+  botBubbles: "Choose whether Bot chats can shrink into floating bubbles, and where they float.",
   simulator: "Control iOS Simulator streaming, agent access, and the helper tools on this Mac.",
   memory: "Control what Aiden remembers across chats and Workspaces.",
   scheduledTasks: "Manage when Aiden works in the background.",

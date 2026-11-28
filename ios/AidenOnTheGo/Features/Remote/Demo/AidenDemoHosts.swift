@@ -171,6 +171,19 @@ final class AidenDemoResponder: Sendable {
         state.withLock { $0.outcomes[route] = .computed(answer) }
     }
 
+    /// Answers `path` from the request's URL and body.
+    func reply(
+        instanceId: String,
+        method: String,
+        path: String,
+        status: Int,
+        answer: @escaping @Sendable (URL, Data) -> Data
+    ) {
+        reply(instanceId: instanceId, method: method, path: path, answering: { url, body in
+            (status, answer(url, body ?? Data()))
+        })
+    }
+
     /// Fails every method on `path` with a transport error. `path: "*"` takes the
     /// whole machine offline and replaces its earlier answers.
     func fail(instanceId: String, path: String, code: URLError.Code) {
@@ -302,7 +315,7 @@ final class AidenDemoResponder: Sendable {
         defer { stream.close() }
         var body = Data()
         var buffer = [UInt8](repeating: 0, count: 16_384)
-        while stream.hasBytesAvailable {
+        while true {
             let count = stream.read(&buffer, maxLength: buffer.count)
             guard count > 0 else { break }
             body.append(buffer, count: count)
@@ -485,10 +498,16 @@ enum AidenDemoHosts {
             installation.serverCapabilities? += [.runsObserve, .runsControl]
             installation.serverFeatures.append(AidenServer.phoneRunControlFeature)
         }
+        if AidenDemoAgentSlider.isRequested {
+            // Revision 70: the Mac offers the Agent Slider and this phone holds it.
+            installation.deviceCapabilities.append(.chatAgentSlider)
+            installation.serverCapabilities?.append(.chatAgentSlider)
+        }
         if AidenDemoBotUX.isRequested {
             // Revision 61: the Mac offers the five opt-ins and this phone holds them.
-            installation.deviceCapabilities += AidenRemoteCapability.botUX + [.botMessaging, .botAllowed]
-            installation.serverCapabilities? += AidenRemoteCapability.botUX + [.botMessaging, .botAllowed]
+            // Revision 69: and the command's plain words on the card.
+            installation.deviceCapabilities += AidenRemoteCapability.botUX + [.botMessaging, .botAllowed, .approvalPlainWords]
+            installation.serverCapabilities? += AidenRemoteCapability.botUX + [.botMessaging, .botAllowed, .approvalPlainWords]
         }
         return installation
     }
@@ -696,7 +715,12 @@ enum AidenDemoHosts {
         // The Settings screen reads memory settings.
         responder.reply(instanceId: id, path: "/memory/settings", status: 200, json: AidenDemoContent.memorySettingsJSON())
         // The chat composer's model chip reads the catalog.
-        responder.reply(instanceId: id, path: "/models", status: 200, json: AidenDemoContent.modelsJSON())
+        responder.reply(
+            instanceId: id,
+            path: "/models",
+            status: 200,
+            json: AidenDemoAgentSlider.isRequested ? AidenDemoAgentSlider.modelsJSON() : AidenDemoContent.modelsJSON()
+        )
         // Opening a row reads the whole chat.
         for (index, row) in rows.enumerated() {
             guard let chatId = row["id"] as? String else { continue }
@@ -741,6 +765,16 @@ enum AidenDemoHosts {
         // Compose, and a fork of each chat.
         responder.reply(instanceId: id, method: "POST", path: "/chats", status: 201, json: AidenDemoContent.newChatJSON())
         responder.reply(instanceId: id, path: "/chats/\(AidenDemoContent.newChatId)", status: 200, json: AidenDemoContent.newChatJSON())
+        if AidenDemoAgentSlider.isRequested {
+            // After the plain answers above, so these chats run turns. The new
+            // chat starts with no model, as one the Mac just made does.
+            var chats = rows.enumerated().compactMap { index, row -> AidenDemoAgentSlider.Chat? in
+                guard let chatId = row["id"] as? String else { return nil }
+                return AidenDemoAgentSlider.Chat(id: chatId, base: AidenDemoContent.chatJSON(row: row, index: index), isNew: false)
+            }
+            chats.append(AidenDemoAgentSlider.Chat(id: AidenDemoContent.newChatId, base: AidenDemoContent.newChatJSON(), isNew: true))
+            AidenDemoAgentSlider.register(instanceId: id, chats: chats, responder: responder)
+        }
         for (index, row) in rows.enumerated() {
             guard let chatId = row["id"] as? String else { continue }
             let forkId = "\(chatId)_fork"
@@ -797,7 +831,7 @@ enum AidenDemoHosts {
         var legacy = installation
         legacy.serverCapabilities = nil
         legacy.serverFeatures = []
-        legacy.deviceCapabilities.removeAll { $0 == .botRead || $0 == .botWrite }
+        legacy.deviceCapabilities.removeAll { $0 == .botRead || $0 == .botWrite || $0 == .chatAgentSlider }
         return legacy
     }
 

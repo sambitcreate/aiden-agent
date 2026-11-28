@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { ApprovalAnalytics } from "./approval-gate/approval-analytics.js";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import type { ToolApprovalPreview } from "../../renderer/shared/tool-approval-preview.js";
+import type { CommandReading } from "../../renderer/shared/command-reading.js";
 import {
   parseToolApprovalScope,
   type ToolApprovalScope,
@@ -19,6 +20,14 @@ export interface ToolApprovalPrompt {
    * Remote and run-journal projections copy named fields and leave it out.
    */
   preview?: ToolApprovalPreview;
+  /**
+   * A command approval in plain words: the model's own description of the
+   * command and Aiden's tags read from the command text. Display-only: the
+   * card keeps the exact command one flip away and remembered rules never read
+   * it. Remote copies only this, never `preview`, and sends it to a device
+   * holding `approval:plain-words`.
+   */
+  reading?: CommandReading;
   /**
    * Scopes the approval surface may offer. Absent means "once" only. A scope
    * broader than once is honored only when it was offered here.
@@ -99,6 +108,7 @@ function approvalEffectKey(
       descriptor.summary,
       descriptor.details ?? null,
       descriptor.preview ?? null,
+      descriptor.reading ?? null,
       descriptor.scopes ?? null,
     ]);
   } catch {

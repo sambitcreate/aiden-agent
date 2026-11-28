@@ -413,6 +413,8 @@ fun aidenBotSessionFeedGrants(installation: AidenInstallation?): Set<AidenRemote
         AidenRemoteCapability.BOT_ALLOWED,
         // Revision 61: the typed approval card and the settings, suggestion and learning entries.
         AidenRemoteCapability.APPROVAL_CARDS,
+        // Revision 69: the command's plain words on that card.
+        AidenRemoteCapability.APPROVAL_PLAIN_WORDS,
         AidenRemoteCapability.BOT_SETTINGS_CHANGES,
         AidenRemoteCapability.BOT_SUGGESTIONS
     )

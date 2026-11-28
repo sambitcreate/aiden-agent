@@ -1618,7 +1618,7 @@ class AidenRemoteClientTest {
     @Test
     fun streamSnapshotReasonsDecodeSharedFixtureRejectInvalidReasonsAndNegotiateSolo() = runBlocking {
         val fixture = contractFixture()
-        assertEquals(68, fixture.getValue("contractRevision").jsonPrimitive.int)
+        assertEquals(70, fixture.getValue("contractRevision").jsonPrimitive.int)
         val section = fixture.getValue("streamRecovery").jsonObject
         assertEquals("stream:snapshot-reasons", section.getValue("capability").jsonPrimitive.content)
 
@@ -1700,4 +1700,181 @@ class AidenRemoteClientTest {
         assertNull(aidenRequestStreamSnapshotReasons(client, offering, installation(base)))
     }
 
+    private fun agentSliderFixture(): AidenAgentSliderFixture =
+        Json { ignoreUnknownKeys = true }.decodeFromJsonElement(contractFixture().getValue("agentSlider"))
+
+    @Test
+    fun agentSliderModelsTurnAndChatDecodeTheSharedFixtureThroughTheClient() = runBlocking {
+        val fixture = agentSliderFixture()
+        assertEquals(AidenRemoteCapability.CHAT_AGENT_SLIDER, fixture.capability)
+
+        server.enqueue(MockResponse().setResponseCode(200).setBody(fixture.models.toString()))
+        val catalog = client.modelCatalog()
+        assertEquals("/api/aiden/v1/models", server.takeRequest().path)
+        assertEquals("provider_fixture", catalog.defaults["providerId"])
+        assertEquals("model_fixture", catalog.defaults["modelId"])
+        assertEquals("high", catalog.defaults["thinkingLevel"])
+        val slider = requireNotNull(catalog.agentSlider)
+        assertEquals(6, slider.stops.size)
+        assertEquals("stop_1b2c3d4e", slider.homeStopId)
+        assertEquals("Balanced", slider.homeStop.label)
+        assertEquals(listOf("Instant", "Balanced", "Deep", "Elsewhere", "Agent", "Choose a model"), slider.stops.map { it.label })
+        assertEquals("Fixture Provider", slider.stops[2].providerLabel)
+        assertEquals("Fixture Model", slider.stops[2].modelLabel)
+
+        val elsewhere = slider.stops[3]
+        assertEquals(AidenAgentSliderAvailability.NOT_SIGNED_IN, elsewhere.availability)
+        assertEquals("Other Provider", elsewhere.providerLabel)
+        assertEquals("Other Model", elsewhere.modelLabel)
+        assertNull("a stop that can't run here names no ids", elsewhere.modelId)
+        assertNull(elsewhere.thinkingLevel)
+        assertNull("a stop that can't run here sends nothing", elsewhere.turnSelection)
+        val agent = slider.stops[4]
+        assertEquals(AidenAgentSliderAvailability.COMPUTER_ONLY, agent.availability)
+        assertNull(agent.providerLabel)
+        assertNull(agent.turnSelection)
+        val unassigned = slider.stops[5]
+        assertEquals(AidenAgentSliderAvailability.UNASSIGNED, unassigned.availability)
+        assertNull(unassigned.modelId)
+        assertNull(unassigned.turnSelection)
+        assertNull("the quick stop has no level of its own", slider.stops[0].thinkingLevel)
+
+        // The fixture's turn is exactly one ready stop's selection.
+        val request = fixture.turnRequest
+        val sent = AidenChatModelSelection(request.providerId, request.modelId, request.thinkingLevel)
+        assertEquals(listOf("stop_2c3d4e5f"), slider.stops.filter { it.turnSelection == sent }.map { it.id })
+
+        // The phone sends that turn as the fixture spells it, level included. It doesn't hold
+        // `chat:agent-slider`, so it never asks the host to save the selection.
+        val message = Json.parseToJsonElement(fixture.chat.getValue("messages").jsonArray[0].toString())
+        server.enqueue(MockResponse().setResponseCode(202).setBody(
+            """{"turnId":"turn_slider_01","streamId":"stream_slider_01","status":"running","message":$message}"""
+        ))
+        val chatId = fixture.chat.getValue("id").jsonPrimitive.content
+        client.startTurn(chatId, request)
+        val turn = server.takeRequest()
+        assertEquals("/api/aiden/v1/chats/$chatId/turns", turn.path)
+        assertEquals(
+            kotlinx.serialization.json.JsonObject(
+                contractFixture().getValue("agentSlider").jsonObject.getValue("turnRequest").jsonObject - "saveSelection"
+            ),
+            Json.parseToJsonElement(turn.body.readUtf8())
+        )
+
+        // The chat afterwards carries the stop's level as its own.
+        server.enqueue(MockResponse().setResponseCode(200).setBody(fixture.chat.toString()))
+        val chat = client.chat(chatId)
+        assertEquals("high", chat.thinkingLevel)
+        assertEquals(sent, AidenChatModelSelection(chat.providerId, chat.modelId, chat.thinkingLevel))
+
+        // A messages page carries the same level in its revision-23 metadata.
+        val window = kotlinx.serialization.json.JsonObject(
+            fixture.chat.filterKeys { it != "id" } +
+                ("chatId" to JsonPrimitive(chatId)) + ("hasOlder" to JsonPrimitive(false))
+        )
+        server.enqueue(MockResponse().setResponseCode(200).setBody(window.toString()))
+        assertEquals("high", client.messagesWindow(chatId).chat()?.thinkingLevel)
+    }
+
+    @Test
+    fun aStopOfUnknownAvailabilityOrLevelCantBeChosenAndTheRestOfTheSliderStays() = runBlocking {
+        val models = agentSliderFixture().models
+        val slider = models.getValue("agentSlider").jsonObject
+        val stops = slider.getValue("stops").jsonArray.mapIndexed { index, stop ->
+            when (index) {
+                // A level a later host adds: the stop keeps its id and label but can't be chosen.
+                0 -> kotlinx.serialization.json.JsonObject(stop.jsonObject + ("thinkingLevel" to JsonPrimitive("turbo")))
+                // An availability a later host adds.
+                3 -> kotlinx.serialization.json.JsonObject(stop.jsonObject + ("availability" to JsonPrimitive("queued-elsewhere")))
+                else -> stop
+            }
+        }
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            kotlinx.serialization.json.JsonObject(
+                models + ("agentSlider" to kotlinx.serialization.json.JsonObject(slider + ("stops" to JsonArray(stops))))
+            ).toString()
+        ))
+        val decoded = requireNotNull(client.modelCatalog().agentSlider)
+        assertEquals(6, decoded.stops.size)
+        val turbo = decoded.stops[0]
+        assertEquals("stop_0a1b2c3d", turbo.id)
+        assertEquals("Instant", turbo.label)
+        assertEquals(AidenAgentSliderAvailability.UNKNOWN, turbo.availability)
+        assertNull("an unknown level is dropped", turbo.thinkingLevel)
+        assertNull(turbo.turnSelection)
+        assertEquals(AidenAgentSliderAvailability.UNKNOWN, decoded.stops[3].availability)
+        assertNull(decoded.stops[3].turnSelection)
+        assertEquals(listOf("stop_1b2c3d4e", "stop_2c3d4e5f"), decoded.stops.filter { it.isReady }.map { it.id })
+    }
+
+    @Test
+    fun agentSliderIsNullFromAnOlderHostOrABrokenSliderAndTheModelListSurvives() = runBlocking {
+        val models = agentSliderFixture().models
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            kotlinx.serialization.json.JsonObject(models - "agentSlider").toString()
+        ))
+        val older = client.modelCatalog()
+        assertNull(older.agentSlider)
+        assertEquals(listOf("model_fixture_quick", "model_fixture"), older.providers.single().models.map { it.id })
+
+        val slider = models.getValue("agentSlider").jsonObject
+        val broken = listOf(
+            slider + ("homeStopId" to JsonPrimitive("stop_missing")),
+            slider + ("stops" to JsonArray(slider.getValue("stops").jsonArray.take(2))),
+            slider + ("stops" to JsonArray(slider.getValue("stops").jsonArray.mapIndexed { index, stop ->
+                // An assigned stop that claims to be unassigned breaks the contract.
+                if (index == 0) kotlinx.serialization.json.JsonObject(stop.jsonObject + ("availability" to JsonPrimitive("unassigned"))) else stop
+            })),
+            slider + ("stops" to JsonArray(slider.getValue("stops").jsonArray.mapIndexed { index, stop ->
+                // A stop that can't run here never names ids.
+                if (index == 4) kotlinx.serialization.json.JsonObject(
+                    stop.jsonObject + ("providerId" to JsonPrimitive("provider_fixture")) + ("modelId" to JsonPrimitive("model_fixture"))
+                ) else stop
+            })),
+            slider + ("stops" to JsonArray(slider.getValue("stops").jsonArray.mapIndexed { index, stop ->
+                if (index == 2) kotlinx.serialization.json.JsonObject(stop.jsonObject + ("modelLabel" to JsonPrimitive(""))) else stop
+            }))
+        )
+        for (bad in broken) {
+            server.enqueue(MockResponse().setResponseCode(200).setBody(
+                kotlinx.serialization.json.JsonObject(models + ("agentSlider" to kotlinx.serialization.json.JsonObject(bad))).toString()
+            ))
+            val catalog = client.modelCatalog()
+            assertNull(catalog.agentSlider)
+            assertEquals(2, catalog.providers.single().models.size)
+        }
+    }
+
+    @Test
+    fun aChatsOwnThinkingLevelNeedsItsModelAndOlderChatsStillRead() = runBlocking {
+        val chat = agentSliderFixture().chat
+        val withoutModel = kotlinx.serialization.json.JsonObject(chat - "providerId" - "modelId")
+        server.enqueue(MockResponse().setResponseCode(200).setBody(withoutModel.toString()))
+        val failure = runCatching { client.chat(chat.getValue("id").jsonPrimitive.content) }.exceptionOrNull()
+        assertTrue("a level without its model fails closed, got $failure", failure is AidenRemoteContractException)
+
+        val older = kotlinx.serialization.json.JsonObject(chat - "thinkingLevel")
+        server.enqueue(MockResponse().setResponseCode(200).setBody(older.toString()))
+        val decoded = client.chat(chat.getValue("id").jsonPrimitive.content)
+        assertNull(decoded.thinkingLevel)
+        assertEquals("model_fixture", decoded.modelId)
+    }
+
+    @Test
+    fun agentSliderCapabilityIsNotAskedForEvenFromAMacThatOffersIt() {
+        val base = listOf(AidenRemoteCapability.SERVER_READ, AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE)
+        val offering = AidenServer(
+            instanceId = "inst_66", name = "Mac", capabilities = base,
+            serverCapabilities = base + AidenRemoteCapability.CHAT_AGENT_SLIDER
+        )
+        val installation = AidenInstallation(
+            instanceId = "inst_66", deviceId = "dev_66", name = "Mac",
+            endpoint = "https://aiden.test/api/aiden/v1", serverSpkiSha256 = "sha256/test",
+            deviceCapabilities = base, serverCapabilities = base, createdAt = Instant.parse("2026-11-24T12:00:00Z")
+        )
+        // Android turns don't carry the chat's own level yet, so saving them would move the chat
+        // off the stop chosen on the computer.
+        assertFalse(aidenProgressCapabilitiesToRequest(offering, installation).contains(AidenRemoteCapability.CHAT_AGENT_SLIDER))
+        assertFalse(AidenRemoteCapability.NEGOTIABLE.contains(AidenRemoteCapability.CHAT_AGENT_SLIDER))
+    }
 }
