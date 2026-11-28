@@ -47,6 +47,7 @@ function fakeProjection() {
       };
       return { snapshot, unsubscribe: () => sinks.delete(id) };
     },
+    observeRun: async () => ({ queued: 0, unsubscribe: () => false }),
     notifyState: () => undefined,
     refresh: async () => undefined,
     refreshQuestion: async () => undefined,

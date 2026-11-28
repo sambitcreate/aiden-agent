@@ -3,6 +3,8 @@
 // entries, so this builds the check's timeline from a turn's projected
 // entries and reuses the same detector. No patterns are copied here.
 
+import { BACKGROUND_CONTEXT, type Context } from "@earendil-works/chord/context";
+import type { Cursor, EntryRecord, Page } from "@earendil-works/pi-durable";
 import {
   detectUnverifiedSuccessClaim,
   type ClaimCheckOptions,
@@ -15,8 +17,91 @@ import {
   type GenerationClaimCheck,
   type GenerationTimeline,
 } from "../../../renderer/shared/generation-timeline.js";
+import { BOT_PEER_INPUT_KIND, isBotInputEntryKind } from "./bot-input-entry.js";
+import { projectBotTranscript } from "./live-projection.js";
 
 export const BOT_ROUTINE_UNVERIFIED_LINE = "One step didn't work: {step}. Check the chat.";
+
+export interface BotEntryPageReader {
+  entries(
+    query: { readonly order?: "ascending" | "descending" },
+    limit: number,
+    cursor: Cursor | undefined,
+    context: Context,
+  ): Promise<Page<EntryRecord, Cursor>>;
+}
+
+const DEFAULT_TURN_SLICE_PAGE_SIZE = 32;
+
+function isTurnOpeningInput(record: EntryRecord): boolean {
+  if (record.kind === BOT_PEER_INPUT_KIND) return true;
+  if (!isBotInputEntryKind(record.kind)) return false;
+  const first = Array.isArray(record.model) ? record.model[0] : undefined;
+  return (first as { role?: unknown } | undefined)?.role === "user";
+}
+
+function hasVisibleTurnOpening(entries: readonly BotTranscriptEntry[]): boolean {
+  return entries.some((entry) => entry.type === "user" || entry.type === "routine");
+}
+
+/**
+ * Read only the newest active turn's entries in descending order and project
+ * that bounded slice. Stops as soon as the projected slice includes the newest
+ * visible `user` or `routine` opening (after reading any preceding notices up
+ * to the prior input boundary), while respecting active head markers.
+ */
+export async function projectNewestBotTurnEntries(
+  conversation: BotEntryPageReader,
+  options: { pageSize?: number; context?: Context } = {},
+): Promise<BotTranscriptEntry[]> {
+  const pageSize = options.pageSize ?? DEFAULT_TURN_SLICE_PAGE_SIZE;
+  const context = options.context ?? BACKGROUND_CONTEXT;
+  let headMarker: EntryRecord | undefined;
+  let minActiveId: number | undefined;
+  const reverseNonHead: EntryRecord[] = [];
+  let cursor: Cursor | undefined;
+  let sawCandidateUserInput = false;
+
+  const toChronologicalSlice = (): EntryRecord[] => {
+    const ordered: EntryRecord[] = [];
+    if (headMarker) ordered.push(headMarker);
+    for (let i = reverseNonHead.length - 1; i >= 0; i -= 1) {
+      ordered.push(reverseNonHead[i]!);
+    }
+    return ordered;
+  };
+
+  for (;;) {
+    const page = await conversation.entries({ order: "descending" }, pageSize, cursor, context);
+    let reachedCutoff = false;
+    for (const entry of page.items) {
+      if (minActiveId !== undefined && Number(entry.id) < minActiveId) {
+        reachedCutoff = true;
+        break;
+      }
+      if (entry.head !== undefined) {
+        if (headMarker === undefined) {
+          headMarker = entry;
+          minActiveId = Number(entry.head);
+        }
+        continue;
+      }
+      if (sawCandidateUserInput && isTurnOpeningInput(entry)) {
+        const projected = projectBotTranscript(toChronologicalSlice());
+        if (hasVisibleTurnOpening(projected)) return projected;
+        sawCandidateUserInput = false;
+      }
+      reverseNonHead.push(entry);
+      if (entry.kind === "pi.user" && isTurnOpeningInput(entry)) {
+        sawCandidateUserInput = true;
+      }
+    }
+    if (reachedCutoff || !page.next || page.items.length === 0) break;
+    cursor = page.next;
+  }
+
+  return projectBotTranscript(toChronologicalSlice());
+}
 
 const STEP_STATUS: Record<BotToolResultStatus, AgentStepStatus> = {
   ok: "completed",

@@ -25,6 +25,7 @@ import { createBotSessionService, type BotSessionRuntime, type BotSessionService
 import {
   BOT_CONNECT_CARD_ENTRY_KIND,
   createBotLiveProjection,
+  createBotTranscriptCheckpoint,
   createQueuedInputClassifier,
   liveBotActivity,
   liveQueuedInputIds,
@@ -2673,4 +2674,229 @@ test("a pending plan makes a running reply wait for the person until approved", 
     await live.projection.refreshPlan("bot:a");
     await waitFor(() => tape.view?.activity?.phase !== "waiting", { what: "approved plan releases activity" });
   } finally { await live.close(); }
+});
+
+test("checkpointed active turns skip JSON.stringify on settled prefix entries while preserving cross-turn card revisions and silent-turn retention", async (t) => {
+  const PNG_SENTINEL = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+  const proposalId = "7d0c5c8e-2f0b-4c4e-9a59-3b6f1f0e9a11";
+  const settledPrefix = [
+    { id: 1, kind: "pi.user", model: [{ role: "user", content: [{ type: "text", text: "Set up a morning brief" }], timestamp: 1_000 }] },
+    {
+      id: 2,
+      kind: "aiden.routine-proposal",
+      data: { proposalId, name: "Morning brief", prompt: "Brief me", schedule: { kind: "daily", time: "08:00" }, timezone: "UTC", label: "Every day at 8:00 AM" },
+    },
+    { id: 3, kind: "aiden.bot-shared-image", data: { id: "img-settled", name: "chart.png", mimeType: "image/png", size: 68, data: PNG_SENTINEL } },
+    { id: 4, kind: "pi.assistant", model: [{ role: "assistant", stopReason: "stop", timestamp: 2_000, content: [{ type: "text", text: "Proposed." }] }] },
+    { id: 5, kind: "pi.user", model: [{ role: "user", content: [{ type: "text", text: "Thanks" }], timestamp: 2_500 }] },
+    { id: 6, kind: "pi.assistant", model: [{ role: "assistant", stopReason: "stop", timestamp: 2_600, content: [{ type: "text", text: "Anytime." }] }] },
+  ];
+
+  let listener: ((change: unknown) => Promise<void>) | undefined;
+  let resolveClosed!: () => void;
+  const closed = new Promise<void>((resolve) => { resolveClosed = resolve; });
+  let currentEntries: unknown[] = [...settledPrefix];
+  const projection = createBotLiveProjection({
+    conversation: async () => ({
+      watch: async () => ({
+        value: { entries: currentEntries, docs: {} },
+        start(next: (change: unknown) => Promise<void>) { listener = next; },
+        stop: async () => {},
+        closed,
+      }),
+      context: async () => ({ entries: currentEntries }),
+    }) as never,
+    state: async () => ({ kind: "running", submissionId: "sub_active" }),
+    quietInputs: async (_botId, ids) => new Map(ids.map((id) => [id, false])),
+  });
+
+  const tape = recorder();
+  const sub = await projection.subscribe("bot:a", tape.sink);
+  tape.start(sub.snapshot);
+  try {
+    const initialPrefixSnapshot = [...tape.view!.entries];
+    assert.equal(initialPrefixSnapshot.length, 6);
+
+    // Spy on JSON.stringify during active-turn step commits: settled prefix entries before the
+    // active turn checkpoint (including the shared image) must keep object identity and never be serialized.
+    const originalStringify = JSON.stringify;
+    let settledImageSerializations = 0;
+    t.mock.method(JSON, "stringify", ((value: unknown, ...rest: [ any?, any? ]) => {
+      const serialized = originalStringify(value, ...rest);
+      if (typeof serialized === "string" && serialized.includes(PNG_SENTINEL)) settledImageSerializations += 1;
+      return serialized;
+    }) as typeof JSON.stringify);
+
+    const activeSteps = [
+      { id: 7, kind: "pi.user", model: [{ role: "user", content: [{ type: "text", text: "Check my notes" }], timestamp: 3_000 }] },
+      {
+        id: 8,
+        kind: "pi.assistant",
+        model: [{ role: "assistant", stopReason: "toolUse", timestamp: 3_100, content: [{ type: "toolCall", id: "c1", name: "read_file", arguments: { path: "notes.md" } }] }],
+      },
+      {
+        id: 9,
+        kind: "pi.tool-result",
+        data: { diagnostics: [] },
+        model: [{ role: "toolResult", toolCallId: "c1", toolName: "read_file", isError: false, content: [{ type: "text", text: "milk" }], timestamp: 3_200 }],
+      },
+      { id: 10, kind: "pi.assistant", model: [{ role: "assistant", stopReason: "stop", timestamp: 3_300, content: [{ type: "text", text: "Your notes list milk." }] }] },
+    ];
+    const checkpoint = createBotTranscriptCheckpoint();
+    assert.deepEqual(projectBotTranscript(settledPrefix as never, checkpoint), projectBotTranscript(settledPrefix as never));
+
+    for (const step of activeSteps) {
+      currentEntries = [...currentEntries, step];
+      assert.deepEqual(projectBotTranscript(currentEntries as never, checkpoint), projectBotTranscript(currentEntries as never));
+      await listener!({ kind: "value", value: { entries: currentEntries, docs: {} }, ops: [] });
+    }
+    await waitFor(() => visibleText(tape.view).includes("assistant:Your notes list milk."), { what: "active turn steps flushed" });
+    assert.equal(settledImageSerializations, 0, "committing active-turn steps skips JSON.stringify on settled prefix entries");
+    for (let i = 0; i < 4; i += 1) {
+      assert.equal(tape.view!.entries[i], initialPrefixSnapshot[i], `prefix entry ${i} keeps reference identity`);
+    }
+
+    // Revising a settled prefix card from a later turn emits a snapshot with the updated card status.
+    currentEntries = [
+      ...currentEntries,
+      { id: 11, kind: "aiden.routine-proposal-status", data: { proposalId, status: "accepted", routineId: "r_1" } },
+    ];
+    assert.deepEqual(projectBotTranscript(currentEntries as never, checkpoint), projectBotTranscript(currentEntries as never));
+    await listener!({ kind: "value", value: { entries: currentEntries, docs: {} }, ops: [] });
+    await waitFor(
+      () => tape.view!.entries.some((entry) => entry.type === "routine_proposal" && entry.status === "accepted"),
+      { what: "accepted routine proposal snapshot" },
+    );
+    assert.equal(tape.gaps, 0);
+
+    // Silent routine turn hides its label and steps while retaining OUTLIVES_SILENT_TURN cards.
+    currentEntries = [
+      ...currentEntries,
+      { id: 12, kind: "aiden.bot-notice", data: { notice: "routine", label: "Quiet check", requestId: "routine:q:1" } },
+      { id: 13, kind: "pi.user", model: [{ role: "user", content: [{ type: "text", text: "Check follow-ups" }], timestamp: 4_000 }] },
+      { id: 14, kind: "aiden.wake-up", data: { wakeUpId: "wake_1", fireAt: 9_000 } },
+      { id: 15, kind: "pi.assistant", model: [{ role: "assistant", stopReason: "stop", timestamp: 4_200, content: [{ type: "text", text: "[SILENT]" }] }] },
+    ];
+    assert.deepEqual(projectBotTranscript(currentEntries as never, checkpoint), projectBotTranscript(currentEntries as never));
+    await listener!({ kind: "value", value: { entries: currentEntries, docs: {} }, ops: [] });
+    await waitFor(
+      () => tape.view!.entries.some((entry) => entry.type === "wake_up" && entry.wakeUpId === "wake_1"),
+      { what: "silent turn wake_up retention snapshot" },
+    );
+    assert.equal(tape.view!.entries.some((entry) => entry.type === "routine"), false, "silent routine label is hidden");
+    assert.equal(tape.gaps, 0);
+  } finally {
+    sub.unsubscribe();
+    resolveClosed();
+    await projection.close();
+  }
+});
+
+test("an unwatched background run updates observeRun progress and fires onRunSettled without projecting entries, and subscribe skips reproject without pending connect cards", async () => {
+  let historicalReads = 0;
+  const trackedHistoryEntry = { id: 1, kind: "pi.user" };
+  const historyModel = [{ role: "user", content: [{ type: "text", text: "Earlier chat" }], timestamp: 1_000 }];
+  Object.defineProperty(trackedHistoryEntry, "model", {
+    enumerable: true,
+    get() {
+      historicalReads += 1;
+      return historyModel;
+    },
+  });
+
+  const queuedMsg = (id: number, text: string) => ({ id, mode: "followUp", content: [{ type: "text", text }] });
+  let listener: ((change: unknown) => Promise<void>) | undefined;
+  let resolveClosed!: () => void;
+  const closed = new Promise<void>((resolve) => { resolveClosed = resolve; });
+  let currentEntries: unknown[] = [
+    trackedHistoryEntry,
+    { id: 2, kind: "pi.assistant", model: [{ role: "assistant", stopReason: "stop", timestamp: 1_500, content: [{ type: "text", text: "Earlier answer." }] }] },
+  ];
+  let currentState: { kind: "running"; submissionId: string } | { kind: "idle" } = { kind: "running", submissionId: "sub_bg" };
+  let contextReads = 0;
+  const settledRuns: string[] = [];
+
+  const projection = createBotLiveProjection({
+    conversation: async () => ({
+      watch: async () => ({
+        value: {
+          entries: currentEntries,
+          docs: { "pi.live": { run: { taskId: 1, inputs: [3] } }, "pi.inbox": { items: [queuedMsg(10, "First queued")] } },
+        },
+        start(next: (change: unknown) => Promise<void>) { listener = next; },
+        stop: async () => {},
+        closed,
+      }),
+      context: async () => {
+        contextReads += 1;
+        return { entries: currentEntries };
+      },
+    }) as never,
+    state: async () => currentState,
+    quietInputs: async (_botId, ids) => new Map(ids.map((id) => [id, false])),
+    onRunSettled: (botId) => settledRuns.push(botId),
+  });
+
+  const progressQueued: number[] = [];
+  let progressTicks = 0;
+  const observed = await projection.observeRun("bot:a", ({ queued }) => {
+    progressTicks += 1;
+    progressQueued.push(queued);
+  });
+  try {
+    assert.equal(observed.queued, 1);
+    assert.equal(historicalReads, 0, "opening an unwatched run observer does not project historical entries");
+    contextReads = 0;
+
+    // Background routine/turn commits steps and streams frames with zero UI subscribers.
+    currentEntries = [
+      ...currentEntries,
+      { id: 3, kind: "pi.user", model: [{ role: "user", content: [{ type: "text", text: "Run background check" }], timestamp: 2_000 }] },
+    ];
+    await listener!({
+      kind: "value",
+      value: {
+        entries: currentEntries,
+        docs: {
+          "pi.live": { run: { taskId: 1, inputs: [3] }, generation: { attempt: 1, message: { content: [{ type: "text", text: "Working…" }] } } },
+          "pi.inbox": { items: [queuedMsg(10, "First queued"), queuedMsg(11, "Second queued")] },
+        },
+      },
+      ops: [],
+    });
+    currentEntries = [
+      ...currentEntries,
+      { id: 4, kind: "pi.assistant", model: [{ role: "assistant", stopReason: "stop", timestamp: 2_500, content: [{ type: "text", text: "All clear." }] }] },
+    ];
+    currentState = { kind: "idle" };
+    await listener!({ kind: "value", value: { entries: currentEntries, docs: {} }, ops: [] });
+    projection.notifyState("bot:a", { kind: "idle" });
+    await waitFor(() => settledRuns.length === 1, { what: "onRunSettled callback" });
+
+    assert.ok(progressTicks >= 2, "observeRun receives progress notifications across frames");
+    assert.ok(progressQueued.includes(2), "observeRun tracks personal queued message counts");
+    assert.deepEqual(settledRuns, ["bot:a"]);
+    assert.equal(historicalReads, 0, "background turn with zero UI subscribers calls projectBotTranscript zero times");
+
+    // When a UI subscriber attaches afterwards (with no pending connect card), it projects once and skips reproject().
+    const tape = recorder();
+    const ui = await projection.subscribe("bot:a", tape.sink);
+    tape.start(ui.snapshot);
+    assert.equal(historicalReads, 1, "attaching a UI subscriber projects the deferred transcript once");
+    assert.equal(contextReads, 0, "subscribe skips reproject(conversation.context) when no connect card is pending");
+    const ui2 = await projection.subscribe("bot:a", { send() {} });
+    assert.equal(contextReads, 0, "a second UI subscribe also skips reproject when no connect card is pending");
+    ui2.unsubscribe();
+    assert.deepEqual(visibleText(ui.snapshot), [
+      "user:Earlier chat",
+      "assistant:Earlier answer.",
+      "user:Run background check",
+      "assistant:All clear.",
+    ]);
+    ui.unsubscribe();
+  } finally {
+    observed.unsubscribe();
+    resolveClosed();
+    await projection.close();
+  }
 });

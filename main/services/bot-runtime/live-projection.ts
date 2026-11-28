@@ -288,16 +288,12 @@ function toolResultStatus(record: EntryRecord, isError: boolean): BotToolResultS
 
 /** Counts each tool call id an assistant message issues; a provider may reuse one in every turn. */
 function countIssuedCalls(record: EntryRecord, issued: Map<string, number>): void {
+  if (record.kind !== "pi.assistant") return;
   const message = firstMessage(record);
-  if (record.kind !== "pi.assistant" || message?.role !== "assistant") return;
+  if (message?.role !== "assistant") return;
   for (const part of message.content) {
     if (part.type === "toolCall") issued.set(part.id, (issued.get(part.id) ?? 0) + 1);
   }
-}
-
-/** A call id as issued for the nth time so far: what an answer or a result pairs with. */
-function callKey(issued: ReadonlyMap<string, number>, toolCallId: string): string {
-  return `${issued.get(toolCallId) ?? 0}:${toolCallId}`;
 }
 
 /**
@@ -328,78 +324,424 @@ function callKey(issued: ReadonlyMap<string, number>, toolCallId: string): strin
  * - A `[SILENT]` answer hides its whole turn (input label included).
  * - System, reset and compaction entries are not shown.
  */
-export function projectBotTranscript(entries: readonly EntryRecord[]): BotTranscriptEntry[] {
-  /** `retryText`: the typed message Retry resends if this turn fails. */
-  type Turn = { start: number; silent: boolean; retryText: string | null };
-  const mapped: Array<{ entry: BotTranscriptEntry; turn: Turn | null }> = [];
-  const seenBotStatuses = new Set<string>();
-  let pendingRoutine: string | undefined;
-  let pendingHidden = false;
-  /** File tool calls aimed at the default location (the Bot's folder), by call id. */
-  const homeFileCalls = new Set<string>();
-  /** When the answer that made each call was written, for its duration. */
-  const callStartedAt = new Map<string, number>();
-  let turn: Turn | null = null;
-  /** The newest decision on each proposal: cards show what is true now. */
-  const proposalStatus = new Map<string, BotRoutineProposalStatusEntryData>();
-  /** The newest settlement on each issue: its card shows what is true now. */
-  const issueStatus = new Map<string, BotIssueResolution>();
-  /**
-   * The person's answer to each rule hand-off, by the call the rule stopped
-   * (the last entry for a call wins), and the calls whose blocked result is
-   * in the transcript: the answer reads right after that result. Both are
-   * keyed by `callKey`: a provider may reuse a call id in every turn.
-   */
-  const ruleHandoffs = new Map<string, { record: EntryRecord; result: BotHandoffResultDetails }>();
-  const resultCallKeys = new Set<string>();
-  const emittedRuleHandoffs = new Set<string>();
-  const handoffRowIds = new Set<string>();
-  /** The first answer for a call id keeps `handoff:<toolCallId>`; a reused id's later ones add their entry id. */
-  const handoffRowId = (toolCallId: string, record: EntryRecord): string => {
-    const base = `handoff:${toolCallId}`;
-    const rowId = handoffRowIds.has(base) ? `${base}:${String(record.id)}` : base;
-    handoffRowIds.add(rowId);
-    return rowId;
+const CHECKPOINT_BRAND: unique symbol = Symbol("BotTranscriptCheckpoint");
+
+/**
+ * Stateful active-turn checkpoint for `projectBotTranscript`. Holds the settled
+ * transcript prefix and cross-turn status/call maps before the active turn's
+ * opening input so step commits only scan and allocate the active turn tail.
+ */
+export interface BotTranscriptCheckpoint {
+  readonly [CHECKPOINT_BRAND]: true;
+}
+
+/** `retryText`: the typed message Retry resends if this turn fails. */
+type ProjectedTurn = { start: number; silent: boolean; retryText: string | null };
+
+interface ChangedStatusKeys {
+  proposals: Set<string>;
+  skills: Set<string>;
+  settings: Set<string>;
+  lessons: Set<string>;
+  issues: Set<string>;
+}
+
+interface TranscriptCheckpointState extends BotTranscriptCheckpoint {
+  rawPrefix: EntryRecord[];
+  prefixEntries: BotTranscriptEntry[];
+  proposalIndices: Map<string, number[]>;
+  skillIndices: Map<string, number[]>;
+  settingsIndices: Map<string, number[]>;
+  lessonIndices: Map<string, number[]>;
+  issueIndices: Map<string, number[]>;
+  proposalStatus: Map<string, BotRoutineProposalStatusEntryData>;
+  skillStatus: Map<string, "added" | "dismissed">;
+  settingsStatus: Map<string, BotSettingsChangeStatus>;
+  lessonStatus: Map<string, "active" | "dismissed" | "retired">;
+  issueStatus: Map<string, BotIssueResolution>;
+  issued: Map<string, number>;
+  prefixCallKeys: Set<string>;
+  ruleHandoffs: Map<string, { record: EntryRecord; result: BotHandoffResultDetails }>;
+  resultCallKeys: Set<string>;
+  seenBotStatuses: Set<string>;
+  pendingRoutine: string | undefined;
+  pendingHidden: boolean;
+  homeFileCalls: Set<string>;
+  callStartedAt: Map<string, number>;
+  emittedRuleHandoffs: Set<string>;
+  handoffRowIds: Set<string>;
+}
+
+export function createBotTranscriptCheckpoint(): BotTranscriptCheckpoint {
+  const state: TranscriptCheckpointState = {
+    [CHECKPOINT_BRAND]: true,
+    rawPrefix: [],
+    prefixEntries: [],
+    proposalIndices: new Map(),
+    skillIndices: new Map(),
+    settingsIndices: new Map(),
+    lessonIndices: new Map(),
+    issueIndices: new Map(),
+    proposalStatus: new Map(),
+    skillStatus: new Map(),
+    settingsStatus: new Map(),
+    lessonStatus: new Map(),
+    issueStatus: new Map(),
+    issued: new Map(),
+    prefixCallKeys: new Set(),
+    ruleHandoffs: new Map(),
+    resultCallKeys: new Set(),
+    seenBotStatuses: new Set(),
+    pendingRoutine: undefined,
+    pendingHidden: false,
+    homeFileCalls: new Set(),
+    callStartedAt: new Map(),
+    emittedRuleHandoffs: new Set(),
+    handoffRowIds: new Set(),
   };
-  const issued = new Map<string, number>();
-  const skillStatus = new Map<string, "added" | "dismissed">();
-  const settingsStatus = new Map<string, BotSettingsChangeStatus>();
-  const lessonStatus = new Map<string, "active" | "dismissed" | "retired">();
-  for (const record of entries) {
+  return state;
+}
+
+function isTranscriptCheckpoint(value: unknown): value is TranscriptCheckpointState {
+  return typeof value === "object" && value !== null && CHECKPOINT_BRAND in value;
+}
+
+function resetCheckpointState(state: TranscriptCheckpointState): void {
+  state.rawPrefix = [];
+  state.prefixEntries = [];
+  state.proposalIndices.clear();
+  state.skillIndices.clear();
+  state.settingsIndices.clear();
+  state.lessonIndices.clear();
+  state.issueIndices.clear();
+  state.proposalStatus.clear();
+  state.skillStatus.clear();
+  state.settingsStatus.clear();
+  state.lessonStatus.clear();
+  state.issueStatus.clear();
+  state.issued.clear();
+  state.prefixCallKeys.clear();
+  state.ruleHandoffs.clear();
+  state.resultCallKeys.clear();
+  state.seenBotStatuses.clear();
+  state.pendingRoutine = undefined;
+  state.pendingHidden = false;
+  state.homeFileCalls.clear();
+  state.callStartedAt.clear();
+  state.emittedRuleHandoffs.clear();
+  state.handoffRowIds.clear();
+}
+
+function findActiveTurnBoundary(entries: readonly EntryRecord[]): number {
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const record = entries[i]!;
+    if (record.kind === BOT_PEER_INPUT_KIND) return i;
+    if (isBotInputEntryKind(record.kind) && firstMessage(record)?.role === "user") return i;
+  }
+  return 0;
+}
+
+function hasSameRawPrefix(entries: readonly EntryRecord[], prefix: readonly EntryRecord[]): boolean {
+  if (entries.length < prefix.length) return false;
+  for (let i = 0; i < prefix.length; i += 1) {
+    if (entries[i] !== prefix[i]) return false;
+  }
+  return true;
+}
+
+function pushCardIndex(map: Map<string, number[]>, key: string, index: number): void {
+  const list = map.get(key);
+  if (list) list.push(index);
+  else map.set(key, [index]);
+}
+
+function indexSettledCard(state: TranscriptCheckpointState, entry: BotTranscriptEntry, index: number): void {
+  if (entry.type === "routine_proposal") pushCardIndex(state.proposalIndices, entry.proposal.proposalId, index);
+  else if (entry.type === "skill_proposal") pushCardIndex(state.skillIndices, entry.proposal.proposalId, index);
+  else if (entry.type === "settings_change") pushCardIndex(state.settingsIndices, entry.change.changeId, index);
+  else if (entry.type === "lesson_proposal" || entry.type === "lesson_learned") {
+    pushCardIndex(state.lessonIndices, entry.lesson.lessonId, index);
+  } else if (entry.type === "issue") {
+    pushCardIndex(state.issueIndices, entry.issue.id, index);
+  }
+}
+
+function tailReferencesPrefixCall(
+  entries: readonly EntryRecord[],
+  startIndex: number,
+  cp: TranscriptCheckpointState,
+): boolean {
+  if (cp.prefixCallKeys.size === 0) return false;
+  let localIssued: Map<string, number> | undefined;
+  const currentKey = (toolCallId: string): string => {
+    const count = localIssued?.get(toolCallId) ?? cp.issued.get(toolCallId) ?? 0;
+    return `${count}:${toolCallId}`;
+  };
+  for (let i = startIndex; i < entries.length; i += 1) {
+    const record = entries[i]!;
+    if (record.kind === BOT_HANDOFF_RESULT_ENTRY_KIND) {
+      const result = botHandoffResultOf(record.data);
+      if (result?.toolCallId !== undefined && result.rule !== undefined && cp.prefixCallKeys.has(currentKey(result.toolCallId))) {
+        return true;
+      }
+    } else if (record.kind === "pi.tool-result") {
+      const message = firstMessage(record);
+      if (message?.role === "toolResult" && cp.prefixCallKeys.has(currentKey(message.toolCallId))) return true;
+    } else if (record.kind === "pi.assistant") {
+      const message = firstMessage(record);
+      if (message?.role === "assistant") {
+        for (const part of message.content) {
+          if (part.type === "toolCall") {
+            localIssued ??= new Map();
+            const prev = localIssued.get(part.id) ?? cp.issued.get(part.id) ?? 0;
+            localIssued.set(part.id, prev + 1);
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
+
+function revisePrefixCards(
+  prefixEntries: BotTranscriptEntry[],
+  cp: TranscriptCheckpointState,
+  changed: ChangedStatusKeys,
+  lookup: {
+    proposal(id: string): BotRoutineProposalStatusEntryData | undefined;
+    skill(id: string): "added" | "dismissed" | undefined;
+    settings(id: string): BotSettingsChangeStatus | undefined;
+    lesson(id: string): "active" | "dismissed" | "retired" | undefined;
+    issue(id: string): BotIssueResolution | undefined;
+  },
+  inPlace: boolean,
+): BotTranscriptEntry[] {
+  let target = prefixEntries;
+  let copied = inPlace;
+  const writeAt = (index: number, updated: BotTranscriptEntry) => {
+    if (!copied) {
+      target = [...prefixEntries];
+      copied = true;
+    }
+    target[index] = updated;
+  };
+  for (const proposalId of changed.proposals) {
+    const decided = lookup.proposal(proposalId);
+    for (const index of cp.proposalIndices.get(proposalId) ?? []) {
+      const current = target[index];
+      if (current?.type !== "routine_proposal") continue;
+      const nextStatus = decided?.status ?? "pending";
+      if (
+        current.status === nextStatus &&
+        current.routineId === decided?.routineId &&
+        current.supersededBy === decided?.supersededBy
+      ) {
+        continue;
+      }
+      writeAt(index, {
+        id: current.id,
+        type: "routine_proposal",
+        proposal: current.proposal,
+        status: nextStatus,
+        ...(decided?.routineId === undefined ? {} : { routineId: decided.routineId }),
+        ...(decided?.supersededBy === undefined ? {} : { supersededBy: decided.supersededBy }),
+      });
+    }
+  }
+  for (const proposalId of changed.skills) {
+    const nextStatus = lookup.skill(proposalId) ?? "pending";
+    for (const index of cp.skillIndices.get(proposalId) ?? []) {
+      const current = target[index];
+      if (current?.type !== "skill_proposal" || current.status === nextStatus) continue;
+      writeAt(index, { ...current, status: nextStatus });
+    }
+  }
+  for (const changeId of changed.settings) {
+    const nextStatus = lookup.settings(changeId) ?? "pending";
+    for (const index of cp.settingsIndices.get(changeId) ?? []) {
+      const current = target[index];
+      if (current?.type !== "settings_change" || current.status === nextStatus) continue;
+      writeAt(index, { ...current, status: nextStatus });
+    }
+  }
+  for (const lessonId of changed.lessons) {
+    const decided = lookup.lesson(lessonId);
+    for (const index of cp.lessonIndices.get(lessonId) ?? []) {
+      const current = target[index];
+      if (current?.type !== "lesson_proposal" && current?.type !== "lesson_learned") continue;
+      const nextStatus = decided ?? (current.type === "lesson_proposal" ? "pending" : "active");
+      if (current.status === nextStatus) continue;
+      writeAt(index, { ...current, status: nextStatus });
+    }
+  }
+  for (const issueId of changed.issues) {
+    const decided = lookup.issue(issueId);
+    for (const index of cp.issueIndices.get(issueId) ?? []) {
+      const current = target[index];
+      if (current?.type !== "issue") continue;
+      const nextStatus = decided ?? current.issue.resolution ?? "open";
+      if (current.status === nextStatus) continue;
+      writeAt(index, { ...current, status: nextStatus });
+    }
+  }
+  return target;
+}
+
+function projectRange(
+  entries: readonly EntryRecord[],
+  startIndex: number,
+  endIndex: number,
+  base: TranscriptCheckpointState | null,
+  commitToBase: boolean,
+): { tail: BotTranscriptEntry[]; prefix?: BotTranscriptEntry[] } {
+  const changed: ChangedStatusKeys | null =
+    base && base.prefixEntries.length > 0
+      ? { proposals: new Set(), skills: new Set(), settings: new Set(), lessons: new Set(), issues: new Set() }
+      : null;
+
+  const localProposalStatus = commitToBase && base ? base.proposalStatus : new Map<string, BotRoutineProposalStatusEntryData>();
+  const localSkillStatus = commitToBase && base ? base.skillStatus : new Map<string, "added" | "dismissed">();
+  const localSettingsStatus = commitToBase && base ? base.settingsStatus : new Map<string, BotSettingsChangeStatus>();
+  const localLessonStatus = commitToBase && base ? base.lessonStatus : new Map<string, "active" | "dismissed" | "retired">();
+  const localIssueStatus = commitToBase && base ? base.issueStatus : new Map<string, BotIssueResolution>();
+  const localRuleHandoffs = commitToBase && base ? base.ruleHandoffs : new Map<string, { record: EntryRecord; result: BotHandoffResultDetails }>();
+  const localResultCallKeys = commitToBase && base ? base.resultCallKeys : new Set<string>();
+  const pass1Issued = new Map<string, number>();
+
+  const pass1CallKey = (toolCallId: string): string => {
+    const count = pass1Issued.get(toolCallId) ?? base?.issued.get(toolCallId) ?? 0;
+    return `${count}:${toolCallId}`;
+  };
+  const bumpIssued = (target: Map<string, number>, record: EntryRecord, recordPrefixKeys: boolean): void => {
+    if (record.kind !== "pi.assistant") return;
+    const message = firstMessage(record);
+    if (message?.role !== "assistant") return;
+    for (const part of message.content) {
+      if (part.type !== "toolCall") continue;
+      const next = (target.get(part.id) ?? base?.issued.get(part.id) ?? 0) + 1;
+      target.set(part.id, next);
+      if (recordPrefixKeys && base) base.prefixCallKeys.add(`${next}:${part.id}`);
+    }
+  };
+
+  for (let i = startIndex; i < endIndex; i += 1) {
+    const record = entries[i]!;
     if (record.kind === BOT_LESSON_STATUS_ENTRY_KIND) {
       const status = botLessonStatusOf(record.data);
-      if (status) lessonStatus.set(status.lessonId, status.status);
+      if (status) {
+        localLessonStatus.set(status.lessonId, status.status);
+        changed?.lessons.add(status.lessonId);
+      }
       continue;
     }
     if (record.kind === BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND) {
       const status = proposalStatusOf(record.data);
-      if (status) proposalStatus.set(status.proposalId, status);
+      if (status) {
+        localProposalStatus.set(status.proposalId, status);
+        changed?.proposals.add(status.proposalId);
+      }
     } else if (record.kind === BOT_SKILL_PROPOSAL_STATUS_ENTRY_KIND) {
       const status = botSkillProposalStatusOf(record.data);
-      if (status) skillStatus.set(status.proposalId, status.status);
+      if (status) {
+        localSkillStatus.set(status.proposalId, status.status);
+        changed?.skills.add(status.proposalId);
+      }
     } else if (record.kind === BOT_SETTINGS_CHANGE_STATUS_ENTRY_KIND) {
       const status = botSettingsChangeStatusOf(record.data);
-      if (status) settingsStatus.set(status.changeId, status.status);
+      if (status) {
+        localSettingsStatus.set(status.changeId, status.status);
+        changed?.settings.add(status.changeId);
+      }
     } else if (record.kind === BOT_ISSUE_STATUS_ENTRY_KIND) {
       const status = botIssueStatusOf(record.data);
-      if (status) issueStatus.set(status.issueId, status.resolution);
+      if (status) {
+        localIssueStatus.set(status.issueId, status.resolution);
+        changed?.issues.add(status.issueId);
+      }
     } else if (record.kind === BOT_HANDOFF_RESULT_ENTRY_KIND) {
       const result = botHandoffResultOf(record.data);
       if (result?.toolCallId !== undefined && result.rule !== undefined) {
-        ruleHandoffs.set(callKey(issued, result.toolCallId), { record, result });
+        const key = pass1CallKey(result.toolCallId);
+        localRuleHandoffs.set(key, { record, result });
+        if (commitToBase && base) base.prefixCallKeys.add(key);
       }
     } else if (record.kind === "pi.tool-result") {
       const message = firstMessage(record);
-      if (message?.role === "toolResult") resultCallKeys.add(callKey(issued, message.toolCallId));
+      if (message?.role === "toolResult") {
+        const key = pass1CallKey(message.toolCallId);
+        localResultCallKeys.add(key);
+        if (commitToBase && base) base.prefixCallKeys.add(key);
+      }
     } else {
-      countIssuedCalls(record, issued);
+      bumpIssued(pass1Issued, record, commitToBase);
     }
   }
-  issued.clear();
+
+  const getProposalStatus = (id: string) => localProposalStatus.get(id) ?? base?.proposalStatus.get(id);
+  const getSkillStatus = (id: string) => localSkillStatus.get(id) ?? base?.skillStatus.get(id);
+  const getSettingsStatus = (id: string) => localSettingsStatus.get(id) ?? base?.settingsStatus.get(id);
+  const getLessonStatus = (id: string) => localLessonStatus.get(id) ?? base?.lessonStatus.get(id);
+  const getIssueStatus = (id: string) => localIssueStatus.get(id) ?? base?.issueStatus.get(id);
+  const getRuleHandoff = (key: string) => localRuleHandoffs.get(key) ?? base?.ruleHandoffs.get(key);
+  const hasResultCallKey = (key: string) => localResultCallKeys.has(key) || (base?.resultCallKeys.has(key) ?? false);
+
+  let revisedPrefix = base?.prefixEntries;
+  if (
+    base &&
+    changed &&
+    (changed.proposals.size > 0 ||
+      changed.skills.size > 0 ||
+      changed.settings.size > 0 ||
+      changed.lessons.size > 0 ||
+      changed.issues.size > 0)
+  ) {
+    revisedPrefix = revisePrefixCards(
+      base.prefixEntries,
+      base,
+      changed,
+      {
+        proposal: getProposalStatus,
+        skill: getSkillStatus,
+        settings: getSettingsStatus,
+        lesson: getLessonStatus,
+        issue: getIssueStatus,
+      },
+      commitToBase,
+    );
+  }
+
+  const mapped: Array<{ entry: BotTranscriptEntry; turn: ProjectedTurn | null }> = [];
+  const localSeenBotStatuses = commitToBase && base ? base.seenBotStatuses : new Set<string>();
+  const hasSeenBotStatus = (key: string) => localSeenBotStatuses.has(key) || (base?.seenBotStatuses.has(key) ?? false);
+  let pendingRoutine = base?.pendingRoutine;
+  let pendingHidden = base?.pendingHidden ?? false;
+  const localHomeFileCalls = commitToBase && base ? base.homeFileCalls : new Set<string>();
+  const isHomeFileCall = (id: string) => localHomeFileCalls.has(id) || (base?.homeFileCalls.has(id) ?? false);
+  const localCallStartedAt = commitToBase && base ? base.callStartedAt : new Map<string, number>();
+  const getCallStartedAt = (id: string) => localCallStartedAt.get(id) ?? base?.callStartedAt.get(id);
+  const localEmittedRuleHandoffs = commitToBase && base ? base.emittedRuleHandoffs : new Set<string>();
+  const hasEmittedRuleHandoff = (key: string) =>
+    localEmittedRuleHandoffs.has(key) || (base?.emittedRuleHandoffs.has(key) ?? false);
+  const localHandoffRowIds = commitToBase && base ? base.handoffRowIds : new Set<string>();
+  const hasHandoffRowId = (id: string) => localHandoffRowIds.has(id) || (base?.handoffRowIds.has(id) ?? false);
+  /** The first answer for a call id keeps `handoff:<toolCallId>`; a reused id's later ones add their entry id. */
+  const handoffRowId = (toolCallId: string, record: EntryRecord): string => {
+    const rowBase = `handoff:${toolCallId}`;
+    const rowId = hasHandoffRowId(rowBase) ? `${rowBase}:${String(record.id)}` : rowBase;
+    localHandoffRowIds.add(rowId);
+    return rowId;
+  };
+  const pass2Issued = commitToBase && base ? base.issued : new Map<string, number>();
+  const pass2CallKey = (toolCallId: string): string => {
+    const count = pass2Issued.get(toolCallId) ?? base?.issued.get(toolCallId) ?? 0;
+    return `${count}:${toolCallId}`;
+  };
+  let turn: ProjectedTurn | null = null;
+
   const ruleHandoffRow = (key: string, at: number | undefined): BotTranscriptEntry | undefined => {
-    const found = ruleHandoffs.get(key);
-    if (found === undefined || emittedRuleHandoffs.has(key)) return undefined;
-    emittedRuleHandoffs.add(key);
+    const found = getRuleHandoff(key);
+    if (found === undefined || hasEmittedRuleHandoff(key)) return undefined;
+    localEmittedRuleHandoffs.add(key);
     const { record, result } = found;
     return {
       id: handoffRowId(result.toolCallId!, record),
@@ -413,7 +755,8 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
     };
   };
 
-  for (const record of entries) {
+  for (let i = startIndex; i < endIndex; i += 1) {
+    const record = entries[i]!;
     const id = String(record.id);
     if (isNotice(record)) {
       const notice = record.data;
@@ -441,9 +784,9 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       const data = botMessageStatusOf(record.data);
       if (data) {
         const key = JSON.stringify([data.deliveryId, data.outcome, data.waitId ?? ""]);
-        if (!seenBotStatuses.has(key)) {
-          seenBotStatuses.add(key);
-          mapped.push({ entry: {id, type: "bot_message_status", data}, turn: null });
+        if (!hasSeenBotStatus(key)) {
+          localSeenBotStatuses.add(key);
+          mapped.push({ entry: { id, type: "bot_message_status", data }, turn: null });
         }
       }
       continue;
@@ -466,7 +809,7 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
     if (record.kind === BOT_ROUTINE_PROPOSAL_ENTRY_KIND) {
       const proposal = proposalOf(record.data);
       if (proposal) {
-        const decided = proposalStatus.get(proposal.proposalId);
+        const decided = getProposalStatus(proposal.proposalId);
         mapped.push({
           entry: {
             id,
@@ -485,14 +828,14 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
     if (record.kind === BOT_SKILL_PROPOSAL_ENTRY_KIND) {
       const proposal = botSkillProposalOf(record.data);
       if (proposal) {
-        mapped.push({ entry: { id, type: "skill_proposal", proposal, status: skillStatus.get(proposal.proposalId) ?? "pending" }, turn });
+        mapped.push({ entry: { id, type: "skill_proposal", proposal, status: getSkillStatus(proposal.proposalId) ?? "pending" }, turn });
       }
       continue;
     }
     if (record.kind === BOT_SKILL_PROPOSAL_STATUS_ENTRY_KIND) continue;
     if (record.kind === BOT_SETTINGS_CHANGE_ENTRY_KIND) {
       const change = botSettingsChangeOf(record.data);
-      if (change) mapped.push({ entry: { id, type: "settings_change", change, status: settingsStatus.get(change.changeId) ?? "pending" }, turn });
+      if (change) mapped.push({ entry: { id, type: "settings_change", change, status: getSettingsStatus(change.changeId) ?? "pending" }, turn });
       continue;
     }
     if (record.kind === BOT_SETTINGS_CHANGE_STATUS_ENTRY_KIND) continue;
@@ -505,7 +848,7 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
             id,
             type: proposal ? "lesson_proposal" : "lesson_learned",
             lesson,
-            status: lessonStatus.get(lesson.lessonId) ?? (proposal ? "pending" : "active"),
+            status: getLessonStatus(lesson.lessonId) ?? (proposal ? "pending" : "active"),
           },
           turn: null,
         });
@@ -535,7 +878,7 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
             id,
             type: "issue",
             issue,
-            status: issueStatus.get(issue.id) ?? issue.resolution ?? "open",
+            status: getIssueStatus(issue.id) ?? issue.resolution ?? "open",
             at: issue.createdAt,
           },
           turn: null,
@@ -548,8 +891,8 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       // Read after the blocked call's result; here only when that result never landed.
       const result = botHandoffResultOf(record.data);
       const toolCallId = result?.toolCallId;
-      const key = toolCallId === undefined ? undefined : callKey(issued, toolCallId);
-      if (key !== undefined && !resultCallKeys.has(key) && ruleHandoffs.get(key)?.record === record) {
+      const key = toolCallId === undefined ? undefined : pass2CallKey(toolCallId);
+      if (key !== undefined && !hasResultCallKey(key) && getRuleHandoff(key)?.record === record) {
         const row = ruleHandoffRow(key, undefined);
         if (row) mapped.push({ entry: row, turn });
       }
@@ -573,7 +916,7 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
         const input = botMessageInputOf(record.data);
         pendingRoutine = undefined;
         pendingHidden = false;
-        if (input) mapped.push({entry: {...input, id, at: message.timestamp}, turn});
+        if (input) mapped.push({ entry: { ...input, id, at: message.timestamp }, turn });
         continue;
       }
       if (pendingHidden) {
@@ -590,15 +933,16 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       continue;
     }
     if (record.kind === "pi.assistant" && message?.role === "assistant") {
-      countIssuedCalls(record, issued);
+      if (commitToBase && base) countIssuedCalls(record, base.issued);
+      else bumpIssued(pass2Issued, record, false);
       const calls = message.content.filter((part): part is ToolCall => part.type === "toolCall");
       for (const call of calls) {
         if (BOT_FILE_CHIP_TOOLS.has(call.name) && (call.arguments as { location?: unknown } | undefined)?.location === undefined) {
-          homeFileCalls.add(call.id);
+          localHomeFileCalls.add(call.id);
         }
       }
       for (const call of calls) {
-        if (typeof message.timestamp === "number") callStartedAt.set(call.id, message.timestamp);
+        if (typeof message.timestamp === "number") localCallStartedAt.set(call.id, message.timestamp);
       }
       const toolCalls = calls.map((call) => ({ id: call.id, name: call.name, ...botStepDescriptor(call.name, call.arguments) }));
       const stopReason = stopReasonOf(message);
@@ -665,7 +1009,7 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
         });
         continue;
       }
-      const startedAt = callStartedAt.get(message.toolCallId);
+      const startedAt = getCallStartedAt(message.toolCallId);
       const at = typeof message.timestamp === "number" ? message.timestamp : undefined;
       mapped.push({
         entry: {
@@ -681,11 +1025,11 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
         turn,
       });
       // A rule handed this call to the person: their Done or Skip reads next.
-      const ruleRow = ruleHandoffRow(callKey(issued, message.toolCallId), at);
+      const ruleRow = ruleHandoffRow(pass2CallKey(message.toolCallId), at);
       if (ruleRow) mapped.push({ entry: ruleRow, turn });
       // A file the Bot wrote in its folder, as the tool result confirms it.
       const produced =
-        !message.isError && homeFileCalls.has(message.toolCallId)
+        !message.isError && isHomeFileCall(message.toolCallId)
           ? parseProducedFile((message.details as { producedFile?: unknown } | undefined)?.producedFile, message.toolName)
           : undefined;
       if (produced) {
@@ -704,9 +1048,52 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       }
     }
   }
-  return mapped
+
+  const tail = mapped
     .filter(({ entry, turn: owner }) => !(owner?.silent && !OUTLIVES_SILENT_TURN.has(entry.type)) && !isSilentAnswer(entry))
     .map(({ entry }) => entry);
+
+  if (commitToBase && base) {
+    base.pendingRoutine = pendingRoutine;
+    base.pendingHidden = pendingHidden;
+    for (const entry of tail) {
+      const index = base.prefixEntries.length;
+      base.prefixEntries.push(entry);
+      indexSettledCard(base, entry, index);
+    }
+    for (let i = startIndex; i < endIndex; i += 1) {
+      base.rawPrefix.push(entries[i]!);
+    }
+  }
+
+  return { tail, prefix: revisedPrefix };
+}
+
+export function projectBotTranscript(
+  entries: readonly EntryRecord[],
+  checkpoint?: BotTranscriptCheckpoint,
+): BotTranscriptEntry[] {
+  if (!isTranscriptCheckpoint(checkpoint)) {
+    return projectRange(entries, 0, entries.length, null, false).tail;
+  }
+  if (!hasSameRawPrefix(entries, checkpoint.rawPrefix)) {
+    resetCheckpointState(checkpoint);
+  }
+  const boundary = findActiveTurnBoundary(entries);
+  if (tailReferencesPrefixCall(entries, checkpoint.rawPrefix.length, checkpoint)) {
+    resetCheckpointState(checkpoint);
+  }
+  if (boundary > checkpoint.rawPrefix.length) {
+    projectRange(entries, checkpoint.rawPrefix.length, boundary, checkpoint, true);
+  }
+  if (boundary === entries.length) {
+    return [...checkpoint.prefixEntries];
+  }
+  const { prefix, tail } = projectRange(entries, boundary, entries.length, checkpoint, false);
+  const settledPrefix = prefix ?? checkpoint.prefixEntries;
+  if (settledPrefix.length === 0) return tail;
+  if (tail.length === 0) return [...settledPrefix];
+  return [...settledPrefix, ...tail];
 }
 
 /** The in-flight reply text from `pi.live`, or null. A reply heading for `[SILENT]` is never shown. */
@@ -1053,8 +1440,18 @@ export interface BotLiveSubscription {
   unsubscribe(): void;
 }
 
+export interface BotLiveRunObservation {
+  readonly queued: number;
+  unsubscribe(): void;
+}
+
 export interface BotLiveProjection {
   subscribe(botId: string, sink: BotLiveSink): Promise<BotLiveSubscription>;
+  /**
+   * Observe live progress and personal queued-input count for a running Bot
+   * without projecting transcript entries.
+   */
+  observeRun(botId: string, onProgress: (update: { queued: number }) => void): Promise<BotLiveRunObservation>;
   /** The session state changed (send, resume, dismiss, stop). Starts a feed for a running reply. */
   notifyState(botId: string, state: BotSessionState): void;
   /** Re-read the transcript and push a snapshot, e.g. after a connection status changed. */
@@ -1122,6 +1519,16 @@ interface Feed {
   resumedFrom: string | undefined;
   /** The newest frame, so approvals, questions and Stop can re-derive the activity. */
   frame: { entries: readonly EntryRecord[]; docs: Readonly<Record<string, unknown>> };
+  /** Whether UI transcript entries are actively projected for this feed. */
+  projected: boolean;
+  /** Active-turn checkpoint so step commits project only the active turn tail. */
+  transcriptCheckpoint: BotTranscriptCheckpoint;
+  /** Raw entries that `baseEntries` was projected from, before connect-card resolution. */
+  baseEntriesRef: readonly EntryRecord[] | undefined;
+  /** Transcript entries before live connect-card status resolution. */
+  baseEntries: BotTranscriptEntry[];
+  /** Last raw entries seen while deferred, so entry commits still count as run progress. */
+  observedEntries: readonly EntryRecord[] | undefined;
   /**
    * The frame entries `entries` was projected from, while re-projecting them
    * would give the same result: no connect card waits on a live status and no
@@ -1145,6 +1552,7 @@ interface Feed {
 }
 
 function sameEntry(left: BotTranscriptEntry, right: BotTranscriptEntry): boolean {
+  if (left === right) return true;
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
@@ -1194,8 +1602,27 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
   }
   const opening = new Map<string, Promise<Feed>>();
   const subscribers = new Map<string, Set<Subscriber>>();
+  const attachingSubscribers = new Map<string, number>();
+  const runObservers = new Map<string, Set<(update: { queued: number }) => void>>();
   /** Where each Bot's last feed stopped, so `seq` keeps rising across epochs. */
   const lastSeq = new Map<string, number>();
+
+  function hasUiViewers(botId: string): boolean {
+    return (subscribers.get(botId)?.size ?? 0) > 0 || (attachingSubscribers.get(botId) ?? 0) > 0;
+  }
+
+  function notifyRunObservers(feed: Feed): void {
+    const observers = runObservers.get(feed.botId);
+    if (!observers || observers.size === 0) return;
+    const update = { queued: feed.queued.length };
+    for (const observer of observers) {
+      try {
+        observer(update);
+      } catch (error) {
+        report(feed.botId, error);
+      }
+    }
+  }
 
   const report = (botId: string, error: unknown) => deps.onError?.(botId, error);
   /**
@@ -1269,6 +1696,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     lastSeq.set(feed.botId, feed.seq);
     const event = { botId: feed.botId, epoch: feed.epoch, seq: feed.seq, ...body } as BotLiveEvent;
     for (const subscriber of subscribers.get(feed.botId) ?? []) enqueue(subscriber, feed.botId, event);
+    notifyRunObservers(feed);
   }
 
   function emitSnapshot(feed: Feed): void {
@@ -1277,6 +1705,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     const snapshot = snapshotOf(feed);
     const event: BotLiveEvent = { botId: feed.botId, epoch: feed.epoch, seq: feed.seq, type: "snapshot", snapshot };
     for (const subscriber of subscribers.get(feed.botId) ?? []) enqueue(subscriber, feed.botId, event);
+    notifyRunObservers(feed);
   }
 
   function waitingOn(feed: Feed): boolean {
@@ -1316,23 +1745,47 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
   }
 
   /** Project frame entries; `stable` when the same array always projects to the same transcript. */
-  async function projectFrame(botId: string, entries: readonly EntryRecord[]) {
-    const projected = projectBotTranscript(entries);
-    const stable = !deps.connectCardStatus || !awaitsCardStatus(projected);
-    return { entries: await resolveCards(botId, projected), stable };
+  async function projectFrame(feed: Feed, entries: readonly EntryRecord[]) {
+    let baseEntries: BotTranscriptEntry[];
+    if (entries === feed.baseEntriesRef) {
+      baseEntries = feed.baseEntries;
+    } else {
+      baseEntries = projectBotTranscript(entries, feed.transcriptCheckpoint);
+      feed.baseEntries = baseEntries;
+      feed.baseEntriesRef = entries;
+    }
+    const resolved = await resolveCards(feed, baseEntries);
+    const stable = !deps.connectCardStatus || !awaitsCardStatus(resolved);
+    return { entries: resolved, stable };
   }
 
-  async function resolveCards(botId: string, entries: BotTranscriptEntry[]): Promise<BotTranscriptEntry[]> {
-    if (!deps.connectCardStatus) return entries;
+  async function resolveCards(feed: Feed, entries: BotTranscriptEntry[]): Promise<BotTranscriptEntry[]> {
+    if (!deps.connectCardStatus || !awaitsCardStatus(entries)) return entries;
     const resolved: BotTranscriptEntry[] = [];
     // The newest card for a plugin carries its live status; older ones keep theirs.
-    for (const entry of entries) {
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index]!;
       if (entry.type !== "connect_card" || entry.card.status !== "pending") {
         resolved.push(entry);
         continue;
       }
-      const status = await deps.connectCardStatus(botId, entry.card).catch(() => entry.card.status);
-      resolved.push(status === entry.card.status ? entry : { ...entry, card: { ...entry.card, status } });
+      const status = await deps.connectCardStatus(feed.botId, entry.card).catch(() => entry.card.status);
+      if (status === entry.card.status) {
+        resolved.push(entry);
+        continue;
+      }
+      const previous = feed.entries[index];
+      if (
+        previous?.type === "connect_card" &&
+        previous.id === entry.id &&
+        previous.card.pluginId === entry.card.pluginId &&
+        previous.card.reason === entry.card.reason &&
+        previous.card.status === status
+      ) {
+        resolved.push(previous);
+        continue;
+      }
+      resolved.push({ ...entry, card: { ...entry.card, status } });
     }
     return resolved;
   }
@@ -1378,32 +1831,47 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     feed.runKey = runKey;
     // Records the run's key as soon as it shows, so a replacing run is told apart from this one.
     if (feed.state.kind === "running") feed.startedAt = runStarts.startedAt(feed.botId, runKey, now);
-    if (entries !== feed.projectedFrom) {
-      const projected = await projectFrame(feed.botId, entries);
-      applyEntries(feed, projected.entries);
-      feed.projectedFrom = projected.stable ? entries : undefined;
+    let unwatchedEntryProgress = false;
+    if (feed.projected) {
+      if (entries !== feed.projectedFrom) {
+        const projected = await projectFrame(feed, entries);
+        applyEntries(feed, projected.entries);
+        feed.projectedFrom = projected.stable ? entries : undefined;
+      }
+    } else if (entries !== feed.observedEntries) {
+      feed.observedEntries = entries;
+      unwatchedEntryProgress = true;
     }
     const partial = livePartialText(docs);
     if (partial !== feed.partial) {
       feed.partial = partial;
+      unwatchedEntryProgress = false;
       emit(feed, { type: "partial", text: partial });
     }
     const queued = await queuedFor(feed, docs);
     if (JSON.stringify(queued) !== JSON.stringify(feed.queued)) {
       feed.queued = queued;
+      unwatchedEntryProgress = false;
       emit(feed, { type: "queued", queued });
     }
     const runActive = liveRunActive(docs);
     if (runActive === feed.runActive) {
+      const prevActivity = feed.activity;
       updateActivity(feed);
+      if (unwatchedEntryProgress && feed.activity === prevActivity) notifyRunObservers(feed);
       return;
     }
     feed.runActive = runActive;
     if (runActive) feed.settled = false;
     // The run's end is reported with its new state, so the line never flashes a phase after the reply.
     const state = await deps.state(feed.botId).catch(() => feed.state);
+    const prevState = feed.state;
+    const prevActivity = feed.activity;
     setState(feed, state);
     updateActivity(feed);
+    if (unwatchedEntryProgress && feed.state === prevState && feed.activity === prevActivity) {
+      notifyRunObservers(feed);
+    }
     if (!runActive) {
       feed.stopping = false;
       feed.resuming = false;
@@ -1451,7 +1919,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       const initial = watch.value;
       const epoch = newEpoch();
       const seq = lastSeq.get(botId) ?? 0;
-      const projected = await projectFrame(botId, initial.entries);
+      const transcriptCheckpoint = createBotTranscriptCheckpoint();
       let opened: Feed | undefined;
       const classifier = createQueuedInputClassifier({
         classify: (ids) => deps.quietInputs(botId, ids),
@@ -1466,7 +1934,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         botId,
         epoch,
         seq,
-        entries: projected.entries,
+        entries: [],
         partial: livePartialText(initial.docs),
         state: await deps.state(botId),
         question: deps.question?.(botId) ?? null,
@@ -1481,7 +1949,12 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         resuming: false,
         resumedFrom: undefined,
         frame: { entries: initial.entries, docs: initial.docs },
-        projectedFrom: projected.stable ? initial.entries : undefined,
+        projected: false,
+        transcriptCheckpoint,
+        baseEntriesRef: undefined,
+        baseEntries: [],
+        observedEntries: initial.entries,
+        projectedFrom: undefined,
         runActive: liveRunActive(initial.docs),
         settled: false,
         runKey: liveRunKey(initial.docs),
@@ -1490,6 +1963,12 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         ended: false,
         queue: Promise.resolve(),
       };
+      if (hasUiViewers(botId)) {
+        const projected = await projectFrame(feed, initial.entries);
+        feed.entries = projected.entries;
+        feed.projected = true;
+        feed.projectedFrom = projected.stable ? initial.entries : undefined;
+      }
       opened = feed;
       if (feed.state.kind === "running") startRun(feed);
       else runStarts.ended(botId);
@@ -1534,10 +2013,37 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
   /** Re-read the transcript and resolve connect cards against their current status. */
   function reproject(feed: Feed): Promise<void> {
     return enqueueWork(feed, async () => {
+      if (feed.ended || !feed.projected) return;
       const conversation = await deps.conversation(feed.botId);
       const view = await conversation.context(BACKGROUND_CONTEXT);
-      applyEntries(feed, await resolveCards(feed.botId, projectBotTranscript(view.entries)));
+      const baseEntries = projectBotTranscript(view.entries, feed.transcriptCheckpoint);
+      feed.baseEntries = baseEntries;
+      feed.baseEntriesRef = view.entries;
+      applyEntries(feed, await resolveCards(feed, baseEntries));
       // These entries came from a fresh read, not the frame, so the next frame projects again.
+      feed.projectedFrom = undefined;
+    });
+  }
+
+  /** Project deferred entries for an attaching subscriber, or refresh pending connect cards on an open feed. */
+  function ensureProjected(feed: Feed, alreadyProjectedOnOpen: boolean): Promise<void> {
+    return enqueueWork(feed, async () => {
+      if (feed.ended) return;
+      if (!feed.projected) {
+        const projected = await projectFrame(feed, feed.frame.entries);
+        feed.entries = projected.entries;
+        feed.projected = true;
+        feed.projectedFrom = projected.stable ? feed.frame.entries : undefined;
+        return;
+      }
+      if (!alreadyProjectedOnOpen) return;
+      if (!deps.connectCardStatus || !awaitsCardStatus(feed.entries)) return;
+      const conversation = await deps.conversation(feed.botId);
+      const view = await conversation.context(BACKGROUND_CONTEXT);
+      const baseEntries = projectBotTranscript(view.entries, feed.transcriptCheckpoint);
+      feed.baseEntries = baseEntries;
+      feed.baseEntriesRef = view.entries;
+      applyEntries(feed, await resolveCards(feed, baseEntries));
       feed.projectedFrom = undefined;
     });
   }
@@ -1552,7 +2058,8 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
 
   async function closeIfUnwatched(feed: Feed): Promise<void> {
     if (feed.runActive) return;
-    if ((subscribers.get(feed.botId)?.size ?? 0) > 0) return;
+    if (hasUiViewers(feed.botId)) return;
+    if ((runObservers.get(feed.botId)?.size ?? 0) > 0) return;
     await stopFeed(feed);
   }
 
@@ -1615,24 +2122,57 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
   return {
     async subscribe(botId, sink) {
       const subscriber: Subscriber = { sink, pending: [], overflowed: false, scheduled: false, closed: false };
+      attachingSubscribers.set(botId, (attachingSubscribers.get(botId) ?? 0) + 1);
+      try {
+        const hadProjectedFeed = feeds.get(botId)?.projected === true;
+        const feed = await openFeed(botId);
+        // Project deferred frames on first attach; skip full reproject unless a connect card is pending.
+        await ensureProjected(feed, hadProjectedFeed).catch((error) => report(botId, error));
+        // A question, hand-off or access request opened or settled while no feed was open is caught up here.
+        await syncQuestion(feed).catch((error) => report(botId, error));
+        await syncHandoff(feed).catch((error) => report(botId, error));
+        await syncAccessRequest(feed).catch((error) => report(botId, error));
+        await syncPlan(feed).catch((error) => report(botId, error));
+        let set = subscribers.get(botId);
+        if (!set) subscribers.set(botId, (set = new Set()));
+        set.add(subscriber);
+        return {
+          snapshot: snapshotOf(feed),
+          unsubscribe() {
+            subscriber.closed = true;
+            const current = subscribers.get(botId);
+            current?.delete(subscriber);
+            if (current && current.size === 0) subscribers.delete(botId);
+            const live = feeds.get(botId);
+            if (live) {
+              if (!hasUiViewers(botId)) {
+                live.projected = false;
+                live.projectedFrom = undefined;
+                live.observedEntries = live.frame.entries;
+              }
+              void closeIfUnwatched(live);
+            }
+          },
+        };
+      } finally {
+        const remaining = (attachingSubscribers.get(botId) ?? 1) - 1;
+        if (remaining <= 0) attachingSubscribers.delete(botId);
+        else attachingSubscribers.set(botId, remaining);
+      }
+    },
+
+    async observeRun(botId, onProgress) {
       const feed = await openFeed(botId);
-      // A new subscriber gets current connect-card statuses, not the feed's last view.
-      await reproject(feed).catch((error) => report(botId, error));
-      // A question, hand-off or access request opened or settled while no feed was open is caught up here.
-      await syncQuestion(feed).catch((error) => report(botId, error));
-      await syncHandoff(feed).catch((error) => report(botId, error));
-      await syncAccessRequest(feed).catch((error) => report(botId, error));
-      await syncPlan(feed).catch((error) => report(botId, error));
-      let set = subscribers.get(botId);
-      if (!set) subscribers.set(botId, (set = new Set()));
-      set.add(subscriber);
+      await feed.queue;
+      let set = runObservers.get(botId);
+      if (!set) runObservers.set(botId, (set = new Set()));
+      set.add(onProgress);
       return {
-        snapshot: snapshotOf(feed),
+        queued: feed.queued.length,
         unsubscribe() {
-          subscriber.closed = true;
-          const current = subscribers.get(botId);
-          current?.delete(subscriber);
-          if (current && current.size === 0) subscribers.delete(botId);
+          const current = runObservers.get(botId);
+          current?.delete(onProgress);
+          if (current && current.size === 0) runObservers.delete(botId);
           const live = feeds.get(botId);
           if (live) void closeIfUnwatched(live);
         },
@@ -1720,7 +2260,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
 
     async refresh(botId) {
       const feed = feeds.get(botId);
-      if (!feed || feed.ended) return;
+      if (!feed || feed.ended || !feed.projected) return;
       await reproject(feed);
     },
 
@@ -1762,17 +2302,27 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       const feed = feeds.get(botId);
       if (feed && !feed.ended) {
         await feed.queue;
-        const preview = botTranscriptPreview(feed.entries);
-        const lastTurnEnd = botLastTurnEnd(feed.entries);
+        if (feed.projected) {
+          const preview = botTranscriptPreview(feed.entries);
+          const lastTurnEnd = botLastTurnEnd(feed.entries);
+          return {
+            botId,
+            preview: preview?.text ?? null,
+            updatedAt: preview?.at ?? null,
+            state: feed.state,
+            needsYou: await needsYouNow(botId),
+            lastReplyAt: botLastReplyAt(feed.entries),
+            recentReplyAt: botRecentReplyTimes(feed.entries),
+            ...(lastTurnEnd ? { lastTurnEnd } : {}),
+          };
+        }
+        const conversation = await deps.conversation(botId);
+        const transcript = await transcriptSummary(botId, conversation);
         return {
           botId,
-          preview: preview?.text ?? null,
-          updatedAt: preview?.at ?? null,
+          ...transcript,
           state: feed.state,
           needsYou: await needsYouNow(botId),
-          lastReplyAt: botLastReplyAt(feed.entries),
-          recentReplyAt: botRecentReplyTimes(feed.entries),
-          ...(lastTurnEnd ? { lastTurnEnd } : {}),
         };
       }
       const state = await deps.state(botId);
@@ -1797,6 +2347,10 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         for (const subscriber of set) subscriber.closed = true;
         subscribers.delete(id);
         lastSeq.delete(id);
+      }
+      for (const id of [...runObservers.keys()]) {
+        if (botId !== undefined && id !== botId) continue;
+        runObservers.delete(id);
       }
       await Promise.all(targets.map(stopFeed));
     },

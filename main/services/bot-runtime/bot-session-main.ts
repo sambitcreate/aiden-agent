@@ -88,7 +88,7 @@ import { toolApprovalRules } from "../tool-approval-rules-main.js";
 import { wireBotAttention } from "./bot-attention.js";
 import { botQuestions } from "./bot-questions-main.js";
 import { botRunStalls, createBotRunWatchdog } from "./bot-run-watchdog.js";
-import { checkBotTurnClaims } from "./bot-claim-check.js";
+import { checkBotTurnClaims, projectNewestBotTurnEntries } from "./bot-claim-check.js";
 import { commitmentReviewExtras } from "../bot-commitments/commitments-main.js";
 import { renderBotLessons } from "../bot-lessons/prompt.js";
 import {
@@ -1055,17 +1055,14 @@ function watchRun(botId: string, state: BotSessionState): void {
     })
     .catch(() => undefined);
   void botLiveProjection()
-    .subscribe(botId, {
-      send: (event) => {
-        run.at = Date.now();
-        if (event.type === "queued") run.queued = event.queued.length;
-        if (event.type === "snapshot") run.queued = event.snapshot.queued.length;
-      },
+    .observeRun(botId, ({ queued }) => {
+      run.at = Date.now();
+      run.queued = queued;
     })
-    .then((subscription) => {
-      run.queued = subscription.snapshot.queued.length;
-      if (watchedRuns.get(botId) === run) run.unsubscribe = () => subscription.unsubscribe();
-      else subscription.unsubscribe();
+    .then((observation) => {
+      run.queued = observation.queued;
+      if (watchedRuns.get(botId) === run) run.unsubscribe = () => observation.unsubscribe();
+      else observation.unsubscribe();
     })
     .catch((error: unknown) => logger.warn("bots", `Bot ${botId} run watch did not start.`, error));
 }
@@ -1107,18 +1104,15 @@ const runWatchdog = createBotRunWatchdog({
 });
 
 /**
- * The claim check on a Bot's newest turn, read from its projected transcript.
- * Connector tools are told by the Bot's real MCP tool names.
+ * The claim check on a Bot's newest turn, read from its bounded descending
+ * turn slice. Connector tools are told by the Bot's real MCP tool names.
  */
 export async function botTurnClaims(botId: string): Promise<{ stepIds: string[]; toolNames: string[] } | undefined> {
-  const subscription = await botLiveProjection().subscribe(botId, { send: () => undefined });
-  try {
-    const connectors = toolSources.mcpToolNames(botId);
-    const result = checkBotTurnClaims(subscription.snapshot.entries, { isConnectorTool: (name) => connectors.has(name) });
-    return result ? { stepIds: result.claimCheck.stepIds, toolNames: result.toolNames } : undefined;
-  } finally {
-    subscription.unsubscribe();
-  }
+  const conversation = await (await botSessionRuntime()).conversation(botId);
+  const entries = await projectNewestBotTurnEntries(conversation);
+  const connectors = toolSources.mcpToolNames(botId);
+  const result = checkBotTurnClaims(entries, { isConnectorTool: (name) => connectors.has(name) });
+  return result ? { stepIds: result.claimCheck.stepIds, toolNames: result.toolNames } : undefined;
 }
 
 /** Keep waiting on a stuck-run card: another full window before asking again. */
