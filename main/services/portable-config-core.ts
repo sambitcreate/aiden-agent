@@ -24,10 +24,16 @@ import { parseQuickChatDefaultPersistence } from "../../renderer/shared/quick-ch
 // Platform-independent by design: both roots are injected, so the whole
 // migration is exercisable against temp directories without Electron.
 
+import type { BigIntStats } from "node:fs";
 import * as fs from "fs/promises";
+import * as os from "node:os";
 import * as path from "path";
 import { randomUUID } from "node:crypto";
-import { ensurePrivateDirectory, hardenPrivateFile } from "./private-storage.js";
+import {
+  ensurePrivateDirectoryAsync,
+  hardenPrivateFileAsync,
+  type PrivateDirectoryResolution,
+} from "./private-storage.js";
 import { DataStore, DataStoreExternalChangeError, isDataStoreRecoveryFile } from "./data-store.js";
 import {
   isGenerationThinkingLevel,
@@ -1336,15 +1342,343 @@ export function createPortableConfigStores(
   } = {},
 ) {
   const archivePublicationPaths = new Set<string>();
+
+  interface ProtectAncestorSignature {
+    path: string;
+    dev: bigint;
+    ino: bigint;
+    mode: bigint;
+    uid: bigint;
+  }
+
+  interface ProtectSymlinkHopSignature {
+    path: string;
+    target: string;
+    requireCurrentUser: boolean;
+    dev: bigint;
+    ino: bigint;
+    mode: bigint;
+    uid: bigint;
+    size: bigint;
+    mtimeNs: bigint;
+    ctimeNs: bigint;
+    birthtimeNs: bigint;
+  }
+
+  interface ProtectTraversedDirSignature {
+    path: string;
+    dev: bigint;
+    ino: bigint;
+  }
+
+  interface ProtectFileSignature {
+    path: string;
+    dev: bigint;
+    ino: bigint;
+    mtimeNs: bigint;
+    ctimeNs: bigint;
+  }
+
+  interface ProtectSignature {
+    root: string;
+    canonical: string;
+    homeDir: string;
+    uid: bigint;
+    ancestors: readonly ProtectAncestorSignature[];
+    symlinkHops: readonly ProtectSymlinkHopSignature[];
+    traversedDirectories: readonly ProtectTraversedDirSignature[];
+    dir: ProtectFileSignature;
+    configFile:
+      | { present: false; path: string }
+      | ({ present: true } & ProtectFileSignature);
+    secondaryFiles: readonly ProtectFileSignature[];
+  }
+
+  async function lstatMaybeMissing(targetPath: string): Promise<BigIntStats | null> {
+    try {
+      return await fs.lstat(targetPath, { bigint: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  }
+
+  function isSafeAncestorStat(st: BigIntStats, uid: bigint): boolean {
+    return (
+      st.isDirectory() &&
+      !st.isSymbolicLink() &&
+      (st.uid === 0n || st.uid === uid) &&
+      ((st.mode & 0o022n) === 0n || (st.mode & 0o1000n) !== 0n)
+    );
+  }
+
+  function isValidSymlinkHopStat(
+    st: BigIntStats,
+    requireCurrentUser: boolean,
+    uid: bigint,
+  ): boolean {
+    return (
+      st.isSymbolicLink() &&
+      (requireCurrentUser ? st.uid === uid : st.uid === 0n || st.uid === uid)
+    );
+  }
+
+  function isPrivateDirStat(st: BigIntStats, uid: bigint): boolean {
+    return (
+      st.isDirectory() &&
+      !st.isSymbolicLink() &&
+      st.uid === uid &&
+      (st.mode & 0o7777n) === 0o700n
+    );
+  }
+
+  function isPrivateSingleLinkFileStat(st: BigIntStats, uid: bigint): boolean {
+    return (
+      st.isFile() &&
+      !st.isSymbolicLink() &&
+      st.uid === uid &&
+      (st.mode & 0o7777n) === 0o600n &&
+      st.nlink === 1n
+    );
+  }
+
+  async function verifyProtectSignature(
+    sig: ProtectSignature,
+    root: string,
+    uid: bigint,
+  ): Promise<boolean> {
+    if (sig.root !== root || sig.uid !== uid || sig.homeDir !== os.homedir()) {
+      return false;
+    }
+    try {
+      const [
+        ancestorStats,
+        symlinkStats,
+        symlinkTargets,
+        traversedStats,
+        dirStat,
+        configStat,
+        secondaryStats,
+      ] = await Promise.all([
+        Promise.all(sig.ancestors.map((entry) => fs.lstat(entry.path, { bigint: true }))),
+        Promise.all(sig.symlinkHops.map((entry) => fs.lstat(entry.path, { bigint: true }))),
+        Promise.all(sig.symlinkHops.map((entry) => fs.readlink(entry.path))),
+        Promise.all(
+          sig.traversedDirectories.map((entry) => fs.lstat(entry.path, { bigint: true })),
+        ),
+        fs.lstat(sig.dir.path, { bigint: true }),
+        lstatMaybeMissing(sig.configFile.path),
+        Promise.all(sig.secondaryFiles.map((entry) => fs.lstat(entry.path, { bigint: true }))),
+      ]);
+      for (let i = 0; i < sig.ancestors.length; i += 1) {
+        const expected = sig.ancestors[i]!;
+        const actual = ancestorStats[i]!;
+        if (
+          !isSafeAncestorStat(actual, uid) ||
+          actual.dev !== expected.dev ||
+          actual.ino !== expected.ino ||
+          actual.mode !== expected.mode ||
+          actual.uid !== expected.uid
+        ) {
+          return false;
+        }
+      }
+      for (let i = 0; i < sig.symlinkHops.length; i += 1) {
+        const expected = sig.symlinkHops[i]!;
+        const actual = symlinkStats[i]!;
+        if (
+          symlinkTargets[i] !== expected.target ||
+          !isValidSymlinkHopStat(actual, expected.requireCurrentUser, uid) ||
+          actual.dev !== expected.dev ||
+          actual.ino !== expected.ino ||
+          actual.mode !== expected.mode ||
+          actual.uid !== expected.uid ||
+          actual.size !== expected.size ||
+          actual.mtimeNs !== expected.mtimeNs ||
+          actual.ctimeNs !== expected.ctimeNs ||
+          actual.birthtimeNs !== expected.birthtimeNs
+        ) {
+          return false;
+        }
+      }
+      for (let i = 0; i < sig.traversedDirectories.length; i += 1) {
+        const expected = sig.traversedDirectories[i]!;
+        const actual = traversedStats[i]!;
+        if (
+          !actual.isDirectory() ||
+          actual.isSymbolicLink() ||
+          actual.dev !== expected.dev ||
+          actual.ino !== expected.ino
+        ) {
+          return false;
+        }
+      }
+      if (
+        !isPrivateDirStat(dirStat, uid) ||
+        dirStat.dev !== sig.dir.dev ||
+        dirStat.ino !== sig.dir.ino ||
+        dirStat.mtimeNs !== sig.dir.mtimeNs ||
+        dirStat.ctimeNs !== sig.dir.ctimeNs
+      ) {
+        return false;
+      }
+      if (!sig.configFile.present) {
+        if (configStat !== null) return false;
+      } else if (
+        configStat === null ||
+        !isPrivateSingleLinkFileStat(configStat, uid) ||
+        configStat.dev !== sig.configFile.dev ||
+        configStat.ino !== sig.configFile.ino ||
+        configStat.mtimeNs !== sig.configFile.mtimeNs ||
+        configStat.ctimeNs !== sig.configFile.ctimeNs
+      ) {
+        return false;
+      }
+      for (let i = 0; i < sig.secondaryFiles.length; i += 1) {
+        const expected = sig.secondaryFiles[i]!;
+        const actual = secondaryStats[i]!;
+        if (
+          !isPrivateSingleLinkFileStat(actual, uid) ||
+          actual.dev !== expected.dev ||
+          actual.ino !== expected.ino ||
+          actual.mtimeNs !== expected.mtimeNs ||
+          actual.ctimeNs !== expected.ctimeNs
+        ) {
+          return false;
+        }
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function captureProtectSignature(
+    root: string,
+    resolution: PrivateDirectoryResolution,
+    secondaryPaths: readonly string[],
+    uid: bigint,
+  ): Promise<ProtectSignature | undefined> {
+    const configPath = path.join(root, PORTABLE_CONFIG_FILENAME);
+    try {
+      const [
+        ancestorStats,
+        symlinkStats,
+        traversedStats,
+        dirStat,
+        configStat,
+        secondaryStats,
+      ] = await Promise.all([
+        Promise.all(resolution.ancestors.map((entry) => fs.lstat(entry, { bigint: true }))),
+        Promise.all(
+          resolution.symlinkHops.map((entry) => fs.lstat(entry.path, { bigint: true })),
+        ),
+        Promise.all(
+          resolution.traversedDirectories.map((entry) => fs.lstat(entry, { bigint: true })),
+        ),
+        fs.lstat(resolution.canonical, { bigint: true }),
+        lstatMaybeMissing(configPath),
+        Promise.all(secondaryPaths.map((entry) => fs.lstat(entry, { bigint: true }))),
+      ]);
+      if (!isPrivateDirStat(dirStat, uid)) return undefined;
+      const ancestors: ProtectAncestorSignature[] = [];
+      for (let i = 0; i < resolution.ancestors.length; i += 1) {
+        const entryPath = resolution.ancestors[i]!;
+        const st = ancestorStats[i]!;
+        if (!isSafeAncestorStat(st, uid)) return undefined;
+        ancestors.push({
+          path: entryPath,
+          dev: st.dev,
+          ino: st.ino,
+          mode: st.mode,
+          uid: st.uid,
+        });
+      }
+      const symlinkHops: ProtectSymlinkHopSignature[] = [];
+      for (let i = 0; i < resolution.symlinkHops.length; i += 1) {
+        const hop = resolution.symlinkHops[i]!;
+        const st = symlinkStats[i]!;
+        if (!isValidSymlinkHopStat(st, hop.requireCurrentUser, uid)) return undefined;
+        symlinkHops.push({
+          path: hop.path,
+          target: hop.target,
+          requireCurrentUser: hop.requireCurrentUser,
+          dev: st.dev,
+          ino: st.ino,
+          mode: st.mode,
+          uid: st.uid,
+          size: st.size,
+          mtimeNs: st.mtimeNs,
+          ctimeNs: st.ctimeNs,
+          birthtimeNs: st.birthtimeNs,
+        });
+      }
+      const traversedDirectories: ProtectTraversedDirSignature[] = [];
+      for (let i = 0; i < resolution.traversedDirectories.length; i += 1) {
+        const entryPath = resolution.traversedDirectories[i]!;
+        const st = traversedStats[i]!;
+        if (!st.isDirectory() || st.isSymbolicLink()) return undefined;
+        traversedDirectories.push({ path: entryPath, dev: st.dev, ino: st.ino });
+      }
+      let configFile: ProtectSignature["configFile"];
+      if (configStat === null) {
+        configFile = { present: false, path: configPath };
+      } else {
+        if (!isPrivateSingleLinkFileStat(configStat, uid)) return undefined;
+        configFile = {
+          present: true,
+          path: configPath,
+          dev: configStat.dev,
+          ino: configStat.ino,
+          mtimeNs: configStat.mtimeNs,
+          ctimeNs: configStat.ctimeNs,
+        };
+      }
+      const secondaryFiles: ProtectFileSignature[] = [];
+      for (let i = 0; i < secondaryPaths.length; i += 1) {
+        const entryPath = secondaryPaths[i]!;
+        const st = secondaryStats[i]!;
+        if (!isPrivateSingleLinkFileStat(st, uid)) return undefined;
+        secondaryFiles.push({
+          path: entryPath,
+          dev: st.dev,
+          ino: st.ino,
+          mtimeNs: st.mtimeNs,
+          ctimeNs: st.ctimeNs,
+        });
+      }
+      return {
+        root,
+        canonical: resolution.canonical,
+        homeDir: os.homedir(),
+        uid,
+        ancestors,
+        symlinkHops,
+        traversedDirectories,
+        dir: {
+          path: resolution.canonical,
+          dev: dirStat.dev,
+          ino: dirStat.ino,
+          mtimeNs: dirStat.mtimeNs,
+          ctimeNs: dirStat.ctimeNs,
+        },
+        configFile,
+        secondaryFiles,
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
   async function protectConfigDirectory(
     root: string,
     portableDirectory: boolean,
     ownedPublicationPaths: readonly string[] = [],
-  ): Promise<string[]> {
+  ): Promise<{ resolution: PrivateDirectoryResolution; secondaryPaths: string[] }> {
     const ownedPaths = [...ownedPublicationPaths, ...archivePublicationPaths];
-    ensurePrivateDirectory(root);
+    const resolution = await ensurePrivateDirectoryAsync(root);
     const file = path.join(root, PORTABLE_CONFIG_FILENAME);
-    hardenPrivateFile(file, ownedPaths);
+    await hardenPrivateFileAsync(file, ownedPaths);
     const protectedSecondary: string[] = [];
     for (const entry of await fs.readdir(root)) {
       const archive = `${LOCAL_CONFIG_FILENAME}${LEGACY_CONFIG_ARCHIVE_SUFFIX}`;
@@ -1356,130 +1690,65 @@ export function createPortableConfigStores(
       const isStaged = /^\.config\.json(?:\.pre-aiden-dir(?:\.recovery-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})?)?\.[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.tmp$/u.test(entry);
       if (isArchive || isCorrupt || isConflict || isStaged || isDataStoreRecoveryFile(entry, file)) {
         const secondaryPath = path.join(root, entry);
-        hardenPrivateFile(secondaryPath, ownedPaths);
+        await hardenPrivateFileAsync(secondaryPath, ownedPaths);
         protectedSecondary.push(secondaryPath);
       }
     }
-    return protectedSecondary;
+    return { resolution, secondaryPaths: protectedSecondary };
   }
-  const protectPortable = async (ownedPaths: readonly string[] = []): Promise<void> => {
-    await protectConfigDirectory(portableRoot(), true, ownedPaths);
-  };
-  let lastLocalProtectSignature:
-    | {
-        root: string;
-        dirDev: bigint;
-        dirIno: bigint;
-        dirMtimeNs: bigint;
-        dirCtimeNs: bigint;
-        fileDev: bigint;
-        fileIno: bigint;
-        fileMtimeNs: bigint;
-        fileCtimeNs: bigint;
-        secondaryPaths: readonly string[];
+
+  function createCachedProtector(
+    resolveRoot: () => Promise<string> | string,
+    portableDirectory: boolean,
+  ): (ownedPaths?: readonly string[]) => Promise<void> {
+    let cachedSignature: ProtectSignature | undefined;
+    let invalidationEpoch = 0;
+    return async (ownedPaths: readonly string[] = []): Promise<void> => {
+      const root = await resolveRoot();
+      const uid = typeof process.getuid === "function" ? BigInt(process.getuid()) : undefined;
+      const canUseCache =
+        process.platform !== "win32" &&
+        uid !== undefined &&
+        ownedPaths.length === 0 &&
+        archivePublicationPaths.size === 0;
+      if (!canUseCache) {
+        cachedSignature = undefined;
+        invalidationEpoch += 1;
+        await protectConfigDirectory(root, portableDirectory, ownedPaths);
+        return;
       }
-    | undefined;
-  const protectLocal = async (ownedPaths: readonly string[] = []): Promise<void> => {
-    const root = localRoot ? localRoot() : (await import("../platform.js")).app.getPath("userData");
-    const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-    const configPath = path.join(root, LOCAL_CONFIG_FILENAME);
-    if (
-      process.platform !== "win32" &&
-      uid !== undefined &&
-      ownedPaths.length === 0 &&
-      archivePublicationPaths.size === 0 &&
-      lastLocalProtectSignature &&
-      lastLocalProtectSignature.root === root
-    ) {
-      // Keep full ancestor/alias verification on every call; skip only the
-      // `readdir(userData)` scan and redundant `open`/`fchmod` hardening when
-      // `root`, `config.json`, and every known secondary file are untouched.
-      ensurePrivateDirectory(root);
-      try {
-        const [dirStat, fileStat, ...secondaryStats] = await Promise.all([
-          fs.lstat(root, { bigint: true }),
-          fs.lstat(configPath, { bigint: true }),
-          ...lastLocalProtectSignature.secondaryPaths.map((secondary) =>
-            fs.lstat(secondary, { bigint: true }),
-          ),
-        ]);
-        const secondaryClean = secondaryStats.every(
-          (st) =>
-            st.isFile() &&
-            !st.isSymbolicLink() &&
-            Number(st.uid) === uid &&
-            (Number(st.mode) & 0o777) === 0o600 &&
-            st.nlink === 1n,
-        );
-        if (
-          secondaryClean &&
-          dirStat.isDirectory() &&
-          !dirStat.isSymbolicLink() &&
-          Number(dirStat.uid) === uid &&
-          (Number(dirStat.mode) & 0o777) === 0o700 &&
-          dirStat.dev === lastLocalProtectSignature.dirDev &&
-          dirStat.ino === lastLocalProtectSignature.dirIno &&
-          dirStat.mtimeNs === lastLocalProtectSignature.dirMtimeNs &&
-          dirStat.ctimeNs === lastLocalProtectSignature.dirCtimeNs &&
-          fileStat.isFile() &&
-          !fileStat.isSymbolicLink() &&
-          Number(fileStat.uid) === uid &&
-          (Number(fileStat.mode) & 0o777) === 0o600 &&
-          fileStat.nlink === 1n &&
-          fileStat.dev === lastLocalProtectSignature.fileDev &&
-          fileStat.ino === lastLocalProtectSignature.fileIno &&
-          fileStat.mtimeNs === lastLocalProtectSignature.fileMtimeNs &&
-          fileStat.ctimeNs === lastLocalProtectSignature.fileCtimeNs
-        ) {
-          return;
+      if (cachedSignature && (await verifyProtectSignature(cachedSignature, root, uid))) {
+        return;
+      }
+      cachedSignature = undefined;
+      const epochAtStart = invalidationEpoch;
+      const { resolution, secondaryPaths } = await protectConfigDirectory(
+        root,
+        portableDirectory,
+        ownedPaths,
+      );
+      if (
+        epochAtStart === invalidationEpoch &&
+        ownedPaths.length === 0 &&
+        archivePublicationPaths.size === 0
+      ) {
+        const freshUid =
+          typeof process.getuid === "function" ? BigInt(process.getuid()) : undefined;
+        if (freshUid === uid) {
+          const captured = await captureProtectSignature(root, resolution, secondaryPaths, uid);
+          if (epochAtStart === invalidationEpoch && archivePublicationPaths.size === 0) {
+            cachedSignature = captured;
+          }
         }
-      } catch {
-        // Fall through to full directory & file hardening on any stat change/error.
       }
-    }
-    const secondaryPaths = await protectConfigDirectory(root, false, ownedPaths);
-    if (
-      process.platform !== "win32" &&
-      uid !== undefined &&
-      ownedPaths.length === 0 &&
-      archivePublicationPaths.size === 0
-    ) {
-      try {
-        const [dirStat, fileStat] = await Promise.all([
-          fs.lstat(root, { bigint: true }),
-          fs.lstat(configPath, { bigint: true }),
-        ]);
-        if (
-          dirStat.isDirectory() &&
-          !dirStat.isSymbolicLink() &&
-          Number(dirStat.uid) === uid &&
-          (Number(dirStat.mode) & 0o777) === 0o700 &&
-          fileStat.isFile() &&
-          !fileStat.isSymbolicLink() &&
-          Number(fileStat.uid) === uid &&
-          (Number(fileStat.mode) & 0o777) === 0o600 &&
-          fileStat.nlink === 1n
-        ) {
-          lastLocalProtectSignature = {
-            root,
-            dirDev: dirStat.dev,
-            dirIno: dirStat.ino,
-            dirMtimeNs: dirStat.mtimeNs,
-            dirCtimeNs: dirStat.ctimeNs,
-            fileDev: fileStat.dev,
-            fileIno: fileStat.ino,
-            fileMtimeNs: fileStat.mtimeNs,
-            fileCtimeNs: fileStat.ctimeNs,
-            secondaryPaths,
-          };
-          return;
-        }
-      } catch {
-        // Uncached until config.json exists and passes hardening.
-      }
-    }
-    lastLocalProtectSignature = undefined;
-  };
+    };
+  }
+
+  const protectPortable = createCachedProtector(() => portableRoot(), true);
+  const protectLocal = createCachedProtector(
+    async () => (localRoot ? localRoot() : (await import("../platform.js")).app.getPath("userData")),
+    false,
+  );
   const portable = new DataStore<PortableConfigShape>(
     PORTABLE_CONFIG_FILENAME,
     emptyPortableConfig(),

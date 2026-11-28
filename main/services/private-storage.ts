@@ -1,8 +1,23 @@
 /** POSIX protection for dedicated Aiden state directories. Never chmod ancestors. */
 import type { Stats } from "node:fs";
 import { constants, closeSync, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { lstat, mkdir, open, readlink, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+
+export interface PrivateDirectorySymlinkHop {
+  path: string;
+  target: string;
+  requireCurrentUser: boolean;
+}
+
+export interface PrivateDirectoryResolution {
+  requested: string;
+  canonical: string;
+  ancestors: string[];
+  symlinkHops: PrivateDirectorySymlinkHop[];
+  traversedDirectories: string[];
+}
 
 function unsafe(target: string): Error {
   return new Error(`Aiden storage must be a private directory or single-link file owned by this user: ${target}`);
@@ -96,7 +111,7 @@ export function ensurePrivateDirectory(target: string, existing: "harden" | "rej
     if (!opened.isDirectory() || opened.dev !== before.dev || opened.ino !== before.ino) throw unsafe(target);
     if (process.platform !== "win32") {
       if (existing === "reject" && (opened.mode & 0o077) !== 0) throw unsafe(target);
-      fchmodSync(fd, 0o700);
+      if ((opened.mode & 0o7777) !== 0o700) fchmodSync(fd, 0o700);
     }
     const after = lstatSync(absolute);
     if (after.isSymbolicLink() || after.dev !== opened.dev || after.ino !== opened.ino) throw unsafe(target);
@@ -128,8 +143,204 @@ export function hardenPrivateFile(target: string, ownedPublicationPaths: readonl
     const opened = fstatSync(fd);
     verifyOwner(opened, target);
     if (!opened.isFile() || !validLinks(opened) || opened.dev !== before.dev || opened.ino !== before.ino) throw unsafe(target);
-    if (process.platform !== "win32") fchmodSync(fd, 0o600);
+    if (process.platform !== "win32" && (opened.mode & 0o7777) !== 0o600) fchmodSync(fd, 0o600);
     const after = lstatSync(target);
     if (after.dev !== opened.dev || after.ino !== opened.ino || !validLinks(after)) throw unsafe(target);
   } finally { closeSync(fd); }
+}
+
+async function verifyDirectoryChainAsync(directory: string, visitedAncestors?: Set<string>): Promise<void> {
+  if (process.platform === "win32") return;
+  let parent = directory;
+  for (;;) {
+    const info = await lstat(parent);
+    const foreignOwner = process.getuid && info.uid !== 0 && info.uid !== process.getuid();
+    if (!info.isDirectory() || foreignOwner || ((info.mode & 0o022) !== 0 && (info.mode & 0o1000) === 0)) {
+      throw unsafe(parent);
+    }
+    visitedAncestors?.add(parent);
+    const next = dirname(parent);
+    if (next === parent) break;
+    parent = next;
+  }
+}
+
+async function verifyLexicalAliasesAsync(
+  requested: string,
+  ancestors: Set<string>,
+  symlinkHops: Map<string, { target: string; requireCurrentUser: boolean }>,
+  traversedDirs: Set<string>,
+): Promise<void> {
+  if (process.platform === "win32") return;
+  const parts = (value: string) => value.split(sep).filter((part) => part !== "" && part !== ".");
+  const queue = parts(requested).map((part, index, list) => ({
+    part,
+    isRequestedLeaf: index === list.length - 1,
+  }));
+  let resolved: string = sep;
+  let links = 0;
+  while (queue.length > 0) {
+    const item = queue.shift()!;
+    if (item.part === "..") {
+      resolved = dirname(resolved);
+      continue;
+    }
+    const candidate = join(resolved, item.part);
+    let info: Stats;
+    try {
+      info = await lstat(candidate);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      return;
+    }
+    if (!info.isSymbolicLink()) {
+      resolved = candidate;
+      traversedDirs.add(candidate);
+      continue;
+    }
+    if (++links > 40) throw unsafe(requested);
+    if (process.getuid && info.uid !== 0 && info.uid !== process.getuid()) throw unsafe(candidate);
+    await verifyDirectoryChainAsync(resolved, ancestors);
+    const linkTarget = await readlink(candidate);
+    symlinkHops.set(candidate, {
+      target: linkTarget,
+      requireCurrentUser: Boolean(symlinkHops.get(candidate)?.requireCurrentUser || item.isRequestedLeaf),
+    });
+    if (isAbsolute(linkTarget)) resolved = sep;
+    queue.unshift(...parts(linkTarget).map((part) => ({ part, isRequestedLeaf: false })));
+  }
+}
+
+/** Async counterpart of `ensurePrivateDirectory` returning resolved paths for signature caching. */
+export async function ensurePrivateDirectoryAsync(
+  target: string,
+  existing: "harden" | "reject" = "harden",
+): Promise<PrivateDirectoryResolution> {
+  const requested = resolve(target);
+  if (requested === dirname(requested) || requested === resolve(homedir())) throw unsafe(target);
+  await mkdir(requested, { recursive: true, mode: 0o700 });
+  const ancestors = new Set<string>();
+  const symlinkHops = new Map<string, { target: string; requireCurrentUser: boolean }>();
+  const traversedDirs = new Set<string>();
+  await verifyLexicalAliasesAsync(requested, ancestors, symlinkHops, traversedDirs);
+  const link = await lstat(requested);
+  let absolute = requested;
+  if (link.isSymbolicLink()) {
+    verifyOwner(link, target);
+    absolute = await realpath(requested);
+    if (absolute === dirname(absolute)) throw unsafe(target);
+  }
+  const before = await lstat(absolute);
+  if (!before.isDirectory() || before.isSymbolicLink()) throw unsafe(target);
+  verifyOwner(before, target);
+  const homePath = homedir();
+  const [home, canonical, canonicalHome] = await Promise.all([
+    stat(homePath),
+    realpath(absolute),
+    realpath(homePath),
+  ]);
+  const sameHomePath =
+    process.platform === "win32"
+      ? canonical.toLowerCase() === canonicalHome.toLowerCase()
+      : canonical === canonicalHome;
+  if (
+    sameHomePath ||
+    (before.ino !== 0 && home.ino !== 0 && before.dev === home.dev && before.ino === home.ino)
+  ) {
+    throw unsafe(target);
+  }
+  await verifyDirectoryChainAsync(dirname(canonical), ancestors);
+  const handle = await open(
+    absolute,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY,
+  );
+  try {
+    const opened = await handle.stat();
+    verifyOwner(opened, target);
+    if (!opened.isDirectory() || opened.dev !== before.dev || opened.ino !== before.ino) {
+      throw unsafe(target);
+    }
+    if (process.platform !== "win32") {
+      if (existing === "reject" && (opened.mode & 0o077) !== 0) throw unsafe(target);
+      if ((opened.mode & 0o7777) !== 0o700) await handle.chmod(0o700);
+    }
+    const after = await lstat(absolute);
+    if (after.isSymbolicLink() || after.dev !== opened.dev || after.ino !== opened.ino) {
+      throw unsafe(target);
+    }
+    if (absolute !== requested && (await realpath(requested)) !== absolute) throw unsafe(target);
+  } finally {
+    await handle.close();
+  }
+  return {
+    requested,
+    canonical,
+    ancestors: [...ancestors],
+    symlinkHops: [...symlinkHops.entries()].map(([hopPath, hop]) => ({
+      path: hopPath,
+      target: hop.target,
+      requireCurrentUser: hop.requireCurrentUser,
+    })),
+    traversedDirectories: [...traversedDirs].filter(
+      (dir) => dir !== canonical && !ancestors.has(dir),
+    ),
+  };
+}
+
+/** Async counterpart of `hardenPrivateFile`. */
+export async function hardenPrivateFileAsync(
+  target: string,
+  ownedPublicationPaths: readonly string[] = [],
+): Promise<void> {
+  const resolvedTarget = resolve(target);
+  const uniqueOwned = [...new Set(ownedPublicationPaths)].filter(
+    (other) => resolve(other) !== resolvedTarget,
+  );
+  const validLinks = async (info: Stats): Promise<boolean> => {
+    let expected = 1;
+    for (const other of uniqueOwned) {
+      try {
+        const alias = await lstat(other);
+        if (alias.isFile() && !alias.isSymbolicLink() && alias.dev === info.dev && alias.ino === info.ino) {
+          expected++;
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    return expected <= 2 && info.nlink === expected;
+  };
+  let before: Stats;
+  try {
+    before = await lstat(target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  if (!before.isFile() || before.isSymbolicLink() || !(await validLinks(before))) {
+    throw unsafe(target);
+  }
+  verifyOwner(before, target);
+  const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const opened = await handle.stat();
+    verifyOwner(opened, target);
+    if (
+      !opened.isFile() ||
+      !(await validLinks(opened)) ||
+      opened.dev !== before.dev ||
+      opened.ino !== before.ino
+    ) {
+      throw unsafe(target);
+    }
+    if (process.platform !== "win32" && (opened.mode & 0o7777) !== 0o600) {
+      await handle.chmod(0o600);
+    }
+    const after = await lstat(target);
+    if (after.dev !== opened.dev || after.ino !== opened.ino || !(await validLinks(after))) {
+      throw unsafe(target);
+    }
+  } finally {
+    await handle.close();
+  }
 }

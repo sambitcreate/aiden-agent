@@ -1,4 +1,9 @@
-import { ensurePrivateDirectory } from "./private-storage.js";
+import {
+  ensurePrivateDirectory,
+  ensurePrivateDirectoryAsync,
+  hardenPrivateFile,
+  hardenPrivateFileAsync,
+} from "./private-storage.js";
 // Migration tests for the ~/.aiden split.
 //
 // The load-bearing guarantee here is negative: once an install has migrated,
@@ -6,10 +11,13 @@ import { ensurePrivateDirectory } from "./private-storage.js";
 // pre-migration snapshot. See "deleting the portable file after migration" below.
 
 import assert from "node:assert/strict";
-import * as fs from "node:fs/promises";
+import fsSync from "node:fs";
+import fsPromises, * as fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
+import { createConfigStore, type SecretsPort } from "./config-store-core.js";
 import {
   LEGACY_CONFIG_ARCHIVE_SUFFIX,
   LOCAL_CONFIG_FILENAME,
@@ -1681,4 +1689,367 @@ test("runtime settings keep the Bot bubble switches only when they are booleans"
   const handEdited = runtimeSettingsFrom({ botBubblesEnabled: "no", botBubblesFloatOverApps: 0 } as never);
   assert.equal(handEdited.botBubblesEnabled, undefined, "a non-boolean reads as unset, which means on");
   assert.equal(handEdited.botBubblesFloatOverApps, undefined);
+});
+
+test("private-storage helpers preserve ctimeNs when modes already equal 0o700 and 0o600", { skip: process.platform === "win32" }, async (t) => {
+  const r = await roots(t);
+  await fs.chmod(r.localRoot, 0o755);
+  await fs.mkdir(r.portableRoot, { mode: 0o755 });
+  await fs.chmod(r.portableRoot, 0o755);
+  await fs.writeFile(r.portableFile, '{"skills":[]}', "utf8");
+  await fs.chmod(r.portableFile, 0o644);
+
+  ensurePrivateDirectory(r.portableRoot);
+  hardenPrivateFile(r.portableFile);
+  assert.equal((await fs.stat(r.portableRoot)).mode & 0o7777, 0o700);
+  assert.equal((await fs.stat(r.portableFile)).mode & 0o7777, 0o600);
+
+  const dirBefore = await fs.lstat(r.portableRoot, { bigint: true });
+  const fileBefore = await fs.lstat(r.portableFile, { bigint: true });
+  await new Promise((resolve) => setTimeout(resolve, 15));
+
+  ensurePrivateDirectory(r.portableRoot);
+  hardenPrivateFile(r.portableFile);
+  await ensurePrivateDirectoryAsync(r.portableRoot);
+  await hardenPrivateFileAsync(r.portableFile);
+
+  const dirAfter = await fs.lstat(r.portableRoot, { bigint: true });
+  const fileAfter = await fs.lstat(r.portableFile, { bigint: true });
+  assert.equal(dirAfter.ctimeNs, dirBefore.ctimeNs);
+  assert.equal(fileAfter.ctimeNs, fileBefore.ctimeNs);
+
+  await fs.chmod(r.portableRoot, 0o755);
+  await fs.chmod(r.portableFile, 0o640);
+  await ensurePrivateDirectoryAsync(r.portableRoot);
+  await hardenPrivateFileAsync(r.portableFile);
+  assert.equal((await fs.stat(r.portableRoot)).mode & 0o7777, 0o700);
+  assert.equal((await fs.stat(r.portableFile)).mode & 0o7777, 0o600);
+});
+
+test("warm configStore workspace and MCP reads run zero sync fs syscalls and zero readdir scans across directories, absent configs, and owned symlinks", { skip: process.platform === "win32" }, async (t) => {
+  const emptySecrets: SecretsPort = {
+    async hasKey() {
+      return false;
+    },
+    async deleteKey() {},
+    async deleteProviderKeyWithQuarantine() {},
+    async migrateKeys() {},
+    async migrateProviderKeysWithBindings() {
+      return true;
+    },
+  };
+
+  for (const variant of ["absent-portable-config", "owned-symlink"] as const) {
+    const r = await roots(t);
+    const parentBase = path.dirname(r.portableRoot);
+    await fs.chmod(parentBase, 0o755);
+    await fs.chmod(r.localRoot, 0o755);
+
+    if (variant === "absent-portable-config") {
+      await fs.writeFile(
+        r.localFile,
+        JSON.stringify({
+          workspaces: [workspace],
+          seeded: true,
+          aidenDirMigratedAt: Date.now(),
+          webSearchProfileKind: "fresh",
+        }),
+        "utf8",
+      );
+      await fs.writeFile(
+        r.settingsFile,
+        JSON.stringify({
+          settings: {
+            approvalModeOrigin: "fresh",
+            webSearch: { version: 2, enabled: false, selectedProvider: "duckduckgo", providers: {} },
+          },
+        }),
+        "utf8",
+      );
+    } else {
+      const dotfiles = path.join(parentBase, "dotfiles", "aiden");
+      await fs.mkdir(dotfiles, { recursive: true, mode: 0o755 });
+      await fs.chmod(path.dirname(dotfiles), 0o755);
+      await fs.chmod(dotfiles, 0o755);
+      await fs.writeFile(
+        path.join(dotfiles, PORTABLE_CONFIG_FILENAME),
+        JSON.stringify({
+          providers: [],
+          providerIdAliases: {},
+          mcpServers: [{ id: "srv-1", name: "Server 1", transport: "http", url: "https://mcp.test/sse", enabled: true }],
+          skills: [],
+        }),
+        "utf8",
+      );
+      await fs.symlink(dotfiles, r.portableRoot);
+    }
+
+    const bundle = stores(r);
+    const configStore = createConfigStore(bundle, emptySecrets);
+    if (variant === "owned-symlink") {
+      await configStore.saveWorkspace(workspace);
+    }
+
+    // Warm both local and portable caches + signatures.
+    assert.equal((await configStore.getWorkspace(workspace.id))?.id, workspace.id);
+    assert.equal(
+      (await configStore.listMcpServers()).length,
+      variant === "owned-symlink" ? 1 : 0,
+    );
+    if (variant === "absent-portable-config") {
+      assert.equal(await missing(r.portableFile), true, "portable config.json stays absent");
+    }
+
+    // Also confirm first-run absent local config.json hits its cached signature.
+    const freshAbsentRoots = await roots(t);
+    await fs.chmod(path.dirname(freshAbsentRoots.portableRoot), 0o755);
+    const freshAbsentBundle = stores(freshAbsentRoots);
+    await freshAbsentBundle.local.load();
+    await freshAbsentBundle.portable.load();
+
+    let syncCalls = 0;
+    let readdirCalls = 0;
+    let openCalls = 0;
+
+    const syncMethods = [
+      "closeSync",
+      "fchmodSync",
+      "fstatSync",
+      "lstatSync",
+      "mkdirSync",
+      "openSync",
+      "readdirSync",
+      "readFileSync",
+      "readlinkSync",
+      "realpathSync",
+      "statSync",
+    ] as const;
+    const activeMocks: Array<{ mock: { restore(): void } }> = [];
+    for (const method of syncMethods) {
+      const original = fsSync[method] as (...args: unknown[]) => unknown;
+      activeMocks.push(
+        t.mock.method(fsSync, method, (...args: unknown[]) => {
+          syncCalls += 1;
+          return Reflect.apply(original, fsSync, args);
+        }),
+      );
+    }
+    const originalReaddir = fsPromises.readdir;
+    activeMocks.push(
+      t.mock.method(fsPromises, "readdir", async (...args: Parameters<typeof originalReaddir>) => {
+        readdirCalls += 1;
+        return Reflect.apply(originalReaddir, fsPromises, args);
+      }),
+    );
+    const originalOpen = fsPromises.open;
+    activeMocks.push(
+      t.mock.method(fsPromises, "open", async (...args: Parameters<typeof originalOpen>) => {
+        openCalls += 1;
+        return Reflect.apply(originalOpen, fsPromises, args);
+      }),
+    );
+    syncBuiltinESMExports();
+
+    try {
+      for (let i = 0; i < 300; i += 1) {
+        const ws = await configStore.getWorkspace(workspace.id);
+        const servers = await configStore.listMcpServers();
+        assert.equal(ws?.id, workspace.id);
+        assert.equal(servers.length, variant === "owned-symlink" ? 1 : 0);
+      }
+      await freshAbsentBundle.local.load();
+      await freshAbsentBundle.portable.load();
+
+      assert.equal(syncCalls, 0, `${variant}: expected 0 synchronous fs syscalls across 600+ warm reads`);
+      assert.equal(readdirCalls, 0, `${variant}: expected 0 fs.readdir scans across 600+ warm reads`);
+      assert.equal(openCalls, 0, `${variant}: expected 0 fs.open calls across 600+ warm reads`);
+    } finally {
+      for (const mocked of activeMocks) mocked.mock.restore();
+      syncBuiltinESMExports();
+    }
+  }
+});
+
+test("cached signatures invalidate immediately on permission changes, symlink retargets, config links, or foreign owners", { skip: process.platform === "win32" }, async (t) => {
+  const r = await roots(t);
+  const base = path.dirname(r.portableRoot);
+  const dotfilesA = path.join(base, "dotfiles-a");
+  const dotfilesB = path.join(base, "dotfiles-b");
+  await fs.mkdir(dotfilesA, { mode: 0o755 });
+  await fs.mkdir(dotfilesB, { mode: 0o755 });
+  for (const dir of [base, r.localRoot, dotfilesA, dotfilesB]) await fs.chmod(dir, 0o755);
+
+  const fileA = path.join(dotfilesA, PORTABLE_CONFIG_FILENAME);
+  await fs.writeFile(
+    fileA,
+    JSON.stringify({ skills: [{ id: "s1", name: "alpha", description: "d", instructions: "i", enabled: true }] }),
+    "utf8",
+  );
+  await fs.writeFile(
+    r.localFile,
+    JSON.stringify({ workspaces: [workspace], seeded: true, aidenDirMigratedAt: Date.now() }),
+    "utf8",
+  );
+  await fs.symlink(dotfilesA, r.portableRoot);
+
+  const bundle = stores(r);
+  assert.equal((await bundle.portable.load()).skills[0]?.name, "alpha");
+  assert.equal((await bundle.local.load()).workspaces[0]?.id, workspace.id);
+
+  let readdirCalls = 0;
+  const originalReaddir = fsPromises.readdir;
+  const readdirMock = t.mock.method(fsPromises, "readdir", async (...args: Parameters<typeof originalReaddir>) => {
+    readdirCalls += 1;
+    return Reflect.apply(originalReaddir, fsPromises, args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    readdirMock.mock.restore();
+    syncBuiltinESMExports();
+  });
+
+  // Warm hit baseline.
+  await bundle.portable.load();
+  await bundle.local.load();
+  assert.equal(readdirCalls, 0);
+
+  // 1. Loosening file or directory permissions invalidates on the very next read and re-hardens.
+  await fs.chmod(fileA, 0o644);
+  await bundle.portable.load();
+  assert.equal(readdirCalls, 1);
+  assert.equal((await fs.stat(fileA)).mode & 0o7777, 0o600);
+  await bundle.portable.load();
+  assert.equal(readdirCalls, 1, "re-cached after re-hardening");
+
+  await fs.chmod(dotfilesA, 0o755);
+  await bundle.portable.load();
+  assert.equal(readdirCalls, 2);
+  assert.equal((await fs.stat(dotfilesA)).mode & 0o7777, 0o700);
+
+  // 2. Loosening a non-sticky ancestor invalidates and fails closed before returning cache.
+  await fs.chmod(base, 0o777);
+  await assert.rejects(bundle.portable.load(), /storage must be a private/u);
+  await fs.chmod(base, 0o755);
+  assert.equal((await bundle.portable.load()).skills[0]?.name, "alpha");
+
+  // 3. Retargeting the owned root symlink invalidates on the very next read.
+  await fs.unlink(r.portableRoot);
+  await fs.symlink(dotfilesB, r.portableRoot);
+  const countBeforeRetarget = readdirCalls;
+  await bundle.portable.load();
+  assert.equal(readdirCalls, countBeforeRetarget + 1, "retargeted symlink missed cached signature");
+  assert.equal((await fs.stat(dotfilesB)).mode & 0o7777, 0o700, "new symlink target was hardened");
+
+  const unsafeParent = path.join(base, "world-writable");
+  const unsafeTarget = path.join(unsafeParent, "dot-aiden");
+  await fs.mkdir(unsafeTarget, { recursive: true, mode: 0o755 });
+  await fs.chmod(unsafeParent, 0o777);
+  await fs.chmod(unsafeTarget, 0o755);
+  await fs.unlink(r.portableRoot);
+  await fs.symlink(unsafeTarget, r.portableRoot);
+  await assert.rejects(bundle.portable.load(), /storage must be a private/u);
+
+  const victimFile = path.join(base, "not-a-directory.json");
+  await fs.writeFile(victimFile, '{"keep":true}', "utf8");
+  await fs.chmod(victimFile, 0o644);
+  await fs.unlink(r.portableRoot);
+  await fs.symlink(victimFile, r.portableRoot);
+  await assert.rejects(bundle.portable.load(), { code: "EEXIST" });
+  assert.equal((await fs.stat(victimFile)).mode & 0o777, 0o644);
+
+  await fs.unlink(r.portableRoot);
+  await fs.symlink(dotfilesA, r.portableRoot);
+  assert.equal((await bundle.portable.load()).skills[0]?.name, "alpha");
+
+  // 4. Hard-linking or symlinking config.json invalidates on the very next read.
+  const hardLinkAlias = path.join(base, "unapproved-hardlink.json");
+  await fs.link(fileA, hardLinkAlias);
+  await assert.rejects(bundle.portable.load(), /storage must be a private/u);
+  await fs.unlink(hardLinkAlias);
+  assert.equal((await bundle.portable.load()).skills[0]?.name, "alpha");
+
+  const localBackup = await fs.readFile(r.localFile);
+  await fs.unlink(r.localFile);
+  await fs.symlink(victimFile, r.localFile);
+  await assert.rejects(bundle.local.load(), /storage must be a private/u);
+  await fs.unlink(r.localFile);
+  await fs.writeFile(r.localFile, localBackup);
+  assert.equal((await bundle.local.load()).workspaces[0]?.id, workspace.id);
+
+  // 5. Foreign owner invalidates warm cached signature immediately.
+  if (process.getuid) {
+    const currentUid = process.getuid();
+    const posixProcess = process as NodeJS.Process & { getuid(): number };
+    const uidMock = t.mock.method(posixProcess, "getuid", () => currentUid + 1);
+    try {
+      await assert.rejects(bundle.portable.load(), /storage must be a private/u);
+      await assert.rejects(bundle.local.load(), /storage must be a private/u);
+    } finally {
+      uidMock.mock.restore();
+    }
+    assert.equal((await bundle.portable.load()).skills[0]?.name, "alpha");
+  }
+});
+
+test("signature cache is bypassed whenever ownedPublicationPaths or archivePublicationPaths is non-empty", { skip: process.platform === "win32" }, async (t) => {
+  const r = await roots(t);
+  const base = path.dirname(r.portableRoot);
+  await fs.chmod(base, 0o755);
+  await fs.chmod(r.localRoot, 0o755);
+  await fs.writeFile(
+    r.localFile,
+    JSON.stringify({ ...legacyConfig(), workspaces: [workspace] }),
+    "utf8",
+  );
+
+  let readdirCalls = 0;
+  const originalReaddir = fsPromises.readdir;
+  const readdirMock = t.mock.method(fsPromises, "readdir", async (...args: Parameters<typeof originalReaddir>) => {
+    readdirCalls += 1;
+    return Reflect.apply(originalReaddir, fsPromises, args);
+  });
+  let checkedArchivePublication = false;
+  let checkedOwnedPublication = false;
+  const originalLink = fsPromises.link;
+  const linkMock = t.mock.method(fsPromises, "link", async (...args: Parameters<typeof originalLink>) => {
+    if (args[1] === r.archiveFile && !checkedArchivePublication) {
+      // Warm signature first if needed, then verify non-empty archivePublicationPaths bypasses cache.
+      const before = readdirCalls;
+      await bundle.local.load();
+      assert.ok(readdirCalls > before, "non-empty archivePublicationPaths bypassed signature cache");
+      checkedArchivePublication = true;
+    }
+    return Reflect.apply(originalLink, fsPromises, args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    readdirMock.mock.restore();
+    linkMock.mock.restore();
+    syncBuiltinESMExports();
+  });
+
+  const bundle = createPortableConfigStores(
+    () => r.portableRoot,
+    () => r.localRoot,
+    {
+      beforeLocalProtectedPublish: async () => {
+        const before = readdirCalls;
+        // During localStore.update, ownedPublicationPaths is non-empty, so load() must bypass signature cache.
+        await bundle.local.load();
+        assert.ok(readdirCalls > before, "non-empty ownedPublicationPaths bypassed signature cache");
+        checkedOwnedPublication = true;
+      },
+    },
+  );
+  assert.equal(await bundle.ensureMigrated(), true);
+  assert.equal(checkedArchivePublication, true);
+  await bundle.local.load();
+  const warmBefore = readdirCalls;
+  await bundle.local.load();
+  assert.equal(readdirCalls, warmBefore, "warm read hit signature before update");
+
+  await bundle.local.update((draft) => {
+    draft.workspaces = [{ ...workspace, name: "Updated" }];
+  });
+  assert.equal(checkedOwnedPublication, true);
 });
