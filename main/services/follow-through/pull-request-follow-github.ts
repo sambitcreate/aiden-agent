@@ -198,8 +198,15 @@ export function followProbePaths(follow: { repository: string; number: number; h
   return paths;
 }
 
+interface InFlightPermission {
+  promise: Promise<boolean>;
+  controller: AbortController;
+  waiters: number;
+}
+
 export class PullRequestFollowReader {
   private readonly permissions = new Map<string, { write: boolean; at: number }>();
+  private readonly permissionsInFlight = new Map<string, InFlightPermission>();
 
   constructor(
     private readonly api: Pick<GitHubApi, "graphql" | "rest">,
@@ -242,24 +249,27 @@ export class PullRequestFollowReader {
     }
     const repositoryOwner = isRecord(repository.owner) ? boundedString(repository.owner.login, 128)?.toLowerCase() : undefined;
     const viewer = isRecord(data.viewer) ? boundedString(data.viewer.login, 128) : undefined;
-    const comments: FollowedComment[] = [];
-    for (const comment of commentsFromPullRequest(raw)) {
-      signal?.throwIfAborted();
-      const trusted = await this.trusted(follow.host, follow.repository, comment, repositoryOwner, viewer, signal);
-      comments.push({
-        id: comment.id,
-        kind: comment.kind,
-        author: comment.author,
-        trusted,
-        ...(comment.bot ? { bot: true } : {}),
-        ...(viewer && comment.author.toLowerCase() === viewer.toLowerCase() ? { byViewer: true } : {}),
-        body: comment.body,
-        ...(comment.url ? { url: comment.url } : {}),
-        createdAt: comment.createdAt,
-        ...(comment.path ? { path: comment.path } : {}),
-        ...(comment.reviewState ? { reviewState: comment.reviewState } : {}),
-      });
-    }
+    const rawComments = commentsFromPullRequest(raw);
+    const comments: FollowedComment[] = await Promise.all(
+      rawComments.map(async (comment) => {
+        signal?.throwIfAborted();
+        const trusted = await this.trusted(follow.host, follow.repository, comment, repositoryOwner, viewer, signal);
+        signal?.throwIfAborted();
+        return {
+          id: comment.id,
+          kind: comment.kind,
+          author: comment.author,
+          trusted,
+          ...(comment.bot ? { bot: true } : {}),
+          ...(viewer && comment.author.toLowerCase() === viewer.toLowerCase() ? { byViewer: true } : {}),
+          body: comment.body,
+          ...(comment.url ? { url: comment.url } : {}),
+          createdAt: comment.createdAt,
+          ...(comment.path ? { path: comment.path } : {}),
+          ...(comment.reviewState ? { reviewState: comment.reviewState } : {}),
+        };
+      }),
+    );
     const checks: FollowedCheck[] = summary.checks.map((check) => ({
       name: check.name,
       status: check.status,
@@ -284,33 +294,55 @@ export class PullRequestFollowReader {
   }
 
   /**
-   * Ask GitHub whether each probed object changed. A rate limit stops the read
-   * here; any other failure counts as a change and leaves the full read to decide.
+   * Ask GitHub whether each probed object changed. All probe paths go out in
+   * parallel; a rate limit aborts the sibling probes and stops the read here,
+   * while any other failure counts as a change and leaves the full read to decide.
    */
   private async probe(
     follow: { host: string; repository: string; number: number; headSha?: string },
     known: Readonly<Record<string, string>>,
     signal?: AbortSignal,
   ): Promise<{ etags: Record<string, string>; unchanged: boolean } | { retry: FollowReadResult }> {
+    signal?.throwIfAborted();
+    const paths = followProbePaths(follow);
+    const controller = new AbortController();
+    const probeSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+    let rateLimited: FollowReadResult | undefined;
+    const settled = await Promise.all(
+      paths.map(async (path) => {
+        const previous = known[path];
+        try {
+          const result = await this.api.rest<unknown>({
+            host: follow.host,
+            operation: "pr.follow.probe",
+            path,
+            ...(previous ? { ifNoneMatch: previous } : {}),
+            signal: probeSignal,
+          });
+          if (result.kind === "rate-limited") {
+            rateLimited ??= retryable(result);
+            controller.abort();
+          }
+          return { path, previous, result };
+        } catch (error) {
+          if (controller.signal.aborted && !signal?.aborted) return undefined;
+          throw error;
+        }
+      }),
+    );
+    signal?.throwIfAborted();
+    if (rateLimited) return { retry: rateLimited };
     const etags: Record<string, string> = {};
     let unchanged = true;
-    for (const path of followProbePaths(follow)) {
-      signal?.throwIfAborted();
-      const previous = known[path];
-      const result = await this.api.rest<unknown>({
-        host: follow.host,
-        operation: "pr.follow.probe",
-        path,
-        ...(previous ? { ifNoneMatch: previous } : {}),
-        ...(signal ? { signal } : {}),
-      });
+    for (const entry of settled) {
+      if (!entry) continue;
+      const { path, previous, result } = entry;
       if (result.kind === "not-modified") {
         const etag = result.etag ?? previous;
         if (etag) etags[path] = etag;
         continue;
       }
       unchanged = false;
-      if (result.kind === "rate-limited") return { retry: retryable(result) };
       if (result.kind === "ok" && result.etag) etags[path] = result.etag;
     }
     return { etags, unchanged };
@@ -350,20 +382,69 @@ export class PullRequestFollowReader {
     // The signed-in account's own comments: the person writing on GitHub.
     if (viewer && login === viewer.toLowerCase()) return true;
     if (!MAYBE_WRITE.has(comment.association)) return false;
-    const key = `${host}/${repository}/${login}`;
+    const key = `${host.toLowerCase()}/${repository.toLowerCase()}/${login}`;
     const cached = this.permissions.get(key);
     if (cached && this.now() - cached.at < PERMISSION_TTL_MS) return cached.write;
-    const result = await this.api.rest<Record<string, unknown>>({
-      host,
-      operation: "pr.follow.permission",
-      path: `/repos/${repository}/collaborators/${encodeURIComponent(comment.author)}/permission`,
-      ...(signal ? { signal } : {}),
+    return this.permission(host, repository, comment.author, key, signal);
+  }
+
+  private permission(host: string, repository: string, author: string, key: string, signal?: AbortSignal): Promise<boolean> {
+    signal?.throwIfAborted();
+    let entry = this.permissionsInFlight.get(key);
+    if (!entry) {
+      const controller = new AbortController();
+      const promise = (async () => {
+        try {
+          const result = await this.api.rest<Record<string, unknown>>({
+            host,
+            operation: "pr.follow.permission",
+            path: `/repos/${repository}/collaborators/${encodeURIComponent(author)}/permission`,
+            signal: controller.signal,
+          });
+          if (result.kind !== "ok") return false;
+          const permission = boundedString(result.data.permission, 40)?.toLowerCase();
+          const role = boundedString(result.data.role_name, 40)?.toLowerCase();
+          const write = WRITE_ROLES.has(permission ?? "") || WRITE_ROLES.has(role ?? "");
+          this.permissions.set(key, { write, at: this.now() });
+          return write;
+        } finally {
+          if (this.permissionsInFlight.get(key)?.controller === controller) {
+            this.permissionsInFlight.delete(key);
+          }
+        }
+      })();
+      // Prevent unhandled rejection when every waiter aborts and cancels controller.
+      promise.catch(() => undefined);
+      entry = { controller, waiters: 0, promise };
+      this.permissionsInFlight.set(key, entry);
+    }
+    const active = entry;
+    active.waiters += 1;
+    if (!signal) return active.promise;
+    return new Promise<boolean>((resolve, reject) => {
+      const onAbort = () => {
+        active.waiters -= 1;
+        if (active.waiters === 0 && this.permissionsInFlight.get(key) === active) {
+          this.permissionsInFlight.delete(key);
+          active.controller.abort();
+        }
+        try {
+          signal.throwIfAborted();
+        } catch (error) {
+          reject(error);
+        }
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      active.promise.then(
+        (value) => {
+          signal.removeEventListener("abort", onAbort);
+          resolve(value);
+        },
+        (error) => {
+          signal.removeEventListener("abort", onAbort);
+          reject(error);
+        },
+      );
     });
-    if (result.kind !== "ok") return false;
-    const permission = boundedString(result.data.permission, 40)?.toLowerCase();
-    const role = boundedString(result.data.role_name, 40)?.toLowerCase();
-    const write = WRITE_ROLES.has(permission ?? "") || WRITE_ROLES.has(role ?? "");
-    this.permissions.set(key, { write, at: this.now() });
-    return write;
   }
 }

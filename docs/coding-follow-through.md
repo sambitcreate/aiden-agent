@@ -81,7 +81,7 @@ Several of these close together give one read. A pull request is never read more
 - **Checks passing** on the latest commit, once per commit. Unless it is the follow's first read, this starts one answer so the agent can wrap up and tell you the pull request is ready. It never merges in that answer. A follow that starts on a pull request whose checks already pass only records it.
 - The pull request **merging** or **closing**. These need nothing, so they never start an answer.
 
-A follow ends when the pull request is merged or closed, after 10 updates in a row that bring only comments (a new commit, or news about checks or conflicts, starts the count again), after two weeks with nothing new, when GitHub can no longer find it, when folder access changes or the workspace is removed, or when the person or the agent stops it. A chat can follow three pull requests at once and Aiden 20 in all. Follows survive a restart. Stopping a follow cancels its active GitHub read. Quitting cancels that read and leaves the follow for the next launch.
+A follow ends when the pull request is merged or closed, after 10 updates in a row that bring only comments (a new commit, or news about checks or conflicts, starts the count again), after two weeks with nothing new, when GitHub can no longer find it, when folder access changes or the workspace is removed, or when the person or the agent stops it. A chat can follow three pull requests at once and Aiden 20 in all. Follows survive a restart. Stopping a follow cancels its active GitHub read. Quitting cancels any active reads and leaves the follows for the next launch.
 
 The composer shows a **Following #N** chip. Its list shows where each pull request stands, opens it on GitHub, and **Stop** ends the follow.
 

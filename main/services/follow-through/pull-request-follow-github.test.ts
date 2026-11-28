@@ -237,10 +237,27 @@ const PATHS = [
 ];
 const KNOWN = Object.fromEntries(PATHS.map((path, index) => [path, `W/"v${index}"`]));
 
-test("when every probe answers 304, an allowed skip makes no GraphQL read", async () => {
-  const github = fakeApi({ probe: (request) => ({ kind: "not-modified", ...(request.ifNoneMatch ? { etag: request.ifNoneMatch } : {}) }) });
+test("when every probe answers 304, an allowed skip dispatches all probes in parallel and makes no GraphQL read", async () => {
+  let inFlight = 0;
+  let peakInFlight = 0;
+  let releaseAll!: () => void;
+  const allDispatched = new Promise<void>((resolve) => {
+    releaseAll = resolve;
+  });
+  const github = fakeApi({
+    probe: (request) =>
+      (async () => {
+        inFlight += 1;
+        peakInFlight = Math.max(peakInFlight, inFlight);
+        if (inFlight === PATHS.length) releaseAll();
+        await allDispatched;
+        inFlight -= 1;
+        return { kind: "not-modified", ...(request.ifNoneMatch ? { etag: request.ifNoneMatch } : {}) };
+      })() as unknown as GitHubApiResult<unknown>,
+  });
   const answer = await new PullRequestFollowReader(github.api).read(probed, undefined, { etags: KNOWN, skipIfUnchanged: true });
   assert.deepEqual(answer, { kind: "unchanged" });
+  assert.equal(peakInFlight, PATHS.length, "all three conditional probes run in one parallel wave");
   assert.equal(github.graphqlCalls.length, 0);
   assert.deepEqual(github.restCalls.map((call) => [call.path, call.ifNoneMatch]), PATHS.map((path) => [path, KNOWN[path]]));
 });
@@ -267,12 +284,30 @@ test("a forced read after an unchanged probe still reads, and says the probe saw
   assert.equal(answer.kind === "ok" ? answer.probedUnchanged : undefined, true);
 });
 
-test("a rate-limited probe stops before the full read and asks to retry when GitHub said", async () => {
-  const github = fakeApi({ probe: () => ({ kind: "rate-limited", retryAt: T0 + 60_000, message: "slow down", sent: true }) });
+test("a rate-limited probe aborts sibling probes before the full read and asks to retry when GitHub said", async () => {
+  const abortedPaths: string[] = [];
+  const github = fakeApi({
+    probe: (request) => {
+      if (request.path === PATHS[0]) {
+        return { kind: "rate-limited", retryAt: T0 + 60_000, message: "slow down", sent: true };
+      }
+      return new Promise<GitHubApiResult<unknown>>((_resolve, reject) => {
+        const onAbort = () => {
+          abortedPaths.push(request.path);
+          const error = new Error("The operation was aborted");
+          error.name = "AbortError";
+          reject(error);
+        };
+        if (request.signal?.aborted) onAbort();
+        else request.signal?.addEventListener("abort", onAbort, { once: true });
+      }) as unknown as GitHubApiResult<unknown>;
+    },
+  });
   const answer = await new PullRequestFollowReader(github.api).read(probed, undefined, { etags: KNOWN, skipIfUnchanged: true });
   assert.deepEqual(answer, { kind: "retry", message: "GitHub's rate limit was reached; Aiden will try again later.", retryAt: T0 + 60_000 });
   assert.equal(github.graphqlCalls.length, 0);
-  assert.equal(github.restCalls.length, 1, "no further probes once GitHub said to wait");
+  assert.equal(github.restCalls.length, PATHS.length, "all probe paths start together");
+  assert.deepEqual(abortedPaths.sort(), PATHS.slice(1).sort(), "sibling probes abort as soon as one hits a rate limit");
 });
 
 test("a follow without tags yet probes plainly, and one without a head commit probes only the pull request", async () => {
@@ -330,4 +365,121 @@ test("review bots count as reviewers without a permission check; deploy and cove
   assert.equal(byId.get("c-lookalike")?.trusted, false, "a person's account is not a bot");
   assert.equal(byId.get("c-lookalike")?.bot, undefined);
   assert.equal(restCalls.some((call) => call.path.includes("/collaborators/")), false, "bots and outsiders need no permission check");
+});
+
+test("comment trust checks run in parallel while keeping comment order, deduplicating shared authors, and isolating caller aborts", async () => {
+  const pendingPermissions = new Map<string, { signal?: AbortSignal; resolve: (role: string) => void }>();
+  const permissionRequests: string[] = [];
+  const api = {
+    async graphql<T>(request: GitHubGraphQlRequest): Promise<GitHubApiResult<T>> {
+      const number = Number(request.variables?.number ?? 42);
+      const comments =
+        number === 42
+          ? [
+              { id: "c-slow-1", body: "First by alice", ...author("Alice", "MEMBER", "2026-10-26T12:01:00Z") },
+              { id: "c-fast", body: "Second by bob", ...author("bob", "COLLABORATOR", "2026-10-26T12:02:00Z") },
+              { id: "c-owner", body: "Third by owner", ...author("acme", "OWNER", "2026-10-26T12:03:00Z") },
+              { id: "c-slow-2", body: "Fourth by alice again", ...author("alice", "MEMBER", "2026-10-26T12:04:00Z") },
+              { id: "c-solo", body: "Fifth by solo", ...author("solo", "COLLABORATOR", "2026-10-26T12:05:00Z") },
+            ]
+          : [
+              { id: "p2-alice", body: "Alice on PR 43", ...author("alice", "COLLABORATOR", "2026-10-26T12:01:30Z") },
+              { id: "p2-bob", body: "Bob on PR 43", ...author("bob", "MEMBER", "2026-10-26T12:02:30Z") },
+            ];
+      return {
+        kind: "ok",
+        status: 200,
+        data: {
+          viewer: { login: "sambit" },
+          repository: {
+            nameWithOwner: "acme/app",
+            owner: { login: "acme" },
+            pullRequest: pullRequestNode({ number, comments: { nodes: comments }, reviews: { nodes: [] } }),
+          },
+        },
+      } as GitHubApiResult<T>;
+    },
+    async rest<T>(request: GitHubRestRequest): Promise<GitHubApiResult<T>> {
+      const login = /\/collaborators\/([^/]+)\/permission$/u.exec(request.path)?.[1]?.toLowerCase();
+      assert.ok(login);
+      permissionRequests.push(login);
+      return new Promise<GitHubApiResult<T>>((resolve, reject) => {
+        const onAbort = () => {
+          const error = new Error("The operation was aborted");
+          error.name = "AbortError";
+          reject(error);
+        };
+        if (request.signal?.aborted) {
+          onAbort();
+          return;
+        }
+        request.signal?.addEventListener("abort", onAbort, { once: true });
+        pendingPermissions.set(`${login}-${permissionRequests.length}`, {
+          signal: request.signal,
+          resolve: (permission) => {
+            request.signal?.removeEventListener("abort", onAbort);
+            resolve({ kind: "ok", status: 200, data: { permission } } as GitHubApiResult<T>);
+          },
+        });
+      });
+    },
+  };
+
+  const reader = new PullRequestFollowReader(api, () => T0);
+  const firstAbort = new AbortController();
+  const secondAbort = new AbortController();
+  const firstRead = reader.read({ host: "github.com", repository: "acme/app", number: 42 }, firstAbort.signal);
+  const secondRead = reader.read({ host: "github.com", repository: "acme/app", number: 43 }, secondAbort.signal);
+
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  // Alice (3 comments across 2 concurrent reads), Bob (2 comments across 2 reads), and Solo (1 comment on PR 42)
+  // each send one permission request concurrently.
+  assert.deepEqual([...permissionRequests].sort(), ["alice", "bob", "solo"]);
+
+  const aliceEntry = [...pendingPermissions.entries()].find(([key]) => key.startsWith("alice-"))![1];
+  const bobEntry = [...pendingPermissions.entries()].find(([key]) => key.startsWith("bob-"))![1];
+  const soloEntry = [...pendingPermissions.entries()].find(([key]) => key.startsWith("solo-"))![1];
+
+  // Aborting PR 42 cancels solo (no other waiter) but keeps shared alice and bob alive for PR 43.
+  firstAbort.abort();
+  await assert.rejects(firstRead, { name: "AbortError" });
+  assert.equal(soloEntry.signal?.aborted, true, "sole-waiter permission lookup aborts with its caller");
+  assert.equal(aliceEntry.signal?.aborted, false, "shared permission lookup survives one caller aborting");
+  assert.equal(bobEntry.signal?.aborted, false, "shared permission lookup survives one caller aborting");
+
+  // Resolve bob before alice to verify comment order stays stable regardless of completion order.
+  bobEntry.resolve("read");
+  aliceEntry.resolve("write");
+  const secondResult = await secondRead;
+  assert.equal(secondResult.kind, "ok");
+  if (secondResult.kind !== "ok") return;
+  assert.deepEqual(
+    secondResult.observation.comments.map((comment) => [comment.id, comment.trusted]),
+    [
+      ["p2-alice", true],
+      ["p2-bob", false],
+    ],
+  );
+
+  // Start a fresh read of PR 42: alice and bob come from the hourly cache, while solo is requested fresh
+  // because its earlier request was aborted before completing.
+  permissionRequests.length = 0;
+  const replay = reader.read({ host: "github.com", repository: "acme/app", number: 42 });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(permissionRequests, ["solo"]);
+  const replaySolo = [...pendingPermissions.entries()].find(([key]) => key.startsWith("solo-") && !pendingPermissions.get(key)?.signal?.aborted)![1];
+  replaySolo.resolve("maintain");
+  const replayResult = await replay;
+  assert.equal(replayResult.kind, "ok");
+  if (replayResult.kind !== "ok") return;
+  assert.deepEqual(
+    replayResult.observation.comments.map((comment) => [comment.id, comment.trusted]),
+    [
+      ["c-slow-1", true],
+      ["c-fast", false],
+      ["c-owner", true],
+      ["c-slow-2", true],
+      ["c-solo", true],
+    ],
+  );
 });

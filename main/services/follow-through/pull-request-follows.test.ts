@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MAX_PULL_REQUEST_FOLLOWS_PER_CHAT } from "../../../renderer/shared/follow-through.js";
-import type { FollowProbe, FollowReadResult } from "./pull-request-follow-github.js";
-import type { FollowedCheck, FollowNotice, PullRequestObservation } from "./pull-request-follow.js";
-import { PullRequestFollows, type FollowTimers, type StartFollowInput } from "./pull-request-follows.js";
+import { GitHubApi } from "../github/github-api.js";
+import { GitHubRateLimitGate } from "../github/github-request-gate.js";
+import { PullRequestFollowReader, type FollowProbe, type FollowReadResult } from "./pull-request-follow-github.js";
+import { newFollowRecord, type FollowedCheck, type FollowNotice, type PullRequestObservation } from "./pull-request-follow.js";
+import { MAX_CONCURRENT_FOLLOW_POLLS, PullRequestFollows, type FollowTimers, type StartFollowInput } from "./pull-request-follows.js";
 
 const T0 = Date.parse("2026-10-26T12:00:00Z");
 
@@ -216,40 +218,74 @@ test("follows survive a restart, and deleting a chat forgets its follows", async
   assert.equal(second.persisted[second.persisted.length - 1], 1, "the deletion is saved");
 });
 
-for (const ending of ["stop", "access-changed", "shutdown"] as const) {
-  test(`a poll cancelled by ${ending} discards a late log and never reads the next one`, async () => {
-    let finishLog!: (text: string) => void;
-    let logSignal: AbortSignal | undefined;
+for (const ending of ["stop", "access-changed", "pauseChats", "deleteChat", "shutdown"] as const) {
+  test(`a poll cancelled by ${ending} aborts all in-flight log fetches, posts nothing, and isolates unrelated chats`, async () => {
+    const logDeferreds = new Map<string, { signal?: AbortSignal; resolve: (text: string) => void }>();
     const logs: string[] = [];
-    const posted: FollowNotice[] = [];
+    const posted: Array<{ chatId: string; notice: FollowNotice }> = [];
     const follows = new PullRequestFollows({
       now: () => T0,
       chatWasAnswering: () => false,
       persist: () => {},
-      post: (_chat, notice) => posted.push(notice),
+      post: (chatId, notice) => posted.push({ chatId, notice }),
       reader: {
-        read: async () => ({ kind: "ok", observation: open({
-          checks: ["unit", "integration"].map((name) => ({ name, status: "failure", url: open().checks[0]!.url })),
-        }) }),
+        read: async (record) => ({
+          kind: "ok",
+          observation: open({
+            url: `https://github.com/acme/app/pull/${record.number}`,
+            checks: ["unit", "integration"].map((name, index) => ({
+              name,
+              status: "failure",
+              url: `https://github.com/acme/app/actions/runs/${record.number}/job/${index + 1}`,
+            })),
+          }),
+        }),
         jobLogTail: async (_record, check, signal) => {
-          logs.push(check.name);
-          logSignal = signal;
-          return new Promise<string>((resolve) => { finishLog = resolve; });
+          const runNumber = /\/runs\/(\d+)\//u.exec(check.url ?? "")?.[1] ?? "0";
+          const key = `${runNumber}:${check.name}`;
+          logs.push(key);
+          return new Promise<string>((resolve) => {
+            logDeferreds.set(key, { signal, resolve });
+          });
         },
       },
     });
-    follows.follow(input());
+    follows.follow(input(42, "chat-1"));
+    follows.follow(input(43, "chat-2"));
     const polling = follows.kick();
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.deepEqual(logs, ["unit"]);
+    assert.deepEqual(
+      [...logs].sort(),
+      ["42:integration", "42:unit", "43:integration", "43:unit"],
+      "failing job logs for both due follows start concurrently",
+    );
+
+    let resumePaused: (() => void) | undefined;
     if (ending === "shutdown") follows.shutdown();
-    else follows.stop("chat-1", input(), ending === "stop" ? "person" : ending);
-    assert.equal(logSignal?.aborted, true);
-    finishLog("late failure");
+    else if (ending === "pauseChats") resumePaused = follows.pauseChats(["chat-1"]);
+    else if (ending === "deleteChat") follows.deleteChat("chat-1");
+    else follows.stop("chat-1", input(42, "chat-1"), ending === "stop" ? "person" : ending);
+
+    assert.equal(logDeferreds.get("42:unit")?.signal?.aborted, true);
+    assert.equal(logDeferreds.get("42:integration")?.signal?.aborted, true);
+    assert.equal(
+      logDeferreds.get("43:unit")?.signal?.aborted,
+      ending === "shutdown",
+      "only shutdown cancels another chat's active poll",
+    );
+
+    for (const entry of logDeferreds.values()) entry.resolve("late failure");
     await polling;
-    assert.deepEqual(logs, ["unit"]);
-    assert.deepEqual(posted, []);
-    assert.equal(follows.all()[0]?.noticesSent, 0);
+    resumePaused?.();
+
+    assert.deepEqual(
+      posted.map((item) => item.chatId),
+      ending === "shutdown" ? [] : ["chat-2"],
+      "cancelled chat posts no notice while an unaffected chat still delivers its notice",
+    );
+    const chat1Record = follows.all().find((item) => item.chatId === "chat-1");
+    if (ending === "deleteChat") assert.equal(chat1Record, undefined);
+    else assert.equal(chat1Record?.noticesSent, 0);
   });
 }
 
@@ -595,4 +631,273 @@ test("a pull request still failing after its hour card goes back to cheap probes
   assert.deepEqual(h.reads[h.reads.length - 1]!.probe, { etags, skipIfUnchanged: true });
   assert.equal(h.posted.length, posted);
   assert.equal(h.follows.list("chat-1")[0]!.state, "following");
+});
+
+test("tick polls up to four due pull requests concurrently in dueAt order without re-claiming in-flight follows", async () => {
+  const startedOrder: number[] = [];
+  let inFlight = 0;
+  let peakInFlight = 0;
+  const gates = new Map<number, (result: FollowReadResult) => void>();
+  const follows = new PullRequestFollows({
+    now: () => T0,
+    chatWasAnswering: () => false,
+    persist: () => {},
+    post: () => {},
+    reader: {
+      read: async (record) => {
+        startedOrder.push(record.number);
+        inFlight += 1;
+        peakInFlight = Math.max(peakInFlight, inFlight);
+        try {
+          return await new Promise<FollowReadResult>((resolve) => {
+            gates.set(record.number, resolve);
+          });
+        } finally {
+          inFlight -= 1;
+        }
+      },
+      jobLogTail: async () => undefined,
+    },
+  });
+
+  // Restore six due records in shuffled order with distinct dueAt timestamps (10..60).
+  const numbers = [50, 20, 60, 10, 40, 30];
+  follows.restore(
+    numbers.map((number) => ({
+      ...newFollowRecord({ ...input(number, `chat-${number}`), now: T0 - 1_000 }),
+      nextCheckAt: T0 - (100 - number),
+    })),
+  );
+
+  const sweep = follows.kick();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(MAX_CONCURRENT_FOLLOW_POLLS, 4);
+  assert.deepEqual(startedOrder, [10, 20, 30, 40], "earliest four due follows start together");
+  assert.equal(inFlight, 4);
+
+  // Kicking again while all four slots are busy neither duplicates in-flight follows nor exceeds four.
+  void follows.kick();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(startedOrder, [10, 20, 30, 40]);
+
+  // Finishing #20 opens one slot, which immediately claims #50 before #60.
+  gates.get(20)!({ kind: "ok", observation: quiet() });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(startedOrder, [10, 20, 30, 40, 50]);
+  assert.equal(inFlight, 4);
+
+  // Finishing #40 opens the next slot for #60.
+  gates.get(40)!({ kind: "ok", observation: quiet() });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(startedOrder, [10, 20, 30, 40, 50, 60]);
+  assert.equal(peakInFlight, 4);
+
+  for (const number of [10, 30, 50, 60]) {
+    gates.get(number)!({ kind: "ok", observation: quiet() });
+  }
+  await sweep;
+  assert.equal(inFlight, 0);
+  assert.equal(startedOrder.length, 6, "each due follow ran once");
+});
+
+test("multi-PR polling through GitHubApi cuts 304 sweeps to 1 wave and 3-PR active sweeps to 6 or fewer waves", async () => {
+  interface QueuedFetch {
+    url: string;
+    init: { method: string; headers: Record<string, string>; body?: string; signal: AbortSignal };
+    resolve: (response: Response) => void;
+  }
+
+  let now = T0;
+  let queued: QueuedFetch[] = [];
+  let waves = 0;
+  let respond!: (request: QueuedFetch) => Response;
+
+  const flushWavesUntilSettled = async (done: Promise<void>) => {
+    let finished = false;
+    void done.then(() => {
+      finished = true;
+    });
+    while (!finished) {
+      for (let tick = 0; tick < 6; tick += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      if (finished) break;
+      assert.ok(queued.length > 0, "expected queued HTTP requests in wave");
+      const batch = queued;
+      queued = [];
+      waves += 1;
+      for (const item of batch) {
+        item.resolve(respond(item));
+      }
+    }
+    await done;
+  };
+
+  const gate = new GitHubRateLimitGate({ now: () => now });
+  const api = new GitHubApi({
+    now: () => now,
+    gate,
+    credentials: {
+      resolve: async (host) => ({ ok: true, credential: { host, token: "tok", source: "gh", fingerprint: "fp-1" } }),
+      invalidate: () => {},
+    },
+    fetch: (url, init) =>
+      new Promise<Response>((resolve, reject) => {
+        if (init.signal.aborted) {
+          const error = new Error("The operation was aborted");
+          error.name = "AbortError";
+          reject(error);
+          return;
+        }
+        init.signal.addEventListener(
+          "abort",
+          () => {
+            const error = new Error("The operation was aborted");
+            error.name = "AbortError";
+            reject(error);
+          },
+          { once: true },
+        );
+        queued.push({ url, init, resolve });
+      }),
+  });
+
+  const posted: Array<{ chatId: string; notice: FollowNotice }> = [];
+  const follows = new PullRequestFollows({
+    now: () => now,
+    chatWasAnswering: () => false,
+    persist: () => {},
+    post: (chatId, notice) => posted.push({ chatId, notice }),
+    reader: new PullRequestFollowReader(api, () => now),
+  });
+
+  const sha = (digit: string) => digit.repeat(40);
+  const etagsFor = (number: number, head: string) => ({
+    [`/repos/acme/app/pulls/${number}`]: `W/"pr-${number}"`,
+    [`/repos/acme/app/commits/${head}/check-runs?per_page=100&filter=latest`]: `W/"cr-${number}"`,
+    [`/repos/acme/app/commits/${head}/status`]: `W/"st-${number}"`,
+  });
+
+  // 1. Unchanged 304 Not Modified sweep for 1 PR completes in 1 HTTP RTT wave instead of 3.
+  const head1 = sha("a");
+  follows.restore([
+    {
+      ...newFollowRecord({ ...input(1, "chat-1"), now: T0 - 10 * MINUTE }),
+      headSha: head1,
+      reportedPassSha: head1,
+      status: "Checks passed",
+      etags: etagsFor(1, head1),
+      etagsAt: T0 - 5 * MINUTE,
+      lastCheckedAt: T0 - 5 * MINUTE,
+      nextCheckAt: T0,
+    },
+  ]);
+  respond = (req) => new Response(null, { status: 304, headers: { etag: req.init.headers["If-None-Match"] ?? 'W/"same"' } });
+  waves = 0;
+  await flushWavesUntilSettled(follows.kick());
+  assert.equal(waves, 1, "unchanged 304 sweep for 1 PR completes in 1 RTT wave");
+  assert.equal(posted.length, 0);
+
+  // 2. Active sweep of 3 PRs with 4 reviewers (shared across PRs) and 3 failed jobs completes in <= 6 RTT waves.
+  follows.deleteChat("chat-1");
+  const heads: Record<number, string> = { 101: sha("b"), 102: sha("c"), 103: sha("d") };
+  follows.restore(
+    [101, 102, 103].map((number, index) => ({
+      ...newFollowRecord({ ...input(number, `chat-${index + 1}`), now: T0 - 10 * MINUTE }),
+      headSha: sha(String(index + 1)),
+      etags: etagsFor(number, sha(String(index + 1))),
+      etagsAt: T0 - 5 * MINUTE,
+      lastCheckedAt: T0 - 5 * MINUTE,
+      nextCheckAt: T0,
+    })),
+  );
+
+  const permissionCalls: string[] = [];
+  respond = (req) => {
+    const pathname = new URL(req.url).pathname;
+    if (pathname === "/graphql") {
+      const body = JSON.parse(req.init.body ?? "{}") as { variables?: { number?: number } };
+      const number = Number(body.variables?.number ?? 101);
+      const head = heads[number]!;
+      return new Response(
+        JSON.stringify({
+          data: {
+            rateLimit: { limit: 5000, remaining: 4990, cost: 1, resetAt: "2026-10-26T13:00:00Z" },
+            viewer: { login: "sambit" },
+            repository: {
+              nameWithOwner: "acme/app",
+              owner: { login: "acme" },
+              pullRequest: {
+                number,
+                title: `PR ${number}`,
+                url: `https://github.com/acme/app/pull/${number}`,
+                state: "OPEN",
+                isDraft: false,
+                headRefName: `feat-${number}`,
+                baseRefName: "main",
+                headRefOid: head,
+                author: { login: "sambit" },
+                mergeable: "MERGEABLE",
+                updatedAt: "2026-10-26T12:00:00Z",
+                headRepositoryOwner: { login: "acme" },
+                commits: {
+                  nodes: [
+                    {
+                      commit: {
+                        statusCheckRollup: {
+                          state: "FAILURE",
+                          contexts: {
+                            pageInfo: { hasNextPage: false },
+                            nodes: [
+                              {
+                                __typename: "CheckRun",
+                                name: `ci-${number}`,
+                                status: "COMPLETED",
+                                conclusion: "FAILURE",
+                                detailsUrl: `https://github.com/acme/app/actions/runs/${number}/job/${number * 10}`,
+                              },
+                            ],
+                          },
+                        },
+                      },
+                    },
+                  ],
+                },
+                comments: {
+                  nodes: ["rev1", "rev2", "rev3", "rev4"].map((login, idx) => ({
+                    id: `c-${number}-${login}`,
+                    body: `Finding from ${login} on ${number}`,
+                    author: { __typename: "User", login },
+                    authorAssociation: idx % 2 === 0 ? "MEMBER" : "COLLABORATOR",
+                    createdAt: "2026-10-26T12:00:00Z",
+                  })),
+                },
+                reviews: { nodes: [] },
+              },
+            },
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    const permMatch = /\/collaborators\/([^/]+)\/permission$/u.exec(pathname);
+    if (permMatch) {
+      permissionCalls.push(permMatch[1]!);
+      return new Response(JSON.stringify({ permission: "write" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (pathname.endsWith("/logs")) {
+      return new Response(`2026-10-26T12:00:00Z failure in ${pathname}\n`, { status: 200 });
+    }
+    return new Response("{}", { status: 200, headers: { etag: 'W/"changed"' } });
+  };
+
+  waves = 0;
+  await flushWavesUntilSettled(follows.kick());
+  assert.ok(waves <= 6, `expected <= 6 RTT waves, observed ${waves}`);
+  assert.deepEqual([...permissionCalls].sort(), ["rev1", "rev2", "rev3", "rev4"], "1 permission lookup per shared reviewer");
+  assert.equal(posted.filter((item) => item.notice.notice.title === "A check failed").length, 3);
+  assert.equal(posted.filter((item) => /new comments/iu.test(item.notice.notice.title)).length, 3);
 });
