@@ -85,11 +85,10 @@ Branch `claude/audit-fix-main-lifecycle`, from the main-lifecycle audit
   leaving them pending.
 
 ## Native IPC (F8) and broadcasts (F9)
-- `main/native-ipc-core.ts`: media types are allow-listed; `aiden:dialog:open`
-  keeps only title, buttonLabel, message, filters and a properties subset
-  (openFile, openDirectory, multiSelections, createDirectory,
-  showHiddenFiles). `defaultPath` is dropped. All three handlers require the
-  active main-frame sender (`rendererDocumentOwner`).
+- `main/native-ipc-core.ts`: media types are allow-listed (`parseMediaStatusType`,
+  `parseMediaRequestType`), and the native media handlers require the active
+  main-frame sender (`rendererDocumentOwner`). The unused generic open-dialog
+  bridge was retired in favor of dedicated feature pickers in main.
 - `broadcast` targets only registered receivers: the main window (all
   channels) and the pill (`PILL_NOTIFICATION_CHANNELS`). Snapshot, recorder,
   picture-in-picture and capture windows no longer get payloads. A new window

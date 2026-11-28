@@ -8,7 +8,7 @@
 - The coordinator (`tool-approval.ts`) only stores a scope that is offered, non-once and allowed.
 - IPC:
   - `chat:approve` options carry `scope`.
-  - `chat:listApprovalRules`, `chat:revokeApprovalRule` and `chat:revokeAllApprovalRules` back the Settings section `approvals`.
+  - Settings `approvals` now uses `approvalRules:*` (`main/handlers/approval-rules.ts`), and the superseded per-chat approval-rule IPC routes in `main/handlers/chat.ts` were retired.
   - `remote:respondApprovalFromHost` takes an optional 5th `scope`.
 - Remote contract revision 17:
   - `PendingApproval.scopes` is present only when `canAllow`.

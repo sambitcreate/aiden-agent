@@ -1,5 +1,4 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import type { OpenDialogOptions, OpenDialogReturnValue } from "electron";
 import {
   INVOKE_PREFIXES,
   NATIVE_INVOKE_CHANNELS,
@@ -48,13 +47,6 @@ const aidenAPI = {
       return ipcRenderer.invoke(channel, ...args) as Promise<T>;
     },
     onNotification: subscribe,
-  },
-  dialog: {
-    showOpenDialog: (options?: OpenDialogOptions): Promise<OpenDialogReturnValue> =>
-      ipcRenderer.invoke(
-        NATIVE_INVOKE_CHANNELS.dialogOpen,
-        options,
-      ) as Promise<OpenDialogReturnValue>,
   },
   attachments: createAttachmentPreloadBridge({
     invoke: <T>(channel: string, ...args: unknown[]) =>

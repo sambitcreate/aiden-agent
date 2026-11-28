@@ -5,7 +5,6 @@ import {
   createBroadcastReceivers,
   parseMediaRequestType,
   parseMediaStatusType,
-  parseOpenDialogOptions,
   type BroadcastReceiver,
 } from "./native-ipc-core.js";
 
@@ -23,51 +22,6 @@ test("media requests cannot ask for screen recording, which has no prompt API", 
   assert.equal(parseMediaRequestType("camera"), "camera");
   assert.throws(() => parseMediaRequestType("screen"), /Invalid media type/u);
   assert.throws(() => parseMediaRequestType(undefined), /Invalid media type/u);
-});
-
-test("the folder picker request passes through unchanged", () => {
-  assert.deepEqual(parseOpenDialogOptions({ properties: ["openDirectory", "createDirectory"] }), {
-    properties: ["openDirectory", "createDirectory"],
-  });
-  assert.deepEqual(parseOpenDialogOptions(undefined), {});
-  assert.deepEqual(parseOpenDialogOptions(null), {});
-});
-
-test("open dialog options keep only renderer-safe fields", () => {
-  const options = parseOpenDialogOptions({
-    title: "Choose images",
-    buttonLabel: "Attach",
-    message: "Pick up to five",
-    defaultPath: "/Users/someone/.ssh",
-    securityScopedBookmarks: true,
-    filters: [{ name: "Images", extensions: ["png", "jpg", "*"] }],
-    properties: ["openFile", "multiSelections", "openFile"],
-  });
-  assert.deepEqual(options, {
-    title: "Choose images",
-    buttonLabel: "Attach",
-    message: "Pick up to five",
-    filters: [{ name: "Images", extensions: ["png", "jpg", "*"] }],
-    properties: ["openFile", "multiSelections"],
-  });
-});
-
-test("open dialog options reject unknown properties, malformed filters and oversized text", () => {
-  const invalid: unknown[] = [
-    "openFile",
-    ["openFile"],
-    { properties: ["treatPackageAsDirectory"] },
-    { properties: "openFile" },
-    { filters: [{ name: "Any", extensions: ["../etc"] }] },
-    { filters: [{ name: "Any", extensions: "png" }] },
-    { filters: [null] },
-    { filters: Array.from({ length: 21 }, () => ({ name: "x", extensions: ["png"] })) },
-    { title: 42 },
-    { message: "x".repeat(201) },
-  ];
-  for (const value of invalid) {
-    assert.throws(() => parseOpenDialogOptions(value), /Invalid open dialog/u, JSON.stringify(value));
-  }
 });
 
 class FakeReceiver implements BroadcastReceiver {

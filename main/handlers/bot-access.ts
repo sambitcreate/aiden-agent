@@ -1,19 +1,12 @@
 // Bot identity, access, and one-time notice IPC.
 //
 // Every audience id is chosen here in main: the desktop document always acts
-// as the fixed desktop audience, and a paired Telegram owner is derived from
-// the main-owned profile settings. Renderer input never names an audience.
+// as the fixed desktop audience. Renderer input never names an audience.
 
 import { parseBotNoticeAcknowledgement } from "../../renderer/shared/bot-capabilities.js";
 import type { BotApplicationService } from "../services/bot-application-service.js";
-import { normalizeTelegramProfileName, telegramBotNoticeAudienceId } from "../services/telegram/telegram-profile-config.js";
 import { botAccessUpdateRendererError, botCreateRendererError } from "./bot-renderer-errors.js";
 import { parseBotAccessUpdateInput, parseBotCreateWithAccess, parseBotId, parseBotModelThinkingLevelsInput } from "./bot-params.js";
-
-export interface BotAccessTelegramProfile {
-  name: string;
-  settings: { allowedUserId?: number };
-}
 
 export interface BotAccessHandlerDependencies<Event> {
   handle(channel: string, handler: (event: Event, ...args: unknown[]) => unknown): void;
@@ -34,26 +27,11 @@ export interface BotAccessHandlerDependencies<Event> {
   desktopAudienceId: string;
   /** The live application document that sent the request; throws for a stale one. */
   documentOwner(event: Event): { isDestroyed(): boolean };
-  telegramProfiles(): Promise<readonly BotAccessTelegramProfile[]>;
   warn(message: string, error: unknown): void;
 }
 
 export function registerBotAccessHandlers<Event>(deps: BotAccessHandlerDependencies<Event>): void {
   const { service, desktopAudienceId } = deps;
-  const pairedTelegramAudience = async (profileValue: unknown) => {
-    const profileName = normalizeTelegramProfileName(
-      typeof profileValue === "string" ? profileValue : "",
-    );
-    const profile = (await deps.telegramProfiles()).find(({ name }) => name === profileName);
-    const ownerUserId = profile?.settings.allowedUserId;
-    if (!profile || ownerUserId === undefined) {
-      throw new Error("Choose a Telegram profile with a paired owner.");
-    }
-    return {
-      profileName,
-      audienceId: telegramBotNoticeAudienceId(profileName, ownerUserId),
-    };
-  };
   const ownerCheck = (event: Event) => {
     const owner = deps.documentOwner(event);
     return () => {
@@ -80,29 +58,6 @@ export function registerBotAccessHandlers<Event>(deps: BotAccessHandlerDependenc
     const acknowledgement = parseBotNoticeAcknowledgement(input);
     if (acknowledgement.decision !== "continue_full") throw new Error("Invalid first Bot access acceptance.");
     return service.acknowledgeNotice(desktopAudienceId, acknowledgement, assertCurrent, { keepReviewFirst: true });
-  });
-  deps.handle("bots:getTelegramAccessNotice", async (_event, profile: unknown) => {
-    const principal = await pairedTelegramAudience(profile);
-    return service.noticeStatus(principal.audienceId);
-  });
-  deps.handle("bots:acknowledgeTelegramAccessNotice", async (event, input: unknown) => {
-    const assertCurrent = ownerCheck(event);
-    if (!input || typeof input !== "object" || Array.isArray(input)) {
-      throw new Error("Invalid Telegram Bot access notice fields.");
-    }
-    const raw = input as Record<string, unknown>;
-    if (
-      !Object.keys(raw).every((key) => key === "profile" || key === "acknowledgement") ||
-      Object.keys(raw).length !== 2
-    ) {
-      throw new Error("Invalid Telegram Bot access notice fields.");
-    }
-    const principal = await pairedTelegramAudience(raw.profile);
-    return service.acknowledgeNotice(
-      principal.audienceId,
-      parseBotNoticeAcknowledgement(raw.acknowledgement),
-      assertCurrent,
-    );
   });
   deps.handle("bots:create", async (_event, input: unknown) => {
     const parsed = parseBotCreateWithAccess(input);

@@ -29,7 +29,6 @@ import {
   TTS_STARTER_PREBUILT_VOICES,
   type TtsInteractionBody,
   type TtsUnarySynthesisResult,
-  type TtsVoicesPage,
 } from "./gemini-wire.js";
 import { ensureSpeechTextParser, prepareSpeechText, SpeechTextError } from "./speech-text.js";
 import {
@@ -55,7 +54,6 @@ export interface TtsProviderPort {
     body: TtsInteractionBody;
     signal?: AbortSignal;
   }): Promise<TtsUnarySynthesisResult>;
-  listVoices(input: { apiKey: string; pageToken?: string }): Promise<TtsVoicesPage>;
 }
 
 export interface TtsConfigPort {
@@ -696,20 +694,6 @@ export function createTtsService(deps: TtsServiceDeps) {
 
     async listStarterVoices(): Promise<typeof TTS_STARTER_PREBUILT_VOICES> {
       return TTS_STARTER_PREBUILT_VOICES;
-    },
-
-    async listProviderVoices(owner: TtsOwner, pageToken?: string): Promise<TtsVoicesPage> {
-      const resolved = await resolveCredentialAndSettings();
-      if (!resolved.ok) throw new Error(resolved.error.message);
-      if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
-      try {
-        return await deps.provider.listVoices({
-          apiKey: resolved.credential.apiKey,
-          ...(pageToken ? { pageToken } : {}),
-        });
-      } catch (error) {
-        throw new Error(wireToSafeError(error).message);
-      }
     },
 
     start(owner: TtsOwner, request: TtsStartRequest): Promise<TtsJobSnapshot> {

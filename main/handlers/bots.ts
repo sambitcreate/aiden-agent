@@ -1,7 +1,7 @@
 import { registerBotPendingChangeCleanup } from "./bot-pending-changes.js";
 import { registerBotAccessRequestHandlers } from "./bot-access-requests.js";
 import { registerBotPlanHandlers } from "./bot-plans.js";
-import { registerBotAllowedHandlers, registerBotApprovalDecisionHandler } from "./bot-allowed.js";
+import { registerBotApprovalDecisionHandler } from "./bot-approvals.js";
 import { botPlans } from "../services/bot-plans/plans-main.js";
 import { answerBotAccessRequest } from "../services/bot-runtime/bot-access-requests-main.js";
 import { publicBotApprovalPrompt } from "../services/bot-runtime/bot-approvals.js";
@@ -22,7 +22,6 @@ import { getAidenRemoteRuntime } from "../services/aiden-remote-service-main.js"
 import {
   botLiveProjection,
   botSessionRuntime,
-  botAllowList,
   dismissBotConnection,
   grantBotConnection,
 } from "../services/bot-runtime/bot-session-main.js";
@@ -137,7 +136,6 @@ export function registerBotHandlers(): void {
         event,
         () => new Error("Bot access notice requires the active application document."),
       ),
-    telegramProfiles: () => telegramService.listProfiles(),
     warn: (message, error) => logger.warn("bots", message, error),
   });
   // Bots are deleted, never archived; a legacy include-archived flag is ignored.
@@ -265,13 +263,6 @@ export function registerBotHandlers(): void {
   setBotChatInFrontProbe((botId) => botLive.shownInFront(botId));
   // Bot tool approvals: any desktop window may answer; the first answer wins.
   registerBotApprovalDecisionHandler({ handle: (channel, handler) => handle(channel, handler), approvals: botApprovals });
-  registerBotAllowedHandlers({
-    handle: (channel, handler) => handle(channel, handler),
-    allowed: botAllowList,
-    onChange: listener => botAllowList.onChange(listener),
-    botExists: botExistsIn(botApplicationService),
-    broadcast: (channel, payload) => ipcMain.broadcast(channel, payload),
-  });
   handle("bots:pendingApprovals", async (_event, id: unknown) => botApprovals.pending(parseBotId(id)).map(publicBotApprovalPrompt));
   // Bot quick-reply questions: any desktop window may answer; the first answer wins.
   registerBotQuestionHandlers({ handle: (channel, handler) => handle(channel, handler), questions: botQuestions });

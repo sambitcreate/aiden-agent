@@ -339,39 +339,6 @@ export interface TtsVoiceSummary {
   kind: "prebuilt" | "prompted" | "replicated";
 }
 
-export interface TtsVoicesPage {
-  voices: readonly TtsVoiceSummary[];
-  nextPageToken: string | null;
-}
-
-export function parseVoicesListResponse(response: unknown): TtsVoicesPage {
-  if (!isRecord(response)) {
-    throw new TtsWireError("invalid_response", "Voice list response is malformed.");
-  }
-  const items = Array.isArray(response.voices) ? response.voices : [];
-  const voices: TtsVoiceSummary[] = [];
-  for (const item of items) {
-    if (!isRecord(item)) continue;
-    const id = item.id ?? item.name;
-    const displayName = item.display_name ?? item.displayName;
-    if (typeof id !== "string" || id.length === 0 || id.length > 512) continue;
-    const kind =
-      item.type === "prompted" || item.type === "replicated" || item.type === "prebuilt"
-        ? (item.type as TtsVoiceSummary["kind"])
-        : "prebuilt";
-    voices.push({
-      providerVoiceId: id,
-      name: typeof displayName === "string" ? displayName : id,
-      kind,
-    });
-  }
-  const nextPageToken =
-    typeof response.next_page_token === "string" && response.next_page_token.length > 0
-      ? response.next_page_token
-      : null;
-  return { voices, nextPageToken };
-}
-
 /** Sentinel prebuilt starter voices curated for the first-run picker. */
 export const TTS_STARTER_PREBUILT_VOICES: readonly TtsVoiceSummary[] = [
   { providerVoiceId: "Kore", name: "Kore", kind: "prebuilt" },

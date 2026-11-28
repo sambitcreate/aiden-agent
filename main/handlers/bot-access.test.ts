@@ -6,7 +6,6 @@ import { BotRuntimeInventoryLeaseInvalidError } from "../services/bot-runtime-in
 import {
   registerBotAccessHandlers,
   type BotAccessHandlerDependencies,
-  type BotAccessTelegramProfile,
 } from "./bot-access.js";
 import { BOT_CREATE_RETRY_MESSAGE } from "./bot-renderer-errors.js";
 
@@ -35,7 +34,6 @@ const ACKNOWLEDGEMENT = {
 };
 
 function setup(options: {
-  profiles?: BotAccessTelegramProfile[];
   createBot?: () => Promise<unknown>;
   updateBotAccess?: () => Promise<unknown>;
 } = {}) {
@@ -70,7 +68,6 @@ function setup(options: {
       if (!document) throw new Error("Bot access notice requires the active application document.");
       return { isDestroyed: () => document.destroyed };
     },
-    telegramProfiles: async () => options.profiles ?? [],
     warn: (message) => warnings.push(message),
   });
   const liveEvent = (): FakeEvent => ({ document: { destroyed: false } });
@@ -214,42 +211,6 @@ test("the desktop one-time notice is read and acknowledged only as the desktop a
     invokeFrom({ document: { destroyed: true } }, "bots:acknowledgeAccessNotice", ACKNOWLEDGEMENT),
     /application changed before Bot access was confirmed/u,
   );
-});
-
-test("Telegram notices belong to the paired owner of a main-resolved profile", async () => {
-  const { calls, invoke, audiences } = setup({
-    profiles: [
-      { name: "work", settings: { allowedUserId: 4242 } },
-      { name: "home", settings: { allowedUserId: 7 } },
-      { name: "spare", settings: {} },
-    ],
-  });
-  await invoke("bots:getTelegramAccessNotice", " Work ");
-  await invoke("bots:acknowledgeTelegramAccessNotice", {
-    profile: "home",
-    acknowledgement: ACKNOWLEDGEMENT,
-  });
-  assert.deepEqual(audiences("noticeStatus"), ["telegram:work:owner:4242"]);
-  assert.deepEqual(audiences("acknowledgeNotice"), ["telegram:home:owner:7"]);
-
-  calls.length = 0;
-  await assert.rejects(invoke("bots:getTelegramAccessNotice", "spare"), /paired owner/u);
-  await assert.rejects(invoke("bots:getTelegramAccessNotice", "absent"), /paired owner/u);
-  await assert.rejects(invoke("bots:getTelegramAccessNotice", "main"), /reserved/u);
-  for (const malformed of [
-    { profile: "work" },
-    { profile: "work", acknowledgement: ACKNOWLEDGEMENT, audienceId: "desktop:local" },
-    { profile: "work", acknowledgement: { ...ACKNOWLEDGEMENT, decision: "skip" } },
-    { profile: "spare", acknowledgement: ACKNOWLEDGEMENT },
-    ["work", ACKNOWLEDGEMENT],
-  ]) {
-    await assert.rejects(
-      invoke("bots:acknowledgeTelegramAccessNotice", malformed),
-      Error,
-      JSON.stringify(malformed),
-    );
-  }
-  assert.deepEqual(calls, [], "no unpaired or malformed principal reaches the notice store");
 });
 
 test("onboarding's first-Bot acceptance asks main to keep a review-first choice, for the desktop audience only", async () => {

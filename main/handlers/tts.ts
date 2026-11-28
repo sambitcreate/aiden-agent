@@ -53,14 +53,6 @@ export function registerTtsHandlers(): void {
     return ttsService.status(owner(event), optionalChatId(request.chatId));
   });
 
-  ipcMain.handle("tts:settings:get", async (event) => {
-    const status = await ttsService.status(owner(event));
-    return {
-      settings: status.settings,
-      settingsRevision: status.settingsRevision,
-    };
-  });
-
   ipcMain.handle("tts:settings:update", async (event, input: unknown) => {
     const request = asRecord(input);
     const expectedRevision = asNonEmptyString(request.expectedRevision, "settings revision", 128);
@@ -89,16 +81,6 @@ export function registerTtsHandlers(): void {
   ipcMain.handle("tts:voices:starter", async (event) => {
     owner(event);
     return ttsService.listStarterVoices();
-  });
-
-  ipcMain.handle("tts:voices:list", async (event, input: unknown) => {
-    const request = input === undefined ? {} : asRecord(input);
-    return ttsService.listProviderVoices(
-      owner(event),
-      request.pageToken === undefined
-        ? undefined
-        : asNonEmptyString(request.pageToken, "voice page token", 2048),
-    );
   });
 
   ipcMain.handle("tts:preview", async (event) => {

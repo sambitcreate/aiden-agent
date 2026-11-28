@@ -58,7 +58,6 @@ export const NATIVE_INVOKE_CHANNELS = {
   accessibilityStatus: "aiden:accessibility:status",
   attachmentDroppedRead: "aiden:attachments:dropped-read",
   attachmentClipboardRead: "aiden:attachments:clipboard-read",
-  dialogOpen: "aiden:dialog:open",
   themeGet: "aiden:theme:get",
   themeSet: "aiden:theme:set",
   mediaStatus: "aiden:media:status",
@@ -107,7 +106,6 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "bots:connections:setup",
   "bots:approval",
   "bots:approval-settled",
-  "bots:allowed:changed",
   /** A Bot's question, approval, hand-off or issue appeared or settled: `{botId}`. The Bots sidebar re-reads its row. */
   "bots:attention",
   /** Bot bubbles changed: the full `BotBubbleState`. */

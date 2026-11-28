@@ -16,7 +16,7 @@ import {
   type TtsSettingsV1,
   type TtsSourceRef,
 } from "../../../renderer/shared/tts.js";
-import type { TtsUnarySynthesisResult, TtsVoicesPage } from "./gemini-wire.js";
+import type { TtsUnarySynthesisResult } from "./gemini-wire.js";
 import { computeTtsSourceRevision } from "./source.js";
 
 // --- Test harness -----------------------------------------------------------
@@ -97,10 +97,6 @@ class FakeProvider implements TtsProviderPort {
       audio: { bytes: wavBytes(), mimeType: "audio/wav", sampleRate: 24000, channels: 1 },
       usage: { inputTokens: 4, outputTokens: 480 },
     });
-  }
-
-  listVoices(): Promise<TtsVoicesPage> {
-    return Promise.resolve({ voices: [], nextPageToken: null });
   }
 }
 

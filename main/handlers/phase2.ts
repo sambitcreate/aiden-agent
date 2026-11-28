@@ -655,13 +655,6 @@ export function registerPhase2Handlers(): void {
     if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
     return readWebSearchSnapshot();
   });
-  ipcMain.handle("webSearch:existingAuth:get", async (event) => {
-    const owner = webSearchMutationOwner(event);
-    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
-    const snapshot = await readWebSearchSnapshot();
-    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
-    return snapshot.existingAuth;
-  });
   ipcMain.handle("webSearch:existingAuth:consent", async (event, value: unknown) => {
     const owner = webSearchMutationOwner(event);
     assertWebSearchRolloutMutationAllowed("existing-auth", undefined, webSearchRollout);

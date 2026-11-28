@@ -1,6 +1,6 @@
 // Gemini provider adapter: the only module that touches the Google SDK for
-// read aloud. Synthesis and voice listing run over the SDK's Interactions and
-// Voices surfaces with strict response validation from gemini-wire.js.
+// read aloud. Synthesis runs over the SDK's Interactions surface with strict
+// response validation from gemini-wire.js.
 //
 // Hidden automatic retries are disabled for billable POSTs; AbortSignal
 // propagates through the flattened RequestInit options.
@@ -10,10 +10,8 @@ import { TTS_LIMITS } from "../../../renderer/shared/tts.js";
 import {
   classifyTtsProviderError,
   parseUnarySynthesisResponse,
-  parseVoicesListResponse,
   type TtsInteractionBody,
   type TtsUnarySynthesisResult,
-  type TtsVoicesPage,
 } from "./gemini-wire.js";
 import type { TtsProviderPort } from "./service.js";
 
@@ -22,12 +20,6 @@ interface GeminiTtsClient {
   interactions: {
     create(
       params: Record<string, unknown>,
-      options?: Record<string, unknown>,
-    ): Promise<unknown>;
-  };
-  voices: {
-    list(
-      params?: Record<string, unknown>,
       options?: Record<string, unknown>,
     ): Promise<unknown>;
   };
@@ -75,25 +67,6 @@ export function createGeminiTtsProvider(
           },
         );
         return parseUnarySynthesisResponse(response);
-      } catch (error) {
-        throw classifyTtsProviderError(error);
-      }
-    },
-
-    async listVoices(input: {
-      apiKey: string;
-      pageToken?: string;
-    }): Promise<TtsVoicesPage> {
-      const client = factory.createClient({
-        apiKey: input.apiKey,
-        httpOptions: baseHttpOptions,
-      });
-      try {
-        const response = await client.voices.list(
-          input.pageToken ? { page_token: input.pageToken } : undefined,
-          { retries: 2, timeout_ms: TTS_LIMITS.requestTimeoutMs },
-        );
-        return parseVoicesListResponse(response);
       } catch (error) {
         throw classifyTtsProviderError(error);
       }
