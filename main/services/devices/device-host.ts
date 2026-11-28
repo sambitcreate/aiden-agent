@@ -9,6 +9,7 @@
  * A host adds an agent-device daemon endpoint only after agent access is
  * granted.
  */
+import type { ChildProcess } from "node:child_process";
 import type {
   DeviceHostKind,
   DevicePlatform,
@@ -149,4 +150,62 @@ export class DeviceHostError extends Error {
     this.name = "DeviceHostError";
     this.cause = options?.cause;
   }
+}
+
+const CAPTURED_CHILD_OUTPUT_LIMIT = 4 * 1024 * 1024;
+
+export interface RunCapturedChildOptions<Child extends ChildProcess = ChildProcess> {
+  timeoutMs: number;
+  stdin?: string;
+  /** Appended to stderr right before SIGTERM when `timeoutMs` elapses. */
+  timeoutStderrNote?: string;
+  /** Ignore write/EPIPE errors when ending stdin on an already-closing child. */
+  ignoreStdinError?: boolean;
+  /** Runs synchronously inside settlement right before the returned promise resolves. */
+  onSettle?: (child: Child) => void;
+}
+
+/**
+ * Spawns inside the promise executor, so a synchronous spawn failure (an
+ * argument or env value with a NUL byte, say) rejects the returned promise
+ * instead of throwing past the caller's `.catch`.
+ */
+export function runCapturedChild<Child extends ChildProcess>(
+  spawnChild: () => Child,
+  options: RunCapturedChildOptions<Child>,
+): Promise<DeviceCommandResult> {
+  return new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const finish = (code: number) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      options.onSettle?.(child);
+      resolve({ stdout, stderr, code });
+    };
+    const child = spawnChild();
+    const timer = setTimeout(() => {
+      if (options.timeoutStderrNote) stderr += options.timeoutStderrNote;
+      child.kill("SIGTERM");
+    }, options.timeoutMs);
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdout = (stdout + chunk).slice(-CAPTURED_CHILD_OUTPUT_LIMIT);
+    });
+    child.stderr?.on("data", (chunk: string) => {
+      stderr = (stderr + chunk).slice(-CAPTURED_CHILD_OUTPUT_LIMIT);
+    });
+    child.once("error", (error) => {
+      stderr = error.message;
+      finish(127);
+    });
+    child.once("close", (code, signal) => finish(code ?? (signal ? 124 : 1)));
+    if (options.stdin !== undefined) {
+      if (options.ignoreStdinError) child.stdin?.on("error", () => undefined);
+      child.stdin?.end(options.stdin);
+    }
+  });
 }

@@ -206,6 +206,23 @@ function strings(value: unknown): string[] {
     : [];
 }
 
+async function captureNativeImage(
+  contents: HiddenWindow["webContents"],
+  rect: { x: number; y: number; width: number; height: number },
+  size: { width: number; height: number },
+) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let image = await contents.capturePage(rect, { stayHidden: true });
+    if (!image.isEmpty()) {
+      const got = image.getSize();
+      if (got.width !== size.width || got.height !== size.height) image = image.resize({ ...size, quality: "best" });
+      return image;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  return null;
+}
+
 /** A JPEG of one part of the page, scaled by `scale`, or null when nothing could be captured. */
 async function capture(
   window: HiddenWindow,
@@ -213,16 +230,8 @@ async function capture(
   scale: number,
 ): Promise<{ data: string; mimeType: string } | null> {
   const size = { width: Math.max(1, Math.round(rect.width * scale)), height: Math.max(1, Math.round(rect.height * scale)) };
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    let image = await window.webContents.capturePage(rect, { stayHidden: true });
-    if (!image.isEmpty()) {
-      const got = image.getSize();
-      if (got.width !== size.width || got.height !== size.height) image = image.resize({ ...size, quality: "best" });
-      return { data: image.toJPEG(80).toString("base64"), mimeType: "image/jpeg" };
-    }
-    await new Promise((resolve) => setTimeout(resolve, 150));
-  }
-  return null;
+  const image = await captureNativeImage(window.webContents, rect, size);
+  return image ? { data: image.toJPEG(80).toString("base64"), mimeType: "image/jpeg" } : null;
 }
 
 async function draw(
@@ -254,15 +263,8 @@ async function draw(
   const pixels = { width: request.width * DESIGN_EXPORT_PNG_SCALE, height: height * DESIGN_EXPORT_PNG_SCALE };
   window.setContentSize(pixels.width, pixels.height);
   await contents.executeJavaScript(SETTLE_SCRIPT);
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    let image = await contents.capturePage({ x: 0, y: 0, ...pixels }, { stayHidden: true });
-    if (!image.isEmpty()) {
-      // A high-density display captures more pixels than asked for; the file is always 2×.
-      const size = image.getSize();
-      if (size.width !== pixels.width || size.height !== pixels.height) image = image.resize({ ...pixels, quality: "best" });
-      return image.toPNG();
-    }
-    await new Promise((resolve) => setTimeout(resolve, 150));
-  }
-  throw new Error("The page could not be drawn.");
+  // A high-density display captures more pixels than asked for; the file is always 2×.
+  const image = await captureNativeImage(contents, { x: 0, y: 0, ...pixels }, pixels);
+  if (!image) throw new Error("The page could not be drawn.");
+  return image.toPNG();
 }

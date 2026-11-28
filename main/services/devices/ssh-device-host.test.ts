@@ -5,6 +5,7 @@ import {
   SSH_RECONNECT_ATTEMPTS,
   createSshDeviceHost,
   nextSshReconnectDelay,
+  runSshCommand,
   sshFailureMessage,
   sshForwardArgs,
   type SshCommandResult,
@@ -292,4 +293,35 @@ test("ssh failures read as actions the user can take", () => {
     "Node.js 22 or newer is required on the host; found 20.1.0.",
   );
   assert.deepEqual([0, 1000, 16_000, 30_000].map(nextSshReconnectDelay), [1000, 2000, 30_000, 30_000]);
+});
+
+test("runSshCommand appends the timeout note to stderr in order and terminates the child", async () => {
+  const result = await runSshCommand(
+    process.execPath,
+    [
+      "-e",
+      "process.stderr.write('before'); process.on('SIGTERM', () => { process.stderr.write(' after'); process.exit(143); }); setInterval(() => {}, 1000);",
+    ],
+    { timeoutMs: 250 },
+  );
+  assert.notEqual(result.code, 0);
+  assert.equal(result.stderr, "before\nThe SSH command timed out. after");
+});
+
+test("runSshCommand tolerates stdin write errors when a child exits before draining stdin", async () => {
+  const result = await runSshCommand(
+    process.execPath,
+    ["-e", "process.exit(0)"],
+    { timeoutMs: 5_000, stdin: "x".repeat(512 * 1024) },
+  );
+  assert.equal(result.code, 0);
+});
+
+test("runSshCommand rejects its promise when ssh cannot spawn, so the host's .catch reports it", async () => {
+  // A NUL byte makes spawn throw synchronously; the SSH host's run() turns a rejection into code 127.
+  const result = await runSshCommand(process.execPath, ["-e", "\0"], { timeoutMs: 5_000 }).catch(
+    (error: unknown): SshCommandResult => ({ code: 127, stdout: "", stderr: (error as Error).message }),
+  );
+  assert.equal(result.code, 127);
+  assert.match(result.stderr, /null bytes/u);
 });

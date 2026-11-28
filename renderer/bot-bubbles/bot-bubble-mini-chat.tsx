@@ -10,7 +10,6 @@ import { AskUserQuestionComposer } from "../components/ask-user-question-compose
 import { BotAvatar } from "../components/bot-avatar";
 import { MessageAttachmentPreviewProvider } from "../components/message-attachments";
 import { Button, Callout, Text, toast } from "../components/ui";
-import { applyBotBubbleChange, botBubblesApi } from "../lib/bot-bubbles-api";
 import { botsApi } from "../lib/ipc";
 import { userFacingErrorMessage } from "../lib/ipc-error";
 import { useLayer } from "../lib/layer-stack";
@@ -29,6 +28,12 @@ import { BOT_WAITING_LINE, BOT_WORKING_LINE, useBotLiveSummary } from "../main/b
 import { BotStatusLine } from "../main/bots/bot-status-line";
 import { BOT_INTERRUPTED_TEXT, TranscriptEntries } from "../main/bots/bot-transcript-entries";
 import { botSidebarPreferenceActions } from "../main/bots/use-bot-sidebar-preferences";
+import {
+  bringBubbleBack,
+  closeBubble as closeBubbleAction,
+  reportBubbleError,
+  tuckBubble,
+} from "./bot-bubble-actions";
 import type { MiniChatPlacement } from "./head-layout";
 
 /** Selector for everything the bubble layer treats as its own (not click-through, not "outside"). */
@@ -53,10 +58,6 @@ function rectOf(element: HTMLElement | null) {
   return rect && rect.width > 0 && rect.height > 0
     ? { x: rect.left, y: rect.top, width: rect.width, height: rect.height }
     : undefined;
-}
-
-function report(change: Promise<unknown>, fallback: string) {
-  void change.catch((error: unknown) => toast.error(userFacingErrorMessage(error, fallback)));
 }
 
 export function BotBubbleMiniChat({
@@ -115,12 +116,16 @@ export function BotBubbleMiniChat({
     if (botFound && !closing) markViewed(botId, replyAt);
   }, [botFound, closing, botId, replyAt, markViewed]);
 
-  const tuck = React.useCallback(() => report(applyBotBubbleChange(botBubblesApi.open(null)), "Aiden couldn’t tuck that chat away."), []);
+  const tuck = React.useCallback(() => tuckBubble(), []);
   const openInAiden = React.useCallback(
-    () => report(applyBotBubbleChange(botBubblesApi.bringBack(botId, rectOf(chatRef.current))), `Aiden couldn’t open ${name}.`),
+    () =>
+      bringBubbleBack(botId, {
+        rect: rectOf(chatRef.current),
+        fallback: `Aiden couldn’t open ${name}.`,
+      }),
     [botId, name],
   );
-  const closeBubble = () => report(applyBotBubbleChange(botBubblesApi.close(botId)), "Aiden couldn’t close that bubble.");
+  const closeBubble = () => closeBubbleAction(botId);
   // Opening puts the cursor in the message box; closing while the chat held focus gives it back to the head.
   React.useEffect(() => {
     if (botFound && !closing) composerRef.current?.focus({ preventScroll: true });
@@ -223,7 +228,7 @@ export function BotBubbleMiniChat({
     box?.focus();
   };
 
-  const stop = () => report(botsApi.stop(botId), `Aiden couldn’t stop ${name}.`);
+  const stop = () => reportBubbleError(botsApi.stop(botId), `Aiden couldn’t stop ${name}.`);
 
   /** One answer for a group of identical waiting calls; only the waits it decided leave. */
   const answerApprovalGroup = async (group: readonly BotApprovalPrompt[], decision: "allow" | "deny", scope?: "always") => {

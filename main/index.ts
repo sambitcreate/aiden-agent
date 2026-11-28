@@ -275,13 +275,14 @@ let resolveShortcutInitialization: (() => void) | null = null;
 const shortcutInitializationPromise = new Promise<void>((resolve) => {
   resolveShortcutInitialization = resolve;
 });
-let closeGuard = {
+const EMPTY_CLOSE_GUARD = {
   dirty: false,
   gitBusy: false,
   path: undefined as string | undefined,
   saving: false,
   sources: undefined as CloseGuardSources | undefined,
 };
+let closeGuard = { ...EMPTY_CLOSE_GUARD };
 let protectedAction: "close" | "quit" | "reload" | "onboarding-reset" | null =
   null;
 let forceAppQuit = false;
@@ -1090,13 +1091,7 @@ async function requestWindowReload(
   if (window.isDestroyed() || !lifecycleCheck.tryBegin()) return;
   try {
     if (!(await authorizeProtectedAction(window, "reload"))) return;
-    closeGuard = {
-      dirty: false,
-      gitBusy: false,
-      path: undefined,
-      saving: false,
-      sources: undefined,
-    };
+    closeGuard = { ...EMPTY_CLOSE_GUARD };
     protectedAction = "reload";
     if (options.ignoreCache) window.webContents.reloadIgnoringCache();
     else window.webContents.reload();
@@ -1327,13 +1322,18 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
   }
 }
 
+function mainWindowFor(
+  event: Pick<IpcMainInvokeEvent, "sender">,
+): BrowserWindow | null {
+  return mainWindow &&
+    !mainWindow.isDestroyed() &&
+    event.sender.id === mainWindow.webContents.id
+    ? mainWindow
+    : null;
+}
+
 ipcMain.handle("app:setCloseGuard", (event, value: unknown) => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  )
-    return false;
+  if (!mainWindowFor(event)) return false;
   const input = (
     typeof value === "object" && value !== null ? value : {}
   ) as Record<string, unknown>;
@@ -1352,22 +1352,13 @@ ipcMain.handle("app:setCloseGuard", (event, value: unknown) => {
 });
 
 ipcMain.handle("app:resetOnboarding", async (event) => {
-  const window = mainWindow;
-  if (
-    !window ||
-    window.isDestroyed() ||
-    event.sender.id !== window.webContents.id
-  )
-    return false;
+  const window = mainWindowFor(event);
+  if (!window) return false;
   return requestOnboardingReset(window);
 });
 
 ipcMain.handle("app:getOnboardingState", async (event, legacyComplete: unknown) => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  ) {
+  if (!mainWindowFor(event)) {
     throw new Error("Onboarding state is unavailable outside the active application window.");
   }
   const owner = rendererDocumentOwner(
@@ -1380,11 +1371,7 @@ ipcMain.handle("app:getOnboardingState", async (event, legacyComplete: unknown) 
 ipcMain.handle(
   "app:setOnboardingOutcome",
   async (event, outcome: unknown, selectedProviderId: unknown) => {
-    if (
-      !mainWindow ||
-      mainWindow.isDestroyed() ||
-      event.sender.id !== mainWindow.webContents.id
-    ) {
+    if (!mainWindowFor(event)) {
       throw new Error("Onboarding can only be changed from the active application window.");
     }
     if (outcome !== "incomplete" && outcome !== "deferred" && outcome !== "completed") {
@@ -1411,11 +1398,7 @@ ipcMain.handle(
 ipcMain.handle(
   "app:setOnboardingProgress",
   async (event, step: unknown, selectedProviderId: unknown) => {
-    if (
-      !mainWindow ||
-      mainWindow.isDestroyed() ||
-      event.sender.id !== mainWindow.webContents.id
-    ) {
+    if (!mainWindowFor(event)) {
       throw new Error("Onboarding can only be changed from the active application window.");
     }
     if (step !== "profile" && step !== "provider" && step !== "bots") {
@@ -1438,11 +1421,7 @@ ipcMain.handle(
 );
 
 ipcMain.handle("app:getUpdateState", (event) => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  ) {
+  if (!mainWindowFor(event)) {
     return {
       status: "idle",
       version: null,
@@ -1466,11 +1445,7 @@ ipcMain.handle(
 );
 
 function restartToUpdateBlocker(event: IpcMainInvokeEvent): AppUpdateRestartResult | null {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  ) {
+  if (!mainWindowFor(event)) {
     return {
       accepted: false,
       reason: "unavailable",
@@ -1515,12 +1490,7 @@ ipcMain.handle("app:restartToUpdate", async (event): Promise<AppUpdateRestartRes
 });
 
 ipcMain.handle("app:renderer-ready", (event) => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  )
-    return false;
+  if (!mainWindowFor(event)) return false;
   rendererReadiness.markReady();
   return true;
 });
@@ -1565,12 +1535,7 @@ async function restoreDockIconPreference(
 }
 
 ipcMain.handle("app:setDockIcon", async (event, value: unknown) => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  )
-    return false;
+  if (!mainWindowFor(event)) return false;
   if (value !== "aiden" && value !== "monochrome")
     throw new Error("Invalid Dock icon preference.");
   return applyDockIconPreference(value);
@@ -1578,10 +1543,7 @@ ipcMain.handle("app:setDockIcon", async (event, value: unknown) => {
 
 // The Inbox switch and view, reported by the main window only.
 registerInboxDockBadgeIpc({
-  isMainWindow: (event) =>
-    !!mainWindow &&
-    !mainWindow.isDestroyed() &&
-    event.sender.id === mainWindow.webContents.id,
+  isMainWindow: (event) => mainWindowFor(event) !== null,
 });
 
 function openExternalUrl(value: string): void {
@@ -1671,6 +1633,11 @@ async function createMainWindow(
   resetRendererReadiness();
 
   const createdWindow = mainWindow;
+  const windowGone = (): boolean =>
+    cleanupStarted ||
+    shutdownStarted ||
+    createdWindow.isDestroyed() ||
+    mainWindow !== createdWindow;
   // Aiden never uses WebRTC, but a live design canvas frame or a chat's
   // generated UI runs its own script here, and Electron ignores the guest CSP's
   // `webrtc 'block'`, so such a page could send STUN or TURN over UDP to a host
@@ -1721,13 +1688,7 @@ async function createMainWindow(
     rendererReadiness.reset();
     terminalService.closeForWebContents(createdWebContentsId);
     browserService.closeForWebContents(createdWebContentsId);
-    if (
-      cleanupStarted ||
-      shutdownStarted ||
-      createdWindow.isDestroyed() ||
-      mainWindow !== createdWindow
-    )
-      return;
+    if (windowGone()) return;
     const recoveryDecision = decideRendererRecovery(rendererCrashTimes, Date.now());
     rendererCrashTimes = recoveryDecision.recentCrashTimes;
     if (!recoveryDecision.retry) {
@@ -1746,12 +1707,7 @@ async function createMainWindow(
       new Promise<void>((resolve) => {
         setTimeout(resolve, recoveryDecision.backoffMs);
       }).then(async () => {
-        if (
-          cleanupStarted ||
-          shutdownStarted ||
-          createdWindow.isDestroyed() ||
-          mainWindow !== createdWindow
-        ) return;
+        if (windowGone()) return;
         await createdWindow.loadURL(mainWindowUrl);
       }),
     );
@@ -1767,12 +1723,7 @@ async function createMainWindow(
     });
     void recovery.promise.then(() => {
       if (!mainWindowLoads.isCurrent(recovery)) return;
-      if (
-        cleanupStarted ||
-        shutdownStarted ||
-        createdWindow.isDestroyed() ||
-        mainWindow !== createdWindow
-      ) return;
+      if (windowGone()) return;
       writeDiagnosticEvent({
         level: "info",
         area: "renderer",
@@ -1892,13 +1843,7 @@ async function createMainWindow(
       mainWindowLoads.clear();
       rendererReadiness.dispose();
     }
-    closeGuard = {
-      dirty: false,
-      gitBusy: false,
-      path: undefined,
-      saving: false,
-      sources: undefined,
-    };
+    closeGuard = { ...EMPTY_CLOSE_GUARD };
     protectedAction = null;
   });
 
@@ -1992,6 +1937,12 @@ function waitForRendererReady(): Promise<boolean> {
   return sharedRendererReadyWait;
 }
 
+function showAndFocus(window: BrowserWindow): void {
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+}
+
 async function deliverMainWindowNotification(
   channel: NotificationChannel,
   payload: Record<string, unknown>,
@@ -2001,9 +1952,7 @@ async function deliverMainWindowNotification(
     throw new Error("The main window did not become ready in time.");
   }
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.show();
-  mainWindow.focus();
+  showAndFocus(mainWindow);
   switch (channel) {
     case "app:command":
       ipcMain.broadcast("app:command", payload);
@@ -2027,9 +1976,7 @@ async function navigateMainWindowAndWait(path: string): Promise<void> {
   if (!mainWindow || mainWindow.isDestroyed()) {
     throw new Error("The main window is not available.");
   }
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.show();
-  mainWindow.focus();
+  showAndFocus(mainWindow);
   const owner = windowDocumentOwner(mainWindow.webContents);
   const status = await aidenAppNavigation.openPath(path, owner);
   if (status === "blocked") {
@@ -2212,7 +2159,7 @@ registerWindowControlHandlers<BrowserWindow>({
 });
 
 ipcMain.handle("app:setMenuCommands", (event, commandIds: unknown) => {
-  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) return false;
+  if (!mainWindowFor(event)) return false;
   const next = parseMenuCommandIds(commandIds);
   if (!next) return false;
   const current = applicationMenuAvailable;
@@ -2878,9 +2825,7 @@ if (!ownsSingleInstanceLock) {
             if (!(await waitForRendererReady())) return null;
             const window = mainWindow;
             if (!window || window.isDestroyed()) return null;
-            if (window.isMinimized()) window.restore();
-            window.show();
-            window.focus();
+            showAndFocus(window);
             return window;
           },
           openExternal: openExternalUrl,

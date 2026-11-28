@@ -1,3 +1,4 @@
+import { isCredentialAutocomplete } from "../credential-fields.js";
 import { rectInTopViewport, type ViewportRect } from "./hit-test.js";
 
 export interface DomInspectionResult {
@@ -46,12 +47,6 @@ const CURATED_STYLE_PROPS = [
 const SECRET_ATTR_PATTERN =
   /pass|secret|token|auth|api[_-]?key|cookie|session|credit|card|cvv|cvc|ssn|bearer|jwt|private/iu;
 
-const CREDENTIAL_AUTOCOMPLETE_TOKENS = new Set([
-  "current-password",
-  "new-password",
-  "one-time-code",
-]);
-
 function cssEscape(value: string): string {
   if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
     return CSS.escape(value);
@@ -65,15 +60,7 @@ export function isSensitiveDomElement(element: Element): boolean {
     const type = (element.getAttribute("type") ?? "").trim().toLowerCase();
     if (type === "password") return true;
   }
-  const autocomplete = (element.getAttribute("autocomplete") ?? "").toLowerCase();
-  if (autocomplete) {
-    for (const token of autocomplete.split(/\s+/u)) {
-      if (CREDENTIAL_AUTOCOMPLETE_TOKENS.has(token) || token.startsWith("cc-")) {
-        return true;
-      }
-    }
-  }
-  return false;
+  return isCredentialAutocomplete(element.getAttribute("autocomplete") ?? undefined);
 }
 
 /** Whether the element is, or wraps, a password, one-time-code or payment-card field. */

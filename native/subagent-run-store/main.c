@@ -14,6 +14,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include "../shared/aiden-identity.h"
 
 #define STORE_FILE "runs.json"
 #define STAGING_PREFIX ".runs.json."
@@ -36,45 +37,37 @@ enum InstallResult {
   INSTALL_IO_FAILED = 2,
 };
 
-static int same_timestamp(struct timespec left, struct timespec right) {
-  return left.tv_sec == right.tv_sec && left.tv_nsec == right.tv_nsec;
-}
-
-static int is_exclusive_regular_file(const struct stat *identity) {
-  return S_ISREG(identity->st_mode) && identity->st_nlink == 1;
-}
-
 static int same_file_identity(const struct stat *left,
                               const struct stat *right) {
 #ifdef __APPLE__
-  return is_exclusive_regular_file(left) && is_exclusive_regular_file(right) &&
+  return aiden_exclusive_regular(left) && aiden_exclusive_regular(right) &&
          left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          left->st_size == right->st_size &&
-         same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
-         same_timestamp(left->st_ctimespec, right->st_ctimespec) &&
-         same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
+         aiden_same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
+         aiden_same_timestamp(left->st_ctimespec, right->st_ctimespec) &&
+         aiden_same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
 #else
-  return is_exclusive_regular_file(left) && is_exclusive_regular_file(right) &&
+  return aiden_exclusive_regular(left) && aiden_exclusive_regular(right) &&
          left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          left->st_size == right->st_size &&
-         same_timestamp(left->st_mtim, right->st_mtim) &&
-         same_timestamp(left->st_ctim, right->st_ctim);
+         aiden_same_timestamp(left->st_mtim, right->st_mtim) &&
+         aiden_same_timestamp(left->st_ctim, right->st_ctim);
 #endif
 }
 
 static int same_renamed_file_identity(const struct stat *left,
                                       const struct stat *right) {
 #ifdef __APPLE__
-  return is_exclusive_regular_file(left) && is_exclusive_regular_file(right) &&
+  return aiden_exclusive_regular(left) && aiden_exclusive_regular(right) &&
          left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          left->st_size == right->st_size &&
-         same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
-         same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
+         aiden_same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
+         aiden_same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
 #else
-  return is_exclusive_regular_file(left) && is_exclusive_regular_file(right) &&
+  return aiden_exclusive_regular(left) && aiden_exclusive_regular(right) &&
          left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          left->st_size == right->st_size &&
-         same_timestamp(left->st_mtim, right->st_mtim);
+         aiden_same_timestamp(left->st_mtim, right->st_mtim);
 #endif
 }
 
@@ -161,28 +154,9 @@ static int make_token(const struct stat *identity, char *token,
   return length > 0 && (size_t)length < capacity ? 0 : -1;
 }
 
-static void random_uuid(char output[37]) {
-  static const char hex[] = "0123456789abcdef";
-  uint8_t bytes[16];
-  arc4random_buf(bytes, sizeof(bytes));
-  bytes[6] = (uint8_t)((bytes[6] & 0x0f) | 0x40);
-  bytes[8] = (uint8_t)((bytes[8] & 0x3f) | 0x80);
-  size_t byte_index = 0;
-  size_t output_index = 0;
-  for (; byte_index < sizeof(bytes); byte_index += 1) {
-    if (output_index == 8 || output_index == 13 || output_index == 18 ||
-        output_index == 23) {
-      output[output_index++] = '-';
-    }
-    output[output_index++] = hex[bytes[byte_index] >> 4];
-    output[output_index++] = hex[bytes[byte_index] & 0x0f];
-  }
-  output[36] = '\0';
-}
-
 static int make_owned_name(const char *suffix, char output[NAME_MAX + 1]) {
   char uuid[37];
-  random_uuid(uuid);
+  aiden_random_uuid(uuid);
   int length =
       snprintf(output, NAME_MAX + 1, "%s%s.%s", STAGING_PREFIX, uuid, suffix);
   return length > 0 && length <= NAME_MAX ? 0 : -1;
@@ -219,20 +193,6 @@ static int is_owned_temporary_name(const char *name) {
   return strcmp(uuid + 37, "tmp") == 0 || strcmp(uuid + 37, "cleanup") == 0;
 }
 
-static int base64_value(unsigned char value) {
-  if (value >= 'A' && value <= 'Z')
-    return value - 'A';
-  if (value >= 'a' && value <= 'z')
-    return value - 'a' + 26;
-  if (value >= '0' && value <= '9')
-    return value - '0' + 52;
-  if (value == '+')
-    return 62;
-  if (value == '/')
-    return 63;
-  return -1;
-}
-
 static int decode_base64(const char *encoded, unsigned char **bytes,
                          size_t *length) {
   size_t encoded_length = strlen(encoded);
@@ -254,14 +214,14 @@ static int decode_base64(const char *encoded, unsigned char **bytes,
 
   size_t output = 0;
   for (size_t index = 0; index < encoded_length; index += 4) {
-    int first = base64_value((unsigned char)encoded[index]);
-    int second = base64_value((unsigned char)encoded[index + 1]);
+    int first = aiden_base64_value((unsigned char)encoded[index]);
+    int second = aiden_base64_value((unsigned char)encoded[index + 1]);
     int third = encoded[index + 2] == '='
                     ? 0
-                    : base64_value((unsigned char)encoded[index + 2]);
+                    : aiden_base64_value((unsigned char)encoded[index + 2]);
     int fourth = encoded[index + 3] == '='
                      ? 0
-                     : base64_value((unsigned char)encoded[index + 3]);
+                     : aiden_base64_value((unsigned char)encoded[index + 3]);
     int final_group = index + 4 == encoded_length;
     if (first < 0 || second < 0 || third < 0 || fourth < 0 ||
         (!final_group &&
@@ -426,7 +386,7 @@ static int read_store(int directory_fd) {
   }
 
   struct stat before;
-  if (fstat(file_fd, &before) != 0 || !is_exclusive_regular_file(&before)) {
+  if (fstat(file_fd, &before) != 0 || !aiden_exclusive_regular(&before)) {
     close(file_fd);
     puts("error destination_changed");
     return fflush(stdout) == 0 ? 0 : -1;
@@ -516,7 +476,7 @@ static int open_expected_destination(int directory_fd,
   }
   char current_token[256];
   if (fstat(descriptor, identity) != 0 ||
-      !is_exclusive_regular_file(identity) ||
+      !aiden_exclusive_regular(identity) ||
       make_token(identity, current_token, sizeof(current_token)) != 0 ||
       strcmp(current_token, expected_token) != 0) {
     close(descriptor);
@@ -556,7 +516,7 @@ static int install_store(int directory_fd, const char *expected_token,
   if (staged_fd < 0 || write_all(staged_fd, contents, length) != 0 ||
       fchmod(staged_fd, 0600) != 0 || fsync(staged_fd) != 0 ||
       fstat(staged_fd, &staged_identity) != 0 ||
-      !is_exclusive_regular_file(&staged_identity)) {
+      !aiden_exclusive_regular(&staged_identity)) {
     if (staged_fd >= 0)
       close(staged_fd);
     if (staged[0] != '\0')

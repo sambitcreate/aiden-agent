@@ -26,6 +26,7 @@ import { deviceToolInstallMessage, parseDeviceToolVersions } from "../../../rend
 import {
   DeviceHostError,
   DeviceToolsMissingError,
+  runCapturedChild,
   type AgentDeviceEndpoint,
   type DeviceCommandResult,
   type DeviceHost,
@@ -558,7 +559,6 @@ export function createSshDeviceHost(config: SshDeviceHostConfig, deps: SshDevice
 }
 
 const SSH_STDERR_LIMIT = 4_096;
-const SSH_OUTPUT_LIMIT = 4 * 1024 * 1024;
 
 /** Production dependencies: the system ssh, real loopback ports, and the wall clock. */
 export function defaultSshDeviceHostDeps(input: {
@@ -605,35 +605,14 @@ export function runSshCommand(
   args: readonly string[],
   options: { stdin?: string; timeoutMs: number },
 ): Promise<SshCommandResult> {
-  return new Promise((resolve) => {
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    const finish = (code: number) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ code, stdout, stderr });
-    };
-    const child = spawn(sshPath, [...args], { stdio: [options.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
-    const timer = setTimeout(() => {
-      stderr += "\nThe SSH command timed out.";
-      child.kill("SIGTERM");
-    }, options.timeoutMs);
-    child.stdout?.setEncoding("utf8").on("data", (chunk: string) => {
-      stdout = (stdout + chunk).slice(-SSH_OUTPUT_LIMIT);
+  const spawnSsh = () =>
+    spawn(sshPath, [...args], {
+      stdio: [options.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
     });
-    child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
-      stderr = (stderr + chunk).slice(-SSH_OUTPUT_LIMIT);
-    });
-    child.once("error", (error) => {
-      stderr = error.message;
-      finish(127);
-    });
-    child.once("close", (code, signal) => finish(code ?? (signal ? 124 : 1)));
-    if (options.stdin !== undefined) {
-      child.stdin?.on("error", () => undefined);
-      child.stdin?.end(options.stdin);
-    }
+  return runCapturedChild(spawnSsh, {
+    timeoutMs: options.timeoutMs,
+    stdin: options.stdin,
+    timeoutStderrNote: "\nThe SSH command timed out.",
+    ignoreStdinError: true,
   });
 }

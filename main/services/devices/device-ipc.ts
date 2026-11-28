@@ -14,14 +14,16 @@ import {
   type DeviceConsentKind,
 } from "../../../renderer/shared/devices.js";
 import { parseSshDeviceHostConfig } from "../../../renderer/shared/device-ssh-hosts.js";
+import {
+  createDeviceIpcGuard,
+  ownerSubscribers,
+  requireRecord,
+  type DeviceIpcEvent,
+} from "./device-ipc-support.js";
 
-const ID_PATTERN = DEVICE_ID_PATTERN;
+export type { DeviceIpcEvent };
+
 const CHAT_ID_MAX_LENGTH = 256;
-
-export interface DeviceIpcEvent {
-  sender: unknown;
-  senderFrame: unknown;
-}
 
 export interface DeviceHandlerDeps {
   handle(channel: string, listener: (event: DeviceIpcEvent, ...args: unknown[]) => unknown): void;
@@ -31,7 +33,7 @@ export interface DeviceHandlerDeps {
 }
 
 function requireId(value: unknown, label: string): string {
-  if (typeof value !== "string" || !ID_PATTERN.test(value)) throw new Error(`A valid ${label} is required.`);
+  if (typeof value !== "string" || !DEVICE_ID_PATTERN.test(value)) throw new Error(`A valid ${label} is required.`);
   return value;
 }
 
@@ -56,44 +58,21 @@ function requireConsentKind(value: unknown): DeviceConsentKind {
   return value;
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("Invalid simulator request.");
-  }
-  return value as Record<string, unknown>;
-}
-
 export function registerDeviceHandlersWith(deps: DeviceHandlerDeps): void {
-  const subscribers = new Set<RendererDocumentOwner>();
+  const subscribers = ownerSubscribers<"devices:state" | "devices:reveal">();
   let unsubscribeState: (() => void) | null = null;
   let unsubscribeReveal: (() => void) | null = null;
-  const broadcast = (channel: "devices:state" | "devices:reveal", payload: unknown) => {
-    for (const subscriber of [...subscribers]) {
-      if (subscriber.isDestroyed()) subscribers.delete(subscriber);
-      else subscriber.send(channel, payload);
-    }
-  };
 
   const subscribe = (owner: RendererDocumentOwner, service: DeviceService): void => {
-    unsubscribeState ??= service.onState((state) => broadcast("devices:state", state));
+    unsubscribeState ??= service.onState((state) => subscribers.broadcast("devices:state", state));
     // An agent's device_open floats the device over its chat or shows its tab.
     unsubscribeReveal ??= service.onReveal((chatId, target) =>
-      broadcast("devices:reveal", target ? { chatId, hostId: target.hostId, deviceId: target.deviceId } : { chatId }),
+      subscribers.broadcast("devices:reveal", target ? { chatId, hostId: target.hostId, deviceId: target.deviceId } : { chatId }),
     );
-    if (subscribers.has(owner)) return;
     subscribers.add(owner);
-    const cleanup = owner.onInvalidated(() => {
-      subscribers.delete(owner);
-      cleanup();
-    });
   };
 
-  const guarded = <T>(run: (service: DeviceService, owner: RendererDocumentOwner, args: unknown[]) => Promise<T>) =>
-    async (event: DeviceIpcEvent, ...args: unknown[]): Promise<T> => {
-      if (!deps.enabled()) throw new Error("Simulator devices are not enabled.");
-      const owner = deps.owner(event);
-      return run(deps.service(), owner, args);
-    };
+  const guarded = createDeviceIpcGuard(deps, deps.service);
 
   deps.handle(
     "devices:get-state",

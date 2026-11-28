@@ -975,6 +975,20 @@ test("quit ends a helper command still running before its own timeout, and only 
   }
 });
 
+test("a helper command that cannot spawn rejects its promise so callers' .catch sees it", async () => {
+  // A NUL byte makes spawn throw synchronously; callers chain .catch on the returned promise.
+  const outcome = await runChildCommand(process.execPath, ["-e", "\0"], { env: process.env, timeoutMs: 5_000 }).then(
+    () => "resolved",
+    (error: unknown) => (error as { code?: string }).code,
+  );
+  assert.equal(outcome, "ERR_INVALID_ARG_VALUE");
+  try {
+    assert.equal(terminateRunningDeviceCommands(), 0, "a command that never spawned is not tracked as running");
+  } finally {
+    resetDeviceCommandCancellationForTests();
+  }
+});
+
 test("after quit's deadline cleanup, a helper command the shutdown chain starts later never runs", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "aiden-device-quit-"));
   try {

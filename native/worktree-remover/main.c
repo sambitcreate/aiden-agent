@@ -14,6 +14,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include "../shared/aiden-identity.h"
 #ifdef __APPLE__
 #include <libproc.h>
 #endif
@@ -115,25 +116,20 @@ static int read_uint64(int descriptor, uint64_t *value) {
   return 1;
 }
 
-static int same_timestamp(const struct timespec left,
-                          const struct timespec right) {
-  return left.tv_sec == right.tv_sec && left.tv_nsec == right.tv_nsec;
-}
-
 static int same_entry_identity(const struct stat *left,
                                const struct stat *right) {
 #ifdef __APPLE__
   return left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          (left->st_mode & S_IFMT) == (right->st_mode & S_IFMT) &&
          left->st_size == right->st_size &&
-         same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
-         same_timestamp(left->st_ctimespec, right->st_ctimespec);
+         aiden_same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
+         aiden_same_timestamp(left->st_ctimespec, right->st_ctimespec);
 #else
   return left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          (left->st_mode & S_IFMT) == (right->st_mode & S_IFMT) &&
          left->st_size == right->st_size &&
-         same_timestamp(left->st_mtim, right->st_mtim) &&
-         same_timestamp(left->st_ctim, right->st_ctim);
+         aiden_same_timestamp(left->st_mtim, right->st_mtim) &&
+         aiden_same_timestamp(left->st_ctim, right->st_ctim);
 #endif
 }
 
@@ -149,11 +145,11 @@ static int same_object_identity(const struct stat *left,
 #ifdef __APPLE__
   return left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          left->st_mode == right->st_mode && left->st_size == right->st_size &&
-         same_timestamp(left->st_mtimespec, right->st_mtimespec);
+         aiden_same_timestamp(left->st_mtimespec, right->st_mtimespec);
 #else
   return left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          left->st_mode == right->st_mode && left->st_size == right->st_size &&
-         same_timestamp(left->st_mtim, right->st_mtim);
+         aiden_same_timestamp(left->st_mtim, right->st_mtim);
 #endif
 }
 
@@ -1402,18 +1398,6 @@ static int manifest_names(const char *token, char manifest_name[NAME_MAX + 1],
          deleting_length >= 0 && deleting_length <= NAME_MAX;
 }
 
-static int valid_digest(const char *digest) {
-  if (digest == NULL || strlen(digest) != SHA256_HEX_LENGTH)
-    return 0;
-  for (size_t index = 0; index < SHA256_HEX_LENGTH; index += 1) {
-    if (!((digest[index] >= '0' && digest[index] <= '9') ||
-          (digest[index] >= 'a' && digest[index] <= 'f'))) {
-      return 0;
-    }
-  }
-  return 1;
-}
-
 static void print_error(int code) {
   if (code == EXIT_MUTATION_DETECTED)
     fputs("mutation_detected\n", stderr);
@@ -1542,7 +1526,7 @@ static int audit_session_command(int argc, char **argv) {
 static int finalize_manifest_command(int argc, char **argv) {
   if (argc != 8 || strcmp(argv[2], "--parent") != 0 ||
       strcmp(argv[4], "--token") != 0 || strcmp(argv[6], "--digest") != 0 ||
-      argv[3][0] != '/' || !valid_token(argv[5]) || !valid_digest(argv[7])) {
+      argv[3][0] != '/' || !valid_token(argv[5]) || !aiden_valid_hex_digest(argv[7])) {
     print_error(EXIT_INVALID_INPUT);
     return EXIT_INVALID_INPUT;
   }

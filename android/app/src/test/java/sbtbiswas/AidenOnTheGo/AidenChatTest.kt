@@ -4386,9 +4386,12 @@ class AidenChatTest {
         val main = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
         val server = MockWebServer()
         val owners = ViewModelStore()
+        val scopeJob = Job()
         val releaseEvents = CountDownLatch(1)
         val releaseRetries = CountDownLatch(1)
-        val reads = java.util.concurrent.atomic.AtomicInteger()
+        val firstTitleRead = CompletableDeferred<Unit>()
+        val titleSettled = java.util.concurrent.atomic.AtomicBoolean(false)
+        val terminalReadFailed = java.util.concurrent.atomic.AtomicBoolean(false)
         val earlier = listOf(
             AidenChatMessage("earlier-prompt", AidenChatRole.USER, "Earlier", createdAt = Instant.EPOCH),
             AidenChatMessage("earlier-reply", AidenChatRole.ASSISTANT, "Stopped early", createdAt = Instant.EPOCH,
@@ -4401,30 +4404,41 @@ class AidenChatTest {
         val final = initial.copy(revision = "r2", titlePending = null,
             messages = if (refreshHoldsReply) earlier + runReply else earlier)
         val wire = Json { explicitNulls = false; encodeDefaults = true }
+        val grants = listOf(AidenRemoteCapability.SERVER_READ, AidenRemoteCapability.CHAT_READ)
+        val host = AidenServer(instanceId = "instance-ended", name = "Ended Mac", capabilities = grants,
+            features = listOf(AidenRemoteProtocol.CHAT_MESSAGES_WINDOW_FEATURE, AidenRemoteProtocol.CHAT_MESSAGES_WINDOW_METADATA_FEATURE))
+        val initialWindow = AidenChatMessagesWindow(initial.id, initial.revision, initial.messages, hasOlder = false,
+            workspaceId = initial.workspaceId, title = initial.title, titlePending = initial.titlePending,
+            createdAt = initial.createdAt, updatedAt = initial.updatedAt)
         fun event(sequence: Int, type: String, payload: String, terminal: Boolean = false) =
             "id: $sequence\nevent: $type\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-ended\",\"sequence\":$sequence," +
                 "\"timestamp\":\"2026-09-22T00:00:00Z\",\"type\":\"$type\",\"terminal\":$terminal,\"payload\":$payload}\n\n"
         server.dispatcher = object : Dispatcher() {
-            override fun dispatch(request: RecordedRequest): MockResponse = when {
-                request.requestUrl!!.encodedPath.endsWith("/streams/stream-ended/events") -> {
-                    releaseEvents.await(5, TimeUnit.SECONDS)
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.requestUrl!!.encodedPath) {
+                "/api/aiden/v1/server" -> MockResponse().setBody(wire.encodeToString(host))
+                "/api/aiden/v1/streams/stream-ended/events" -> {
+                    releaseEvents.await()
                     MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
                         event(1, "tool_started", "{\"toolId\":\"tool-1\",\"name\":\"read_file\"}") +
                             event(2, "tool_finished", "{\"toolId\":\"tool-1\",\"status\":\"succeeded\"}") +
                             event(3, "text_delta", "{\"text\":\"$reply\"}") +
                             event(4, terminalType, terminalPayload, terminal = true))
                 }
-                request.requestUrl!!.encodedPath.endsWith("/chats/chat-ended") -> when (reads.incrementAndGet()) {
-                    1 -> MockResponse().setBody(wire.encodeToString(initial))
-                    // The terminal read fails, so terminal recovery stays pending.
-                    2 -> MockResponse().setResponseCode(503).setBody(
-                        """{"error":{"code":"internal_error","message":"Held settlement","requestId":"r","retryable":true}}""")
-                    // The title refresh reads the chat with the run's reply in it.
-                    3 -> MockResponse().setBody(wire.encodeToString(final))
-                    else -> {
-                        releaseRetries.await(10, TimeUnit.SECONDS)
-                        MockResponse().setBody(wire.encodeToString(final))
+                // The initial load and terminal recovery page the transcript on this host.
+                "/api/aiden/v1/chats/chat-ended/messages" -> {
+                    if (releaseEvents.count > 0) {
+                        MockResponse().setBody(wire.encodeToString(initialWindow))
+                    } else {
+                        if (!terminalReadFailed.compareAndSet(false, true)) releaseRetries.await()
+                        MockResponse().setResponseCode(503).setBody(
+                            """{"error":{"code":"internal_error","message":"Held settlement","requestId":"r","retryable":true}}""")
                     }
+                }
+                // Title polling uses the whole chat and can start while the stream is live.
+                "/api/aiden/v1/chats/chat-ended" -> {
+                    val chat = if (titleSettled.get()) final else initial
+                    firstTitleRead.complete(Unit)
+                    MockResponse().setBody(wire.encodeToString(chat))
                 }
                 else -> MockResponse().setResponseCode(404)
             }
@@ -4437,24 +4451,27 @@ class AidenChatTest {
                 val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
                 installations.addInstallation(AidenPairingExchange(instanceId = "instance-ended", deviceId = "device-ended",
                     endpoint = server.url("/api/aiden/v1").toString(), serverSpkiSha256 = "sha256/test", credential = "synthetic",
-                    capabilities = listOf(AidenRemoteCapability.CHAT_READ)), null)
+                    capabilities = grants), null)
                 val cache = AidenChatCache(directory)
                 cache.saveChat(initial, "instance-ended")
                 val drafts = AidenChatDraftStore(directory)
                 val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts,
-                    scope = CoroutineScope(main + Job().apply { cancel() }))
+                    scope = CoroutineScope(main + scopeJob))
                 coordinator.refreshClient()
+                withTimeout(5_000) { coordinator.serverInfo.first { it?.supportsChatMessagesWindow == true } }
                 cache.saveActiveStream(AidenChatCache.ActiveStream("device-ended", "stream-ended", "turn-ended", 0),
                     "instance-ended", initial.id)
                 val vm = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial, recoveryClock = { System.nanoTime() / 1_000_000 })
                 model = vm
                 owners.put("chat", vm)
                 withTimeout(5_000) { vm.isLoading.first { !it } }
+                withTimeout(5_000) { firstTitleRead.await() }
                 releaseEvents.countDown()
                 withTimeout(5_000) { vm.presentedError.first { it == "Held settlement" } }
                 assertEquals("the ended run keeps its card while its transcript is unread", reply, vm.liveText.value)
                 assertEquals(listOf("tool-1"), vm.tools.value.map { it.id })
 
+                titleSettled.set(true)
                 withTimeout(5_000) { vm.chat.first { it?.revision == "r2" } }
                 assertEquals(final.messages.map { it.id }, vm.chat.value?.messages?.map { it.id })
                 // The screen keeps the card while any live output remains, tool rows included.
@@ -4477,6 +4494,7 @@ class AidenChatTest {
                 val job = model?.viewModelScope?.coroutineContext?.get(Job)
                 owners.clear()
                 job?.join()
+                scopeJob.cancelAndJoin()
             }
             Dispatchers.resetMain()
             main.close()

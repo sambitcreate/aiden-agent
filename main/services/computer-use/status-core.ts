@@ -26,47 +26,45 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function disabledStatus(): ComputerUseStatus {
+function unavailableStatus(
+  state: ComputerUseStatus["state"],
+  detail: string,
+  overrides?: Partial<Pick<ComputerUseStatus, "enabled" | "retryable">>,
+): ComputerUseStatus {
   return {
-    enabled: false,
+    enabled: overrides?.enabled ?? true,
     beta: true,
-    state: "disabled",
-    detail: "Turn on the Computer Use beta to make it available in individual chats.",
+    state,
+    detail,
     ready: false,
     available: false,
-    retryable: false,
+    retryable: overrides?.retryable ?? false,
     canRequestPermissions: false,
     permissions: { accessibility: null, screenRecording: null },
   };
 }
 
+function disabledStatus(): ComputerUseStatus {
+  return unavailableStatus(
+    "disabled",
+    "Turn on the Computer Use beta to make it available in individual chats.",
+    { enabled: false },
+  );
+}
+
 function fixedErrorStatus(error: unknown): ComputerUseStatus {
   const code = error instanceof CuaDriverError ? error.code : "unknown";
   if (code === "unsupported_platform") {
-    return {
-      enabled: true,
-      beta: true,
-      state: "unsupported",
-      detail: "Aiden Computer Use currently requires macOS 14.4 or newer.",
-      ready: false,
-      available: false,
-      retryable: false,
-      canRequestPermissions: false,
-      permissions: { accessibility: null, screenRecording: null },
-    };
+    return unavailableStatus(
+      "unsupported",
+      "Aiden Computer Use currently requires macOS 14.4 or newer.",
+    );
   }
   if (code === "host_identity_invalid" || code === "bridge_identity_invalid") {
-    return {
-      enabled: true,
-      beta: true,
-      state: "production_build_required",
-      detail: "Computer Use requires a signed packaged build of Aiden.",
-      ready: false,
-      available: false,
-      retryable: false,
-      canRequestPermissions: false,
-      permissions: { accessibility: null, screenRecording: null },
-    };
+    return unavailableStatus(
+      "production_build_required",
+      "Computer Use requires a signed packaged build of Aiden.",
+    );
   }
   if (
     code === "driver_integrity_failed" ||
@@ -75,42 +73,22 @@ function fixedErrorStatus(error: unknown): ComputerUseStatus {
     code === "incompatible_driver" ||
     code === "invalid_tools"
   ) {
-    return {
-      enabled: true,
-      beta: true,
-      state: "incompatible",
-      detail: "The bundled Computer Use helper failed its compatibility or integrity check.",
-      ready: false,
-      available: false,
-      retryable: false,
-      canRequestPermissions: false,
-      permissions: { accessibility: null, screenRecording: null },
-    };
+    return unavailableStatus(
+      "incompatible",
+      "The bundled Computer Use helper failed its compatibility or integrity check.",
+    );
   }
   if (code === "driver_missing") {
-    return {
-      enabled: true,
-      beta: true,
-      state: "unavailable",
-      detail: "The pinned Computer Use helper is unavailable in this Aiden build.",
-      ready: false,
-      available: false,
-      retryable: false,
-      canRequestPermissions: false,
-      permissions: { accessibility: null, screenRecording: null },
-    };
+    return unavailableStatus(
+      "unavailable",
+      "The pinned Computer Use helper is unavailable in this Aiden build.",
+    );
   }
-  return {
-    enabled: true,
-    beta: true,
-    state: "error",
-    detail: "Aiden could not check Computer Use readiness. Try again.",
-    ready: false,
-    available: false,
-    retryable: true,
-    canRequestPermissions: false,
-    permissions: { accessibility: null, screenRecording: null },
-  };
+  return unavailableStatus(
+    "error",
+    "Aiden could not check Computer Use readiness. Try again.",
+    { retryable: true },
+  );
 }
 
 function structuredToolResult(value: unknown, toolName: string): Record<string, unknown> {

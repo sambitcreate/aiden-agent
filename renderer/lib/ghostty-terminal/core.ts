@@ -435,13 +435,20 @@ export class GhosttyTerminalCore {
     this.runtime.free(scroll, layout.size);
   }
 
-  isViewportActive(): boolean {
+  private readsBooleanFlag(
+    fn: "ghostty_terminal_get" | "ghostty_terminal_mode_get",
+    index: number,
+  ): boolean {
     this.ensureActive();
     this.runtime.bytes(this.scratch, 1)[0] = 0;
     return (
-      this.runtime.call("ghostty_terminal_get", this.terminal, 32, this.scratch) ===
-        GHOSTTY_SUCCESS && this.runtime.bytes(this.scratch, 1)[0] !== 0
+      this.runtime.call(fn, this.terminal, index, this.scratch) === GHOSTTY_SUCCESS &&
+      this.runtime.bytes(this.scratch, 1)[0] !== 0
     );
+  }
+
+  isViewportActive(): boolean {
+    return this.readsBooleanFlag("ghostty_terminal_get", 32);
   }
 
   scrollbarState(): GhosttyScrollbar | null {
@@ -462,22 +469,12 @@ export class GhosttyTerminalCore {
   }
 
   isMouseTracking(): boolean {
-    this.ensureActive();
-    this.runtime.bytes(this.scratch, 1)[0] = 0;
-    return (
-      this.runtime.call("ghostty_terminal_get", this.terminal, 11, this.scratch) ===
-        GHOSTTY_SUCCESS && this.runtime.bytes(this.scratch, 1)[0] !== 0
-    );
+    return this.readsBooleanFlag("ghostty_terminal_get", 11);
   }
 
   /** DEC mode 2026: the program is mid-frame and asked not to be drawn yet. */
   isSynchronizedOutput(): boolean {
-    this.ensureActive();
-    this.runtime.bytes(this.scratch, 1)[0] = 0;
-    return (
-      this.runtime.call("ghostty_terminal_mode_get", this.terminal, 2026, this.scratch) ===
-        GHOSTTY_SUCCESS && this.runtime.bytes(this.scratch, 1)[0] !== 0
-    );
+    return this.readsBooleanFlag("ghostty_terminal_mode_get", 2026);
   }
 
   endSynchronizedOutput(): void {
@@ -489,12 +486,7 @@ export class GhosttyTerminalCore {
   }
 
   isMouseAnyEventTracking(): boolean {
-    this.ensureActive();
-    this.runtime.bytes(this.scratch, 1)[0] = 0;
-    return (
-      this.runtime.call("ghostty_terminal_mode_get", this.terminal, 1003, this.scratch) ===
-        GHOSTTY_SUCCESS && this.runtime.bytes(this.scratch, 1)[0] !== 0
-    );
+    return this.readsBooleanFlag("ghostty_terminal_mode_get", 1003);
   }
 
   isAlternateScreen(): boolean {
@@ -507,12 +499,7 @@ export class GhosttyTerminalCore {
   }
 
   isApplicationCursorKeys(): boolean {
-    this.ensureActive();
-    this.runtime.bytes(this.scratch, 1)[0] = 0;
-    return (
-      this.runtime.call("ghostty_terminal_mode_get", this.terminal, 1, this.scratch) ===
-        GHOSTTY_SUCCESS && this.runtime.bytes(this.scratch, 1)[0] !== 0
-    );
+    return this.readsBooleanFlag("ghostty_terminal_mode_get", 1);
   }
 
   encodeKey(event: KeyboardEvent, action: "press" | "release" = "press"): string {

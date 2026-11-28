@@ -1,13 +1,13 @@
-export interface QuickChatSenderIdentity {
+export interface AuxSenderIdentity {
   webContentsId: number;
   frameUrl: string;
   isMainFrame: boolean;
 }
 
-export function isTrustedQuickChatSender(
+export function isTrustedAuxSender(
   expectedWebContentsId: number | null,
   expectedUrl: string,
-  actual: QuickChatSenderIdentity,
+  actual: AuxSenderIdentity,
 ): boolean {
   return (
     expectedWebContentsId !== null &&
