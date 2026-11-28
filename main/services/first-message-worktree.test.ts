@@ -171,11 +171,7 @@ async function harness(
     expandIgnoredPaths: async () => [],
     snapshotContentBytes: async () => 0,
     captureWorktreeSnapshot: async () => { throw new Error("unexpected snapshot"); },
-    snapshotRefCommit: async () => undefined,
     deleteSnapshotRef: async () => true,
-    restoreManagedCheckout: async () => { throw new Error("unexpected restore"); },
-    applyWorktreeSnapshot: async () => undefined,
-    resumeManagedCheckout: async () => { throw new Error("unexpected resume"); },
     saveWorkspace: async (workspace) => {
       workspaces.set(workspace.id, workspace);
       return workspace;

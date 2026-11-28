@@ -27,13 +27,10 @@ import {
   ManagedWorktreeCreationError,
 } from "./managed-worktree-creation-core.js";
 import { removeManagedWorkspace } from "./managed-worktree-removal-core.js";
-import { restoreManagedWorktreeSnapshot } from "./managed-worktree-restore.js";
 import {
   captureProvisionedFile,
   persistManagedWorktreeSnapshot,
   type ProvisionedFileSnapshot,
-  requireReadyManagedWorktreeSnapshot,
-  updateManagedWorktreeSnapshotState,
 } from "./managed-worktree-snapshot.js";
 import type { Workspace, ManagedWorktree } from "./types.js";
 import type { WorkspaceEnvironmentApplicationService } from "./workspace-environment-application-service.js";
@@ -114,35 +111,12 @@ export interface WorkspaceWorktreeApplicationDependencies {
     snapshotId: string,
     signal?: AbortSignal,
   ): Promise<ManagedWorktreeSnapshotCapture>;
-  snapshotRefCommit(repositoryPath: string, snapshotId: string): Promise<string | undefined>;
   /** Remove a published snapshot ref while it still points at `expectedCommit`. */
   deleteSnapshotRef(
     repositoryPath: string,
     snapshotId: string,
     expectedCommit: string,
   ): Promise<boolean>;
-  restoreManagedCheckout(
-    repositoryPath: string,
-    root: string,
-    worktreePath: string,
-    branch: string,
-    baseCommit: string,
-    workspaceSubpath: string,
-    signal?: AbortSignal,
-  ): Promise<GitCreatedWorktree>;
-  applyWorktreeSnapshot(
-    worktreePath: string,
-    snapshotCommit: string,
-    signal?: AbortSignal,
-  ): Promise<void>;
-  resumeManagedCheckout(
-    repositoryPath: string,
-    worktreePath: string,
-    branch: string,
-    baseCommit: string,
-    workspaceSubpath: string,
-    signal?: AbortSignal,
-  ): Promise<GitCreatedWorktree>;
   /**
    * Put back a deleted managed checkout at its recorded path and branch.
    * Required only by `restoreDeleted`.
@@ -304,10 +278,6 @@ function provisionedFilesReserve(): number {
 export function createWorkspaceWorktreeApplicationService(
   dependencies: WorkspaceWorktreeApplicationDependencies,
 ) {
-  // Restore journals live inside the snapshot directory, so concurrent
-  // restores of the same snapshot are serialized here per process.
-  const restoreLocks = new Map<string, Promise<void>>();
-
   /** The WorktreeSetup hook: never fails or rolls back the saved worktree. */
   const announceCreated = async (event: ManagedWorktreeCreatedEvent): Promise<void> => {
     if (!dependencies.onWorktreeCreated) return;
@@ -829,124 +799,6 @@ export function createWorkspaceWorktreeApplicationService(
     },
   );
 
-  const restore = async (
-    owner: WorkspaceOperationDocumentOwner,
-    sourceWorkspaceId: string,
-    snapshotId: string,
-    requestedName?: string,
-  ): Promise<Workspace> => {
-    // Capture the in-flight holder before this attempt is queued. The callback
-    // runs only after admission's own I/O, by which time the map holds this
-    // attempt, so reading it there would wait on itself and never settle.
-    const previous = restoreLocks.get(snapshotId);
-    const operation = dependencies.environment.run(
-      owner,
-      sourceWorkspaceId,
-      async (resolved, signal) => {
-        // Every caller completes ownership and workspace admission before any
-        // shared state is consulted. A concurrent restore of the same snapshot
-        // is serialized, not shared: this caller waits for the in-flight
-        // attempt, then runs its own journal-convergent restore.
-        if (previous !== undefined) {
-          await previous;
-          signal.throwIfAborted();
-        }
-        const snapshotRoot = await dependencies.ensureSnapshotRoot();
-        const snapshot = await requireReadyManagedWorktreeSnapshot(snapshotRoot, snapshotId);
-        const [initiator, target] = await Promise.all([
-          dependencies.repositoryPaths(resolved.folderPath),
-          dependencies.repositoryPaths(snapshot.repositoryPath),
-        ]);
-        // A restore may only be initiated from a checkout of the repository the
-        // snapshot belongs to — never across repositories.
-        if (initiator.commonDir !== target.commonDir) {
-          throw new Error("That snapshot belongs to a different repository.");
-        }
-        const result = await restoreManagedWorktreeSnapshot(
-          {
-            ensureWorktreeRoot: dependencies.ensureWorktreeRoot,
-            snapshotRoot: dependencies.ensureSnapshotRoot,
-            repositoryPaths: dependencies.repositoryPaths,
-            snapshotCommit: dependencies.snapshotRefCommit,
-            checkCapacity: async (root, state) => {
-              const payloadBytes = snapshot.provisionedFiles.reduce((sum, file) => sum + file.size, 0);
-              // After snapshot application, only private files remain. Do not
-              // reread checkout policy or require space on the Git volume.
-              if (state === "snapshot_applied") {
-                await dependencies.checkCreateCapacity(root, payloadBytes);
-                return;
-              }
-              const [baseBytes, snapshotBytes] = await Promise.all([
-                state === "checkout_planned"
-                  ? dependencies.checkoutBytes(snapshot.repositoryPath, snapshot.originalHead)
-                  : Promise.resolve(0),
-                dependencies.checkoutBytes(snapshot.repositoryPath, snapshot.snapshotCommit),
-              ]);
-              await dependencies.checkWorktreeAllocation(root, target.commonDir, baseBytes + snapshotBytes + payloadBytes);
-            },
-            restoreCheckout: dependencies.restoreManagedCheckout,
-            resumeCheckout: dependencies.resumeManagedCheckout,
-            applySnapshot: dependencies.applyWorktreeSnapshot,
-            managedWorktreeUsable: (repositoryPath, worktreePath, branch, gitDir, token, device, inode) =>
-              dependencies.managedWorktreeUsable({
-                repositoryPath,
-                worktreePath,
-                branch,
-                worktreeGitDir: gitDir,
-                ownershipToken: token,
-                worktreeDevice: device,
-                worktreeInode: inode,
-                createdFromHead: snapshot.originalHead,
-              }),
-            createWorkspaceId: dependencies.createWorkspaceId,
-            signal,
-          },
-          snapshotId,
-        );
-        const now = dependencies.now();
-        const workspace: Workspace = {
-          id: result.workspaceId,
-          name: displayName(resolved.workspace, snapshot.branch, requestedName),
-          folderPath: result.worktree.workspacePath,
-          permission: resolved.workspace.permission,
-          ...workspaceCapabilityFields(resolved.workspace),
-          ...workspaceApprovalFields(resolved.workspace),
-          managedWorktree: {
-            repositoryPath: result.worktree.repositoryPath,
-            worktreePath: result.worktree.path,
-            branch: snapshot.branch,
-            worktreeGitDir: result.worktree.worktreeGitDir,
-            ownershipToken: result.worktree.ownershipToken,
-            worktreeDevice: result.worktree.worktreeDevice,
-            worktreeInode: result.worktree.worktreeInode,
-            createdFromHead: result.worktree.createdFromHead,
-            provisionedFiles: result.snapshot.provisionedFiles.map((file) => file.relativePath),
-          },
-          createdAt: now,
-          updatedAt: now,
-        };
-        // Upsert by id: a crash after the save is replayed by the restore
-        // journal's stable workspaceId, so a retried restore never duplicates.
-        const saved = await dependencies.saveWorkspace(workspace);
-        await updateManagedWorktreeSnapshotState(snapshotRoot, result.snapshot, "ready");
-        // The journal stays at "complete" — it is the convergence marker a
-        // retried restore needs to return the already-saved workspace instead
-        // of attaching the recorded branch to a new path.
-        dependencies.notifyChanged();
-        return saved;
-      },
-    );
-    // The lock settles only after every earlier holder and this attempt, so an
-    // attempt refused at admission cannot let a later one overtake a running one.
-    const lock: Promise<void> = Promise.allSettled([previous, operation]).then(() => {
-      if (restoreLocks.get(snapshotId) === lock) {
-        restoreLocks.delete(snapshotId);
-      }
-    });
-    restoreLocks.set(snapshotId, lock);
-    return operation;
-  };
-
   /**
    * A managed worktree whose folder was deleted outside Aiden: put its
    * checkout back at the same path on its branch, as the branch stands now,
@@ -1038,7 +890,7 @@ export function createWorkspaceWorktreeApplicationService(
     });
   };
 
-  return { create, createFromBase, discardInterruptedWorktree, remove, restore, restoreDeleted };
+  return { create, createFromBase, discardInterruptedWorktree, remove, restoreDeleted };
 }
 
 export type WorkspaceWorktreeApplicationService = ReturnType<
