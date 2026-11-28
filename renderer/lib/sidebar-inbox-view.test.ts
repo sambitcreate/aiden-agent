@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ASSISTANT_WORKSPACE_ID } from "../shared/assistant";
+import { DEFAULT_CHAT_WORKSPACE_ID } from "../shared/chat-workspace";
 import type { ChatPendingAttention } from "../shared/chat-pending-attention";
 import {
   botInboxEntries,
@@ -13,6 +14,7 @@ import {
   inboxRowStatus,
   inboxShortcutOrder,
   localInboxEntries,
+  localInboxProject,
   markReadThroughMessageId,
   pendingAttentionRequest,
   remoteBotInboxKey,
@@ -20,6 +22,7 @@ import {
   remoteInboxEntries,
   type InboxEntry,
 } from "./sidebar-inbox-view";
+import { indexWorkspacesById } from "./no-workspace";
 import { inboxState, releasedInboxOrder, type InboxDisplayOrder, type InboxSignals } from "./sidebar-inbox";
 import type { BotDefinition } from "../shared/bots";
 import { botFixture } from "../main/bots/test-fixtures";
@@ -70,17 +73,30 @@ function order(partial: Partial<Record<keyof InboxDisplayOrder, string[]>>): Inb
   return { needs_you: [], pinned: [], updates: [], earlier: [], working: [], ...partial };
 }
 
-test("local entries list Assistant and scheduled chats under their own labels, and skip Bot and removed-workspace chats", () => {
+test("local entries list regular, Chats, Assistant and scheduled chats under their own labels, skip Bot and removed-workspace chats, and keep first-match workspace semantics", () => {
+  const registry: Workspace[] = [
+    ...workspaces,
+    { id: "ws-hidden", name: "No workspace", permission: "ask", noWorkspace: true } as Workspace,
+    { id: "ws-dup", name: "first-project", permission: "full" } as Workspace,
+    { id: "ws-dup", name: "No workspace", permission: "ask", noWorkspace: true } as Workspace,
+    { id: "ws-dup-hidden", name: "No workspace", permission: "ask", noWorkspace: true } as Workspace,
+    { id: "ws-dup-hidden", name: "later-project", permission: "full" } as Workspace,
+  ];
+  const sample = [
+    chat("work"),
+    chat("no-ws", { workspaceId: "ws-hidden" }),
+    chat("assistant", { workspaceId: ASSISTANT_WORKSPACE_ID }),
+    chat("scheduled-undef", { workspaceId: undefined }),
+    chat("scheduled-default", { workspaceId: DEFAULT_CHAT_WORKSPACE_ID }),
+    chat("dup-regular", { workspaceId: "ws-dup" }),
+    chat("dup-hidden", { workspaceId: "ws-dup-hidden" }),
+    chat("bot", { botId: "bot-1" }),
+    chat("gone", { workspaceId: "ws-removed" }),
+  ];
   const entries = localInboxEntries({
     platform: "darwin",
-    chats: [
-      chat("work"),
-      chat("assistant", { workspaceId: ASSISTANT_WORKSPACE_ID }),
-      chat("scheduled", { workspaceId: undefined }),
-      chat("bot", { botId: "bot-1" }),
-      chat("gone", { workspaceId: "ws-removed" }),
-    ],
-    workspaces,
+    chats: sample,
+    workspaces: registry,
     rowState: () => "idle",
     unread: () => false,
     pending: new Map(),
@@ -89,9 +105,25 @@ test("local entries list Assistant and scheduled chats under their own labels, a
     entries.map((item) => [item.title, item.project]),
     [
       ["Chat work", "aiden"],
+      ["Chat no-ws", "Chats"],
       ["Chat assistant", "Assistant"],
-      ["Chat scheduled", "Scheduled"],
+      ["Chat scheduled-undef", "Scheduled"],
+      ["Chat scheduled-default", "Scheduled"],
+      ["Chat dup-regular", "first-project"],
+      ["Chat dup-hidden", "Chats"],
     ],
+  );
+  const byId = indexWorkspacesById(registry);
+  for (const item of sample) {
+    assert.equal(localInboxProject(item, byId), localInboxProject(item, registry), item.id);
+  }
+  const withRegisteredDefault: Workspace[] = [
+    ...registry,
+    { id: DEFAULT_CHAT_WORKSPACE_ID, name: "No workspace", permission: "ask", noWorkspace: true } as Workspace,
+  ];
+  assert.equal(
+    localInboxProject(chat("default-home", { workspaceId: DEFAULT_CHAT_WORKSPACE_ID }), indexWorkspacesById(withRegisteredDefault)),
+    "Chats",
   );
 });
 

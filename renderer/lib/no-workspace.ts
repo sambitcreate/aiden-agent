@@ -32,6 +32,31 @@ export function noWorkspaceHome(workspaces: readonly Workspace[]): Workspace | u
   return home;
 }
 
+/** Indexes workspaces by id, keeping the first record when an id repeats (matching `workspaces.find`). */
+export function indexWorkspacesById<T extends Pick<Workspace, "id">>(workspaces: readonly T[]): Map<string, T> {
+  const byId = new Map<string, T>();
+  for (const workspace of workspaces) {
+    const { id } = workspace;
+    if (!byId.has(id)) byId.set(id, workspace);
+  }
+  return byId;
+}
+
+/**
+ * Builds an O(1) `(workspaceId) => groupId` resolver that computes
+ * `noWorkspaceHome` once and resolves hidden No workspace records via `workspacesById`.
+ */
+export function resolveSidebarGroupWorkspaceId(
+  workspaces: readonly Workspace[],
+  workspacesById?: ReadonlyMap<string, Workspace>,
+): (workspaceId: string) => string {
+  const home = noWorkspaceHome(workspaces);
+  if (!home) return (workspaceId) => workspaceId;
+  const byId = workspacesById ?? indexWorkspacesById(workspaces);
+  const homeId = home.id;
+  return (workspaceId) => (isNoWorkspace(byId.get(workspaceId)) ? homeId : workspaceId);
+}
+
 /** Maps a hidden No workspace id onto the Chats group's id; other ids pass through. */
 export function sidebarGroupWorkspaceId(
   workspaceId: string,

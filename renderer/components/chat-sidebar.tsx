@@ -17,7 +17,12 @@ import { startedByChatLabel } from "../lib/chat-lineage";
 import * as React from "react";
 import { workspaceDisplayName, workspaceSecondaryLabel, type WorkspacePathPreferences } from "../lib/workspace-path-display";
 import { WorkspacePathLabel } from "./workspace-path-label";
-import { isNoWorkspace, NO_WORKSPACE_GROUP_LABEL, sidebarGroupWorkspaceId } from "../lib/no-workspace";
+import {
+  indexWorkspacesById,
+  isNoWorkspace,
+  NO_WORKSPACE_GROUP_LABEL,
+  resolveSidebarGroupWorkspaceId,
+} from "../lib/no-workspace";
 import { useWorkspacePathPreferences } from "../lib/use-workspace-path-preferences";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -514,7 +519,7 @@ function WorkspaceChatSidebar({
     [chats.data],
   );
   const workspacesById = React.useMemo(
-    () => new Map(workspaces.map((workspace) => [workspace.id, workspace])),
+    () => indexWorkspacesById(workspaces),
     [workspaces],
   );
   const foundationModels = useFoundationModelsConnection(capabilities.appleFoundationModels);
@@ -1528,16 +1533,21 @@ function WorkspaceChatSidebar({
   // workspaces. Hidden while searching, and once the first send lists the chat.
   const draftsByWorkspace = React.useMemo(() => {
     const grouped = new Map<string, ChatMeta[]>();
-    if (searching) return grouped;
+    if (searching || chatDrafts.length === 0) return grouped;
     const listed = new Set((chats.data ?? []).map((chat) => chat.id));
-    for (const { chat } of [...chatDrafts].reverse()) {
+    let resolveGroupId: ((workspaceId: string) => string) | undefined;
+    for (let index = chatDrafts.length - 1; index >= 0; index -= 1) {
+      const { chat } = chatDrafts[index]!;
       if (!chat.workspaceId || listed.has(chat.id)) continue;
       // Drafts in any hidden No workspace folder show under the one Chats group.
-      const groupId = sidebarGroupWorkspaceId(chat.workspaceId, workspaces);
-      grouped.set(groupId, [...(grouped.get(groupId) ?? []), chat]);
+      resolveGroupId ??= resolveSidebarGroupWorkspaceId(workspaces, workspacesById);
+      const groupId = resolveGroupId(chat.workspaceId);
+      const drafts = grouped.get(groupId);
+      if (drafts) drafts.push(chat);
+      else grouped.set(groupId, [chat]);
     }
     return grouped;
-  }, [chatDrafts, chats.data, searching, workspaces]);
+  }, [chatDrafts, chats.data, searching, workspaces, workspacesById]);
   const renderDraftRow = (draft: ChatMeta, indented = true) => (
     <SidebarListItem
       key={`draft:${draft.id}`}
