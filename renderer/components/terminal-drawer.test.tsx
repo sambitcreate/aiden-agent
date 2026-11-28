@@ -26,7 +26,7 @@ test("the workspace terminal hosts libghostty-vt instead of xterm.js", () => {
   const wasmAssets = source("../lib/ghostty-terminal/wasm-assets.ts");
 
   assert.match(drawer, /GhosttyTerminalSurface\.create/u);
-  assert.match(
+  assert.doesNotMatch(
     source("../lib/ghostty-terminal/surface.ts"),
     /from "\.\/wasm-assets"|import "\.\/wasm-assets"/u,
   );

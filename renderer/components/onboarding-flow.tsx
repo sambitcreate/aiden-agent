@@ -10,9 +10,6 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { ProviderEditor } from "./settings/provider-editor";
-import { BuiltinProviderEditor } from "./settings/builtin-provider-editor";
-import { CodexProviderSettings } from "./settings/codex-provider-settings";
 import { Button, Input, Text, toast } from "./ui";
 import { UsageDataNotice, UsageDataOnboardingRow } from "./usage-data";
 import { analyticsApi, appApi, botsApi, profileApi, providersApi, settingsApi } from "../lib/ipc";
@@ -22,12 +19,11 @@ import {
   markOnboardingComplete,
   shouldShowOnboarding,
 } from "../lib/onboarding-state";
-import { localProviderDraft, visibleOnboardingFeatures } from "../lib/onboarding-provider";
-import { GuidedProviderChooser, type ConnectionRoute } from "./guided-provider-chooser";
-import { ProviderKeyDialog } from "./provider-key-dialog";
-import { GeminiVoiceSetupDialog } from "./settings/gemini-voice-setup-dialog";
-import { ProviderModelVisibility } from "./settings/provider-model-visibility";
-import { LocalProviderDialog } from "./local-provider-dialog";
+import {
+  localProviderDraft,
+  visibleOnboardingFeatures,
+} from "../lib/onboarding-provider";
+import type { ConnectionRoute } from "./guided-provider-chooser";
 import { availableChatModel } from "../lib/provider-chat-readiness";
 import { queryKeys, useCodexProviderStatus, useProviders, useSettings } from "../lib/queries";
 import { persistModelSelection } from "../lib/use-model-selection";
@@ -42,8 +38,69 @@ import { localComputerNoun } from "../shared/computer-noun";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import { focusRegionWhenShown } from "../lib/focus-regions";
 import { useLayer } from "../lib/layer-stack";
-import { acceptFirstBotAccess, OnboardingBotsStep, type FirstBotAccess } from "./onboarding-bots-step";
-import { OnboardingFeatureGallery, onboardingFeatures } from "./onboarding-feature-gallery";
+import type { FirstBotAccess } from "./onboarding-bots-step";
+
+type OnboardingModules = {
+  ProviderEditor: typeof import("./settings/provider-editor").ProviderEditor;
+  BuiltinProviderEditor: typeof import("./settings/builtin-provider-editor").BuiltinProviderEditor;
+  CodexProviderSettings: typeof import("./settings/codex-provider-settings").CodexProviderSettings;
+  GuidedProviderChooser: typeof import("./guided-provider-chooser").GuidedProviderChooser;
+  ProviderKeyDialog: typeof import("./provider-key-dialog").ProviderKeyDialog;
+  GeminiVoiceSetupDialog: typeof import("./settings/gemini-voice-setup-dialog").GeminiVoiceSetupDialog;
+  ProviderModelVisibility: typeof import("./settings/provider-model-visibility").ProviderModelVisibility;
+  LocalProviderDialog: typeof import("./local-provider-dialog").LocalProviderDialog;
+  OnboardingBotsStep: typeof import("./onboarding-bots-step").OnboardingBotsStep;
+  acceptFirstBotAccess: typeof import("./onboarding-bots-step").acceptFirstBotAccess;
+  OnboardingFeatureGallery: typeof import("./onboarding-feature-gallery").OnboardingFeatureGallery;
+  onboardingFeatures: typeof import("./onboarding-feature-gallery").onboardingFeatures;
+};
+
+let onboardingModulesPromise: Promise<OnboardingModules> | null = null;
+
+function loadOnboardingModules(): Promise<OnboardingModules> {
+  onboardingModulesPromise ??= Promise.all([
+    import("./settings/provider-editor"),
+    import("./settings/builtin-provider-editor"),
+    import("./settings/codex-provider-settings"),
+    import("./guided-provider-chooser"),
+    import("./provider-key-dialog"),
+    import("./settings/gemini-voice-setup-dialog"),
+    import("./settings/provider-model-visibility"),
+    import("./local-provider-dialog"),
+    import("./onboarding-bots-step"),
+    import("./onboarding-feature-gallery"),
+  ]).then(
+    ([
+      { ProviderEditor },
+      { BuiltinProviderEditor },
+      { CodexProviderSettings },
+      { GuidedProviderChooser },
+      { ProviderKeyDialog },
+      { GeminiVoiceSetupDialog },
+      { ProviderModelVisibility },
+      { LocalProviderDialog },
+      { OnboardingBotsStep, acceptFirstBotAccess },
+      { OnboardingFeatureGallery, onboardingFeatures },
+    ]) => ({
+      ProviderEditor,
+      BuiltinProviderEditor,
+      CodexProviderSettings,
+      GuidedProviderChooser,
+      ProviderKeyDialog,
+      GeminiVoiceSetupDialog,
+      ProviderModelVisibility,
+      LocalProviderDialog,
+      OnboardingBotsStep,
+      acceptFirstBotAccess,
+      OnboardingFeatureGallery,
+      onboardingFeatures,
+    }),
+  ).catch((error) => {
+    onboardingModulesPromise = null;
+    throw error;
+  });
+  return onboardingModulesPromise;
+}
 
 const visibleSteps = ["profile", "provider", "tour"] as const;
 const stepLabels = { profile: "Your name", provider: "Connect AI", tour: "Finish setup" };
@@ -121,9 +178,10 @@ export function OnboardingFlow({
 } = {}) {
   const queryClient = useQueryClient();
   const capabilities = useAppCapabilities();
+  const [onboardingModules, setOnboardingModules] = React.useState<OnboardingModules | null>(null);
   const visibleFeatureBentos = React.useMemo(
     () =>
-      visibleOnboardingFeatures(onboardingFeatures, {
+      visibleOnboardingFeatures(onboardingModules?.onboardingFeatures ?? [], {
         bots: capabilities.bots,
         botComputers: capabilities.botComputers,
         computerUse: capabilities.computerUse,
@@ -132,7 +190,7 @@ export function OnboardingFlow({
         childChats: capabilities.childChats,
         platform: capabilities.platform,
       }),
-    [capabilities.bots, capabilities.botComputers, capabilities.computerUse, capabilities.designMode, capabilities.mcpServer, capabilities.childChats, capabilities.platform],
+    [onboardingModules, capabilities.bots, capabilities.botComputers, capabilities.computerUse, capabilities.designMode, capabilities.mcpServer, capabilities.childChats, capabilities.platform],
   );
   const providers = useProviders();
   const settings = useSettings();
@@ -216,6 +274,11 @@ export function OnboardingFlow({
           setName(current.name);
           queryClient.setQueryData(queryKeys.profile, current);
         }
+        if (nextOpen) {
+          const loaded = await loadOnboardingModules();
+          if (loadGenerationRef.current !== generation) return;
+          setOnboardingModules(loaded);
+        }
         setStateReady(true);
         if (reopen) clearLegacyOnboardingCompletion();
       } catch (error) {
@@ -260,6 +323,8 @@ export function OnboardingFlow({
 
   if (!open) return usageNoticeEligible ? <UsageDataNotice /> : null;
   const step = visibleSteps[index];
+  const OnboardingBotsStep = onboardingModules?.OnboardingBotsStep;
+  const OnboardingFeatureGallery = onboardingModules?.OnboardingFeatureGallery;
   const canContinue = stateReady && (step === "profile" ? name.trim().length > 0 : step === "provider" ? Boolean(connected) : true);
   const routeAttempt = attempt.current;
   const confirmConnection = async (p: Pick<Provider, "id" | "label" | "defaultModel" | "models" | "needsKey" | "hasKey">) => {
@@ -406,7 +471,12 @@ export function OnboardingFlow({
         onOpenBotChat?.(startedBotId);
         // This press is the person's go-ahead for the Full access the step described.
         if (firstBotAccess) {
-          void acceptFirstBotAccess(startedBotId, firstBotAccess).catch((error: unknown) =>
+          void (onboardingModules
+            ? onboardingModules.acceptFirstBotAccess(startedBotId, firstBotAccess)
+            : loadOnboardingModules().then((loaded) =>
+                loaded.acceptFirstBotAccess(startedBotId, firstBotAccess),
+              )
+          ).catch((error: unknown) =>
             toast.error(error instanceof Error ? error.message : "Your Bot couldn’t start yet."),
           );
         }
@@ -597,12 +667,14 @@ export function OnboardingFlow({
                         </Button>)}
                       {codexProvider && availableChatModel(codexProvider, settings.data) &&
                         <Button variant="filled" disabled={saving} onClick={() => void confirmExisting(codexProvider)}>Use this connection: ChatGPT / Codex</Button>}
-                      <GuidedProviderChooser providers={providers.data ?? []} disabled={saving} onChoose={chooseConnection} onBack={() => { attempt.current++; setRoute(null); setProviderError(null); }} />
+                      {onboardingModules ? (
+                        <onboardingModules.GuidedProviderChooser providers={providers.data ?? []} disabled={saving} onChoose={chooseConnection} onBack={() => { attempt.current++; setRoute(null); setProviderError(null); }} />
+                      ) : null}
                     </>}
-                    {route?.kind === "codex" && <div className="grid gap-2">
-                      <CodexProviderSettings layer="onboarding" />
+                    {route?.kind === "codex" && onboardingModules && <div className="grid gap-2">
+                      <onboardingModules.CodexProviderSettings layer="onboarding" />
                       {codexProvider && !availableChatModel(codexProvider, settings.data) && <details className="settings-card p-3">
-                        <summary>Advanced model visibility</summary><ProviderModelVisibility provider={codexProvider} />
+                        <summary>Advanced model visibility</summary><onboardingModules.ProviderModelVisibility provider={codexProvider} />
                       </details>}
                     </div>}
                   </>}
@@ -641,10 +713,14 @@ export function OnboardingFlow({
                   </div>
                 </div>
                 <UsageDataOnboardingRow onDisplay={setUsageShownEnabled} />
-                {firstBotShown ? <OnboardingBotsStep onBusyChange={setCreatingBot} onReady={(bot, access) => void finishBotsStep(bot.id, access)} /> : null}
+                {firstBotShown && OnboardingBotsStep ? (
+                  <OnboardingBotsStep onBusyChange={setCreatingBot} onReady={(bot, access) => void finishBotsStep(bot.id, access)} />
+                ) : null}
                 <details className="settings-card mt-3 px-4 py-3">
                   <summary className="cursor-pointer text-small-strong">Explore Aiden’s features</summary>
-                  <OnboardingFeatureGallery features={visibleFeatureBentos} platform={capabilities.platform} />
+                  {OnboardingFeatureGallery ? (
+                    <OnboardingFeatureGallery features={visibleFeatureBentos} platform={capabilities.platform} />
+                  ) : null}
                 </details>
                 <details className="settings-card mt-3 px-4 py-3">
                   <summary className="cursor-pointer text-small-strong">Other features and privacy</summary>
@@ -693,8 +769,8 @@ export function OnboardingFlow({
           </footer>
         </div>
       </section>
-      {customProvider ? (
-        <ProviderEditor
+      {onboardingModules && customProvider ? (
+        <onboardingModules.ProviderEditor
           provider={customProvider}
           returnFocus={returnFocus}
           open
@@ -712,13 +788,13 @@ export function OnboardingFlow({
           }}
         />
       ) : null}
-      {route?.kind === "local" && <LocalProviderDialog returnFocus={returnFocus} runtime={route.runtime} layer="onboarding" onSaved={confirmConnection}
+      {onboardingModules && route?.kind === "local" && <onboardingModules.LocalProviderDialog returnFocus={returnFocus} runtime={route.runtime} layer="onboarding" onSaved={confirmConnection}
         onClose={() => setRoute(null)} onEdit={() => {
           const existing = providers.data?.find(p => p.id === `custom:${route.runtime}`);
           setCustomProvider(existing ?? { ...localProviderDraft(route.runtime), hasKey: false });
           setRoute(null);
         }} />}
-      {googleScope && <GeminiVoiceSetupDialog open layer="onboarding" activatesVoice={false} returnFocus={returnFocus}
+      {onboardingModules && googleScope && <onboardingModules.GeminiVoiceSetupDialog open layer="onboarding" activatesVoice={false} returnFocus={returnFocus}
         scope={googleScope} hasKey={existingConnections.some(p => p.id === "google" && p.hasKey)} busy={saving} error={providerError} provider={existingConnections.find(p => p.id === "google")}
         onScopeChange={setGoogleScope} onOpenChange={open => { if (!open) setGoogleScope(null); }}
         onConfirm={async () => {
@@ -737,8 +813,8 @@ export function OnboardingFlow({
           } catch (cause) { setProviderError(cause instanceof Error ? cause.message : "Couldn’t save Google chat access."); }
           finally { savingRef.current = false; setSaving(false); }
         }} />}
-      {keyId && <ProviderKeyDialog returnFocus={returnFocus} id={keyId} layer="onboarding" onSaved={confirmConnection} onClose={() => setRoute(null)} />}
-      {builtin && !keyId && route?.kind === "builtin" && <BuiltinProviderEditor
+      {onboardingModules && keyId && <onboardingModules.ProviderKeyDialog returnFocus={returnFocus} id={keyId} layer="onboarding" onSaved={confirmConnection} onClose={() => setRoute(null)} />}
+      {onboardingModules && builtin && !keyId && route?.kind === "builtin" && <onboardingModules.BuiltinProviderEditor
         returnFocus={returnFocus} provider={builtin} method={route.method} open layer="onboarding"
         onOpenChange={nextOpen => { if (!nextOpen && attempt.current === routeAttempt) { attempt.current++; setRoute(null); } }}
         onSaved={async () => {

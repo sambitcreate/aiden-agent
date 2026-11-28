@@ -1,7 +1,7 @@
 // Chat top bar pieces: the chat title menu, the workspace chip beside it, and
 // the compact workspace tool buttons on the trailing side.
 
-import { openWorkspaceSettings } from "./workspace-settings-dialog";
+import { openWorkspaceSettings } from "../lib/workspace-settings-dialog-state";
 import { workspaceHasOwnSettings } from "../lib/workspace-settings-view";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -45,7 +45,7 @@ import {
 import { WORKSPACE_TOOLS } from "./workspace-tool-launcher";
 import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { useDesignModeControls } from "../lib/design-mode";
-import { useDesignPane, type DesignPane } from "../design/design-layout";
+import { useDesignPane, type DesignPane } from "../design/design-shell";
 import { Segmented } from "./ui-primitives";
 import { ariaKeyShortcut } from "../shared/keybindings";
 

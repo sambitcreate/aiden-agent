@@ -181,7 +181,7 @@ import {
 } from "../components/chat-top-bar";
 import { AttachWorkspaceDialog } from "../components/attach-workspace-dialog";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
-import { DesignModeBannerSlot, useDesignChatBodyHidden } from "../design/design-layout";
+import { DesignModeBannerSlot, useDesignChatBodyHidden } from "../design/design-shell";
 import { useCommandHandler, useCommandSystem, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
 import {
@@ -262,7 +262,7 @@ import {
 } from "../lib/use-model-selection";
 import { turnThinkingLevel } from "../lib/turn-thinking-level";
 import { useActiveWorkspace } from "../lib/workspace-context";
-import { useWorkspaceTerminal } from "../components/terminal-drawer";
+import { useWorkspaceTerminal } from "../components/workspace-terminal-provider";
 import {
   EnvironmentPanelToggle,
   QuickViewIcon,

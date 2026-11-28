@@ -9,12 +9,22 @@ import { useConnectionSetup } from "./use-connection-setup";
  * on your Mac"). Mounted once at the app root, so the request is never lost
  * because the Bots list happens to be closed.
  */
-export function BotConnectionSetupHost() {
+export function BotConnectionSetupHost({
+  initialPluginId = null,
+}: {
+  initialPluginId?: string | null;
+} = {}) {
   const qc = useQueryClient();
   const connectionSetup = useConnectionSetup(() => {
     void qc.invalidateQueries({ queryKey: ["bot-live-summary"] });
   });
   const openSetup = connectionSetup.open;
+  const initialOpenedRef = React.useRef(false);
+  React.useLayoutEffect(() => {
+    if (initialOpenedRef.current || !initialPluginId) return;
+    initialOpenedRef.current = true;
+    openSetup(initialPluginId);
+  }, [initialPluginId, openSetup]);
   React.useEffect(
     () =>
       onNotification("bots:connections:setup", (payload: { pluginId?: unknown }) => {

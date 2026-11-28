@@ -46,6 +46,7 @@ export interface AssistantLiveVoiceApprovalReceipt {
 export interface AssistantLiveController {
   visible: boolean;
   available: boolean;
+  availabilityChecked?: boolean;
   availabilityDetail: string;
   active: boolean;
   setupOpen: boolean;
@@ -715,6 +716,7 @@ export function useAssistantLiveWithDependencies(
     reason: "live_model_unverified",
     state: "idle",
   });
+  const [availabilityChecked, setAvailabilityChecked] = React.useState(false);
   const liveApi = dependencies.api;
   const busSessionId = activeSnapshot(snapshot) ? (snapshot.sessionId ?? null) : null;
   React.useEffect(() => {
@@ -1040,8 +1042,11 @@ export function useAssistantLiveWithDependencies(
 
   React.useEffect(() => {
     const generation = ++availabilityGeneration.current;
-    if (!dependencies.geminiLive || dependencies.availabilityRefreshReady === false)
+    if (!dependencies.geminiLive) {
+      setAvailabilityChecked(true);
       return () => undefined;
+    }
+    if (dependencies.availabilityRefreshReady === false) return () => undefined;
     void dependencies.api
       .status()
       .then((next) => {
@@ -1051,9 +1056,14 @@ export function useAssistantLiveWithDependencies(
           availabilityGeneration.current === generation
         ) {
           setSnapshot(next);
+          setAvailabilityChecked(true);
         }
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (mounted.current && availabilityGeneration.current === generation) {
+          setAvailabilityChecked(true);
+        }
+      });
     return () => {
       availabilityGeneration.current += 1;
     };
@@ -1733,6 +1743,7 @@ export function useAssistantLiveWithDependencies(
     screenBusy,
     screenError,
     setupComplete,
+    availabilityChecked,
     setSetupOpen,
     setMicrophone,
     setMicrophoneMuted,

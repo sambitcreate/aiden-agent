@@ -86,7 +86,13 @@ function storedSetupComplete(): boolean {
   }
 }
 
-export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): React.ReactElement {
+export function AssistantDock({
+  rightInset = 0,
+  openRequestNonce = 0,
+}: {
+  rightInset?: number;
+  openRequestNonce?: number;
+}): React.ReactElement {
   const navigate = useNavigate();
   const router = useRouter();
   const live = useAssistantLive(null);
@@ -125,6 +131,7 @@ export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): Reac
       activity={activity}
       preferences={preferences}
       onPreferencesChange={(patch) => void save(patch)}
+      openRequestNonce={openRequestNonce}
     />
   );
 }
@@ -141,6 +148,7 @@ export function AssistantDockPresentation({
   activity = null,
   preferences = DEFAULT_RIBBON_PREFERENCES,
   onPreferencesChange = () => undefined,
+  openRequestNonce = 0,
 }: {
   chat: AssistantLiveApprovals;
   live: AssistantLiveController;
@@ -160,6 +168,7 @@ export function AssistantDockPresentation({
   activity?: LiveActivity | null;
   preferences?: Pick<AidenLivePreferences, "voice" | "speed" | "ribbonColors">;
   onPreferencesChange?: (patch: AidenLivePreferencesPatch) => void;
+  openRequestNonce?: number;
 }): React.ReactElement {
   const [hudOpen, setHudOpen] = React.useState(Boolean(live.error));
   const [stopRevealed, setStopRevealed] = React.useState(false);
@@ -275,6 +284,16 @@ export function AssistantDockPresentation({
   // The composer's button starts Live through the same press the shortcut uses.
   const openPanelRef = React.useRef(openPanel);
   openPanelRef.current = openPanel;
+  const handledOpenNonceRef = React.useRef(0);
+  const readinessSettled =
+    !setupCompleted ||
+    (live.availabilityChecked !== false && live.microphonePermission !== "checking");
+  React.useEffect(() => {
+    if (openRequestNonce <= handledOpenNonceRef.current) return;
+    if (!live.visible || !enabled || !readinessSettled) return;
+    handledOpenNonceRef.current = openRequestNonce;
+    openPanelRef.current();
+  }, [enabled, live.visible, openRequestNonce, readinessSettled]);
   const offered = live.visible && enabled && buttonVisible && hostSupported;
   const sessionActive = live.active || live.busy || closing;
   React.useEffect(() => {

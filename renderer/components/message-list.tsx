@@ -1,4 +1,3 @@
-import { AppControlsPanel } from "./app-controls-panel";
 // Renders the transcript: persisted messages + the in-progress streaming reply.
 
 import * as React from "react";
@@ -46,7 +45,7 @@ import type { ChatArtifactV1, ChatHtmlArtifactV1, HtmlArtifactLayout } from "../
 import { isChatHtmlArtifact, isChatImageArtifact } from "../shared/chat-artifacts";
 import { attachmentsShownWithVisuals } from "../shared/visual-snapshots";
 import { HtmlArtifactDraftFrame, HtmlArtifactFrame, type GuestPromptHandler } from "./html-artifact-frame";
-import { AidenUiBlock } from "./aiden-ui/aiden-ui-block";
+import type { AidenUiBlock } from "./aiden-ui/aiden-ui-block";
 import { useKeepVisualActions, useSendToCanvasActions } from "../lib/visual-menu-actions";
 import { AIDEN_UI_LIMITS, type ChatUiVisualV1 } from "../shared/aiden-ui/types";
 import { isWireSafeKey } from "../shared/aiden-ui/visual";
@@ -237,6 +236,13 @@ function FollowUpAwareHtmlArtifactFrame(
   return <HtmlArtifactFrame {...props} actions={actions} followUpBusy={React.useContext(VisualFollowUpBusyContext)} />;
 }
 
+const LazyAppControlsPanel = React.lazy(() =>
+  import("./app-controls-panel").then((module) => ({ default: module.AppControlsPanel })),
+);
+const LazyAidenUiBlock = React.lazy(() =>
+  import("./aiden-ui/aiden-ui-block").then((module) => ({ default: module.AidenUiBlock })),
+);
+
 function FollowUpAwareAidenUiBlock({
   messageId,
   ...props
@@ -245,7 +251,12 @@ function FollowUpAwareAidenUiBlock({
   messageId?: string;
 }) {
   const actions = useKeepVisualActions(props.draft ? undefined : messageId, props.visual.id);
-  return <AidenUiBlock {...props} actions={actions} followUpBusy={React.useContext(VisualFollowUpBusyContext)} />;
+  const followUpBusy = React.useContext(VisualFollowUpBusyContext);
+  return (
+    <React.Suspense fallback={null}>
+      <LazyAidenUiBlock {...props} actions={actions} followUpBusy={followUpBusy} />
+    </React.Suspense>
+  );
 }
 
 type RenderVisual = (
@@ -662,7 +673,13 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
             uiVisuals={uiVisuals}
             renderUiVisual={renderSettledUiVisual ? renderUiVisual : undefined}
           />
-          {message.appPanels?.map((panel) => <AppControlsPanel key={panel.id} panel={panel} chatId={chatId} />)}
+          {message.appPanels && message.appPanels.length > 0 ? (
+            <React.Suspense fallback={null}>
+              {message.appPanels.map((panel) => (
+                <LazyAppControlsPanel key={panel.id} panel={panel} chatId={chatId} />
+              ))}
+            </React.Suspense>
+          ) : null}
           {message.providerFailure ? (
             <ProviderFailureCallout failure={message.providerFailure} actions={failureActions} />
           ) : null}

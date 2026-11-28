@@ -12,9 +12,8 @@ import { readChatDraftGitMemory, seedDraftWorktreeFromGitInfo } from "../lib/cha
 import type { Workspace } from "../lib/types";
 import { Outlet, useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
 import { historyNavigationAvailability } from "../lib/history-navigation";
-import { PairingRequestSheet } from "../components/remote-pairing-request-sheet";
-import { useQueryClient } from "@tanstack/react-query";
-import { appControlsApi } from "../lib/ipc";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { aidenRemoteApi, appControlsApi } from "../lib/ipc";
 import * as React from "react";
 import { appApi, chatsApi, claimChatHandoff, localRunsApi, onNotification, quickChatApi, settingsApi, workspacesApi } from "../lib/ipc";
 import { parseSettingsSection, settingsLocation } from "../lib/settings-section";
@@ -24,14 +23,14 @@ import type { Attachment } from "../lib/types";
 import { mirrorNewChatModelToHost, persistModelSelection, subscribeHostNewChatModel } from "../lib/use-model-selection";
 import { useTheme } from "../lib/use-theme";
 import { useActiveWorkspace, WorkspaceProvider } from "../lib/workspace-context";
-import { WorkspaceTerminalProvider, useWorkspaceTerminal } from "../components/terminal-drawer";
+import { WorkspaceTerminalProvider, useWorkspaceTerminal } from "../components/workspace-terminal-provider";
 import { EnvironmentPanelProvider, useEnvironmentPanelCore } from "../components/environment-panel";
 import { toast } from "../components/ui";
 import { RoutedBotPanelProvider, useBotPanelActions } from "./bots/bot-panel-context";
 import { botChatPath, botChatRouteBotId, botListLocation, environmentToggleTarget, isBotsPath } from "../lib/bot-routes";
-import { AssistantDock } from "../components/assistant/assistant-dock";
+import { LIVE_LAUNCH_IDLE, liveLauncher } from "../lib/live-launcher";
 import { LiveAppControlLayer } from "../components/assistant/live-app-control-layer";
-import { queryKeys, upsertCreatedWorkspaceInCache } from "../lib/queries";
+import { queryKeys, upsertCreatedWorkspaceInCache, useSettings } from "../lib/queries";
 import { goalSettleNotification, windowShowsChat } from "../lib/goal-notification";
 import type { GoalView } from "../shared/goal";
 import { subscribeGitQuerySync } from "../lib/git-query-sync";
@@ -43,14 +42,15 @@ import {
 import { CommandSystemProvider, useCommandHandler, useCommandSystem } from "../lib/command-system";
 import { NewChatActionsProvider, type NewChatActions } from "../lib/new-chat-actions";
 import { chatIdFromPath, draftWorkspaceMenu, requestDraftWorkspaceMenu } from "../lib/draft-workspace-menu";
-import { AppCommandPalette } from "../components/command-palette";
 import { LiveChatToolsHost } from "./live-chat-tools-host";
 import { KeyboardRegions } from "../components/keyboard-regions";
-import { KeyboardShortcutsDialog } from "../components/keyboard-shortcuts-dialog";
-import { WorkspaceSettingsDialog } from "../components/workspace-settings-dialog";
+import {
+  openWorkspaceSettings,
+  subscribeWorkspaceSettingsOpen,
+  type OpenWorkspaceSettingsRequest,
+} from "../lib/workspace-settings-dialog-state";
+import { workspaceHasOwnSettings } from "../lib/workspace-settings-view";
 import { OnboardingFlow, waitForOnboardingActiveCheck } from "../components/onboarding-flow";
-import { BotConnectionSetupHost } from "./bots/bot-connection-setup-host";
-import { BotBubbleWindowHost } from "../bot-bubbles/window-host";
 import { botBubblesApi, useBotBubbles } from "../lib/bot-bubbles-api";
 import { isBotBubbled } from "../shared/bot-bubbles";
 import { botChatSourceRect, bubbleBot } from "./bots/bot-menu";
@@ -844,19 +844,273 @@ function RootContent() {
         />
         <AssistantDock rightInset={environmentPanel.dockRightInset} />
         <LiveAppControlLayer />
-        <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
+        <DeferredCommandPalette navigationBlockedReason={navigationBlockedReason} />
         <LiveChatToolsHost navigationBlockedReason={navigationBlockedReason} />
         <WindowControls />
         <KeyboardRegions />
-        <KeyboardShortcutsDialog />
-        <WorkspaceSettingsDialog />
-        <PairingRequestSheet />
-        {capabilities.bots ? <BotConnectionSetupHost /> : null}
+        <DeferredKeyboardShortcutsDialog />
+        <DeferredWorkspaceSettingsDialog />
+        <DeferredPairingRequestSheet />
+        {capabilities.bots ? <DeferredBotConnectionSetupHost /> : null}
         {capabilities.bots ? (
           <BotBubbleRoot pathname={pathname} navigationBlockedReason={navigationBlockedReason} />
         ) : null}
       </div>
     </NewChatActionsProvider>
+  );
+}
+
+const LazyAssistantDock = React.lazy(() =>
+  import("../components/assistant/assistant-dock").then((module) => ({
+    default: module.AssistantDock,
+  })),
+);
+const LazyAppCommandPalette = React.lazy(() =>
+  import("../components/command-palette").then((module) => ({
+    default: module.AppCommandPalette,
+  })),
+);
+const LazyKeyboardShortcutsDialog = React.lazy(() =>
+  import("../components/keyboard-shortcuts-dialog").then((module) => ({
+    default: module.KeyboardShortcutsDialog,
+  })),
+);
+const LazyWorkspaceSettingsDialog = React.lazy(() =>
+  import("../components/workspace-settings-dialog").then((module) => ({
+    default: module.WorkspaceSettingsDialog,
+  })),
+);
+const LazyPairingRequestSheet = React.lazy(() =>
+  import("../components/remote-pairing-request-sheet").then((module) => ({
+    default: module.PairingRequestSheet,
+  })),
+);
+const LazyBotConnectionSetupHost = React.lazy(() =>
+  import("./bots/bot-connection-setup-host").then((module) => ({
+    default: module.BotConnectionSetupHost,
+  })),
+);
+const LazyBotBubbleWindowHost = React.lazy(() =>
+  import("../bot-bubbles/window-host").then((module) => ({
+    default: module.BotBubbleWindowHost,
+  })),
+);
+
+function ReadyBeacon({
+  onReady,
+  children,
+}: {
+  onReady: () => void;
+  children: React.ReactNode;
+}) {
+  React.useLayoutEffect(() => {
+    onReady();
+  }, [onReady]);
+  return <>{children}</>;
+}
+
+function storedLiveSetupComplete(): boolean {
+  try {
+    return (
+      window.localStorage.getItem("aiden.live.setup-complete") === "true" ||
+      window.localStorage.getItem("aiden.gemini-live.setup-complete") === "true"
+    );
+  } catch {
+    return false;
+  }
+}
+
+function AssistantDock({ rightInset = 0 }: { rightInset?: number }) {
+  const { geminiLive } = useAppCapabilities();
+  const settings = useSettings();
+  const enabled = settings.data ? settings.data.aidenLiveEnabled !== false : false;
+  const buttonVisible = settings.data?.aidenLiveButtonVisible !== false;
+  const offered = geminiLive && enabled && buttonVisible;
+  const [loaded, setLoaded] = React.useState(false);
+  const [mounted, setMounted] = React.useState(false);
+  const [openRequestNonce, setOpenRequestNonce] = React.useState(0);
+  const mountedRef = React.useRef(false);
+  mountedRef.current = mounted;
+
+  const requestOpen = React.useCallback(() => {
+    setOpenRequestNonce((current) => current + 1);
+    setLoaded(true);
+  }, []);
+
+  useCommandHandler("assistant.open", requestOpen, geminiLive && enabled && !mounted);
+
+  React.useEffect(() => {
+    if (mounted) return;
+    const needsSetup = !storedLiveSetupComplete();
+    liveLauncher.publish(
+      { offered, sessionActive: false, needsSetup },
+      offered ? requestOpen : null,
+    );
+  }, [mounted, offered, requestOpen]);
+
+  React.useEffect(
+    () => () => {
+      if (!mountedRef.current) liveLauncher.publish(LIVE_LAUNCH_IDLE, null);
+    },
+    [],
+  );
+
+  if (!loaded) return null;
+  return (
+    <React.Suspense fallback={null}>
+      <ReadyBeacon onReady={() => setMounted(true)}>
+        <LazyAssistantDock rightInset={rightInset} openRequestNonce={openRequestNonce} />
+      </ReadyBeacon>
+    </React.Suspense>
+  );
+}
+
+function DeferredCommandPalette({
+  navigationBlockedReason,
+}: {
+  navigationBlockedReason: string | null;
+}) {
+  const { palette } = useCommandSystem();
+  const capabilities = useAppCapabilities();
+  const [loaded, setLoaded] = React.useState(palette.open);
+  const [mounted, setMounted] = React.useState(false);
+
+  React.useLayoutEffect(() => {
+    if (palette.open) setLoaded(true);
+  }, [palette.open]);
+
+  useCommandHandler("chat.search", () => palette.openMode("chats"), !mounted);
+  useCommandHandler("model.change", () => palette.openMode("models"), !mounted);
+  useCommandHandler("provider.manage", () => palette.openMode("providers"), !mounted);
+  useCommandHandler("settings.search", () => palette.openMode("settings"), !mounted);
+  useCommandHandler("bots.search", () => palette.openMode("bots"), capabilities.bots && !mounted);
+
+  if (!loaded) return null;
+  return (
+    <React.Suspense fallback={null}>
+      <ReadyBeacon onReady={() => setMounted(true)}>
+        <LazyAppCommandPalette navigationBlockedReason={navigationBlockedReason} />
+      </ReadyBeacon>
+    </React.Suspense>
+  );
+}
+
+function DeferredKeyboardShortcutsDialog() {
+  const [loaded, setLoaded] = React.useState(false);
+  const [mounted, setMounted] = React.useState(false);
+  const returnFocusRef = React.useRef<HTMLElement | null>(null);
+
+  useCommandHandler(
+    "shortcuts.show",
+    () => {
+      returnFocusRef.current =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      setLoaded(true);
+    },
+    !mounted,
+  );
+
+  if (!loaded) return null;
+  return (
+    <React.Suspense fallback={null}>
+      <ReadyBeacon onReady={() => setMounted(true)}>
+        <LazyKeyboardShortcutsDialog initialOpen initialReturnFocus={returnFocusRef.current} />
+      </ReadyBeacon>
+    </React.Suspense>
+  );
+}
+
+function DeferredWorkspaceSettingsDialog() {
+  const { active } = useActiveWorkspace();
+  const activeHasSettings = workspaceHasOwnSettings(active);
+  const [initialRequest, setInitialRequest] =
+    React.useState<OpenWorkspaceSettingsRequest | null>(null);
+  const [loaded, setLoaded] = React.useState(false);
+  const [mounted, setMounted] = React.useState(false);
+
+  React.useEffect(() => {
+    if (mounted) return;
+    return subscribeWorkspaceSettingsOpen((request) => {
+      setInitialRequest(request);
+      setLoaded(true);
+    });
+  }, [mounted]);
+
+  useCommandHandler(
+    "workspace.settings",
+    () => {
+      if (active && activeHasSettings) openWorkspaceSettings(active.id, "general");
+    },
+    activeHasSettings && !mounted,
+  );
+
+  if (!loaded) return null;
+  return (
+    <React.Suspense fallback={null}>
+      <ReadyBeacon onReady={() => setMounted(true)}>
+        <LazyWorkspaceSettingsDialog initialRequest={initialRequest} />
+      </ReadyBeacon>
+    </React.Suspense>
+  );
+}
+
+function DeferredPairingRequestSheet() {
+  const queryClient = useQueryClient();
+  const [loaded, setLoaded] = React.useState(false);
+  const [mounted, setMounted] = React.useState(false);
+  const requests = useQuery({
+    queryKey: queryKeys.aidenRemotePairingRequests,
+    queryFn: aidenRemoteApi.listPairingRequests,
+    retry: false,
+    refetchOnWindowFocus: true,
+    enabled: !mounted,
+  });
+
+  React.useEffect(() => {
+    if (mounted) return;
+    return aidenRemoteApi.onPairingRequestsChanged(() => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.aidenRemotePairingRequests });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.aidenRemote });
+    });
+  }, [mounted, queryClient]);
+
+  const hasRequests = (requests.data?.length ?? 0) > 0;
+  React.useLayoutEffect(() => {
+    if (hasRequests) setLoaded(true);
+  }, [hasRequests]);
+
+  if (!loaded) return null;
+  return (
+    <React.Suspense fallback={null}>
+      <ReadyBeacon onReady={() => setMounted(true)}>
+        <LazyPairingRequestSheet />
+      </ReadyBeacon>
+    </React.Suspense>
+  );
+}
+
+function DeferredBotConnectionSetupHost() {
+  const [initialPluginId, setInitialPluginId] = React.useState<string | null>(null);
+  const [loaded, setLoaded] = React.useState(false);
+  const [mounted, setMounted] = React.useState(false);
+
+  React.useEffect(() => {
+    if (mounted) return;
+    return onNotification("bots:connections:setup", (payload: { pluginId?: unknown }) => {
+      if (typeof payload?.pluginId === "string") {
+        setInitialPluginId(payload.pluginId);
+        setLoaded(true);
+      }
+    });
+  }, [mounted]);
+
+  if (!loaded) return null;
+  return (
+    <React.Suspense fallback={null}>
+      <ReadyBeacon onReady={() => setMounted(true)}>
+        <LazyBotConnectionSetupHost initialPluginId={initialPluginId} />
+      </ReadyBeacon>
+    </React.Suspense>
   );
 }
 
@@ -897,5 +1151,10 @@ function BotBubbleRoot({
       }),
     [navigate],
   );
-  return <BotBubbleWindowHost />;
+  if (bubbles.host !== "window" || bubbles.bubbles.length === 0) return null;
+  return (
+    <React.Suspense fallback={null}>
+      <LazyBotBubbleWindowHost />
+    </React.Suspense>
+  );
 }
