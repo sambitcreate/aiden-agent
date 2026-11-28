@@ -236,7 +236,29 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
     const download = jobs[name].steps.find((step) => step.uses?.startsWith("actions/download-artifact@") && String(step.with?.path ?? "").includes("ci-test-selection"));
     assert.equal(download?.with.name, "${{ needs.changes.outputs.selection-artifact }}", name);
   }
-  assert.ok(jobs.e2e.steps.some((step) => step.uses?.startsWith("actions/cache/restore@")));
+  const timingCacheKey = "e2e-spec-timings-v1-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}";
+  const timingRestoreKeys = ["e2e-spec-timings-v1-${{ github.sha }}-", "e2e-spec-timings-v1-"];
+  for (const name of ["e2e", "linux-e2e", "e2e-spec-timings"]) {
+    const restore = jobs[name].steps.find((step) => step.uses?.startsWith("actions/cache/restore@"));
+    assert.ok(restore, `${name}: missing timing cache restore step`);
+    assert.equal(restore.uses, "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9", name);
+    assert.equal(restore["continue-on-error"], true, name);
+    assert.equal(restore.with.path, "test-results/e2e-spec-timings.json", name);
+    assert.equal(restore.with.key, timingCacheKey, name);
+    assert.deepEqual(
+      String(restore.with["restore-keys"] ?? "").trim().split("\n").map((entry) => entry.trim()),
+      timingRestoreKeys,
+      name,
+    );
+    assert.equal(restore.with.enableCrossOsArchive, true, `${name}: restore must share the cross-OS archive scope`);
+  }
+  const timingSave = jobs["e2e-spec-timings"].steps.find((step) => step.uses?.startsWith("actions/cache/save@"));
+  assert.ok(timingSave, "e2e-spec-timings: missing timing cache save step");
+  assert.equal(timingSave.uses, "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9");
+  assert.equal(timingSave["continue-on-error"], true);
+  assert.equal(timingSave.with.path, "test-results/e2e-spec-timings.json");
+  assert.equal(timingSave.with.key, timingCacheKey);
+  assert.equal(timingSave.with.enableCrossOsArchive, true, "e2e-spec-timings: save must share the cross-OS archive scope");
   assert.equal(jobs["e2e-spec-timings"]["runs-on"], "ubuntu-24.04");
   assert.ok(!jobs.required.needs.includes("e2e-spec-timings"));
   for (const lane of jobs.unit.strategy.matrix.lane) {

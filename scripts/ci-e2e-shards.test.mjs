@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import process from "node:process";
 import test from "node:test";
 import { URL, fileURLToPath } from "node:url";
-import { E2E_SHARD_COUNT, discoverSpecs, planShards, shardArguments, specsForRunner } from "./ci-e2e-shards.mjs";
+import { E2E_SHARD_COUNT, FILE_SECONDS, discoverSpecs, planShards, shardArguments, specsForRunner } from "./ci-e2e-shards.mjs";
 import { readE2ESpecMap } from "./ci-related-tests.mjs";
 
 test("every deterministic spec belongs to exactly one shard, including unweighted new files", () => {
@@ -14,6 +14,31 @@ test("every deterministic spec belongs to exactly one shard, including unweighte
   assert.equal(actual.length, new Set(actual).size);
   assert.deepEqual(actual.sort(), expected);
   assert.deepEqual(planShards([...specs].reverse()), planShards(specs));
+});
+
+test("every runnable spec on disk has a fallback weight in FILE_SECONDS and cold shards retain headroom", () => {
+  const specs = discoverSpecs();
+  const runnable = specs.filter((file) => !file.endsWith(".live.spec.ts") && file !== "diagnostics-production.spec.ts");
+  assert.ok(runnable.length >= 85, `expected at least 85 runnable specs, found ${runnable.length}`);
+  assert.deepEqual(Object.keys(FILE_SECONDS).toSorted(), runnable.toSorted());
+  for (const [file, seconds] of Object.entries(FILE_SECONDS)) {
+    assert.ok(Number.isInteger(seconds) && seconds > 0, `${file}: expected positive integer weight, got ${seconds}`);
+  }
+  const fixture = JSON.parse(readFileSync(new URL("./fixtures/ci-e2e-2026-11-04-timings.json", import.meta.url), "utf8"));
+  const { jobSeconds, setupAndCleanupReserveSeconds, minimumHeadroomSeconds } = fixture.budget;
+  const macShards = planShards(specs, E2E_SHARD_COUNT);
+  const macLoads = macShards.map((shard) => shard.seconds);
+  assert.ok(
+    Math.max(...macLoads) + setupAndCleanupReserveSeconds <= jobSeconds - minimumHeadroomSeconds,
+    `cold ${E2E_SHARD_COUNT}-shard fallback windows ${macLoads}`,
+  );
+  const linuxJobSeconds = 30 * 60;
+  const linuxShards = planShards(specs, 3);
+  const linuxLoads = linuxShards.map((shard) => shard.seconds);
+  assert.ok(
+    Math.max(...linuxLoads) + setupAndCleanupReserveSeconds <= linuxJobSeconds - minimumHeadroomSeconds,
+    `cold 3-shard Linux fallback windows ${linuxLoads}`,
+  );
 });
 
 test("allocation reduces the slowest runner using an independent completed CI run", () => {
