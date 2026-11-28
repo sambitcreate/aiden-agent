@@ -563,3 +563,60 @@ test("provision handles >64 unique parent directories without leaking FDs", asyn
   assert.equal(await readFile(path.join(destination, "d00", "f.txt"), "utf8"), "v0");
   assert.equal(await readFile(path.join(destination, "d69", "f.txt"), "utf8"), "v69");
 });
+
+test("list omits .git entries of any type case-insensitively and editor rejects .git segments while keeping .gitignore editable", async (t) => {
+  if (process.platform !== "darwin") return;
+  const source = await directory(t);
+  const sub = path.join(source, "sub");
+  await mkdir(sub);
+  await writeFile(path.join(source, ".git"), "gitdir: /private/host/worktree\n");
+  await writeFile(path.join(sub, ".GIT"), "gitdir: /private/host/sub\n");
+  await symlink(path.join(source, ".gitignore"), path.join(sub, ".Git"));
+  await writeFile(path.join(source, ".gitignore"), "dist/\n");
+  await writeFile(path.join(source, ".gitattributes"), "* text=auto\n");
+
+  const rootId = await identity(source);
+  const rootListing = await runWithCheckpoints(["list", ...rootId, "", ...rootId.slice(1)], async () => {});
+  const gitignoreHex = Buffer.from(".gitignore").toString("hex");
+  const gitattributesHex = Buffer.from(".gitattributes").toString("hex");
+  const dotGitHex = Buffer.from(".git").toString("hex");
+  assert.match(rootListing, new RegExp(` ${gitignoreHex}\\n`, "u"));
+  assert.match(rootListing, new RegExp(` ${gitattributesHex}\\n`, "u"));
+  assert.equal(rootListing.includes(` ${dotGitHex}\n`), false);
+
+  const subId = await identity(sub);
+  const subListing = await runWithCheckpoints(["list", ...rootId, "sub", ...subId.slice(1)], async () => {});
+  assert.equal(subListing, "c\n");
+
+  const gitFileId = await identity(path.join(source, ".git"));
+  const expectedGitHash = createHash("sha256").update("gitdir: /private/host/worktree\n").digest("hex");
+  for (const relative of [".git", "sub/.GIT", ".git/config"]) {
+    const readRes = await runEditor(["read", ...rootId, relative, ...gitFileId.slice(1)]);
+    assert.notEqual(readRes.code, 0, relative);
+    assert.equal(readRes.stdout.length, 0, relative);
+    const editRes = await runEditor(
+      ["edit", ...rootId, relative, ...gitFileId.slice(1), expectedGitHash, "4"],
+      Buffer.from("bad\n"),
+    );
+    assert.notEqual(editRes.code, 0, relative);
+    assert.equal(editRes.stdout.length, 0, relative);
+  }
+  assert.equal(await readFile(path.join(source, ".git"), "utf8"), "gitdir: /private/host/worktree\n");
+
+  const gitignoreId = await identity(path.join(source, ".gitignore"));
+  const readIgnore = await runEditor(["read", ...rootId, ".gitignore", ...gitignoreId.slice(1)]);
+  assert.equal(readIgnore.code, 0, readIgnore.stderr);
+  const editIgnore = await runEditor(
+    [
+      "edit",
+      ...rootId,
+      ".gitignore",
+      ...gitignoreId.slice(1),
+      createHash("sha256").update("dist/\n").digest("hex"),
+      "11",
+    ],
+    Buffer.from("dist/\ntmp/\n"),
+  );
+  assert.equal(editIgnore.code, 0, editIgnore.stderr);
+  assert.equal(await readFile(path.join(source, ".gitignore"), "utf8"), "dist/\ntmp/\n");
+});

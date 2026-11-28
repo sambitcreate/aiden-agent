@@ -1,10 +1,11 @@
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
-import { lstat, stat } from "node:fs/promises";
+import { lstat, realpath, stat } from "node:fs/promises";
 import type { Workspace } from "./types.js";
 import { readConfinedWorkspaceFile, editConfinedWorkspaceFile, ManagedWorktreeFileIoError,
   type ConfinedWorkspaceFileIdentity } from "./managed-worktree-file-io.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { assertAgentMayWriteConfigPath } from "./protected-agent-config-paths.js";
 import {
   AidenOpaqueHandleError,
   AidenOpaqueHandleStore,
@@ -17,6 +18,7 @@ import { projectAidenRemoteWorkspace } from "./aiden-remote-workspaces.js";
 import type { AidenRemoteWorkspaceOwnerRegistry } from "./aiden-remote-workspace-owners.js";
 import type { WorkspaceEnvironmentApplicationService } from "./workspace-environment-application-service.js";
 import {
+  hasWorkspaceGitSegment,
   listWorkspaceFiles,
   listWorkspaceDirectory,
   decodeWorkspaceFileText,
@@ -132,6 +134,20 @@ function parseWrite(value: unknown): { content: string; expectedVersion: string 
     throw new AidenRemoteServiceError("invalid_request", "The file save request is invalid.", 400);
   }
   return { content: record.content, expectedVersion: record.expectedVersion };
+}
+
+const REMOTE_PROTECTED_FILE_WRITE_MESSAGE =
+  "Hook, agent, and Git configuration files can only be edited directly on your computer.";
+
+function assertRemoteMayWriteTarget(...candidates: readonly string[]): void {
+  if (candidates.some(hasWorkspaceGitSegment)) {
+    throw new AidenRemoteServiceError("capability_denied", REMOTE_PROTECTED_FILE_WRITE_MESSAGE, 403);
+  }
+  try {
+    assertAgentMayWriteConfigPath(...candidates);
+  } catch {
+    throw new AidenRemoteServiceError("capability_denied", REMOTE_PROTECTED_FILE_WRITE_MESSAGE, 403);
+  }
 }
 
 function projectedDocument(
@@ -530,6 +546,14 @@ export class AidenRemoteFileService {
     const input = parseWrite(value);
     return this.withResolvedFile(deviceId, workspaceId, fileId, async (resolved) => {
       try {
+        const lexicalTargetPath = path.join(resolved.folderPath, resolved.displayPath);
+        const canonicalTargetPath = await realpath(lexicalTargetPath).catch(() => resolved.claims.canonicalPath);
+        assertRemoteMayWriteTarget(
+          resolved.displayPath,
+          lexicalTargetPath,
+          canonicalTargetPath,
+          resolved.claims.canonicalPath,
+        );
         if (resolved.confinement) {
           const buffer = Buffer.from(input.content, "utf8");
           decodeWorkspaceFileText(buffer, resolved.displayPath);
@@ -555,6 +579,7 @@ export class AidenRemoteFileService {
         await rebindAidenFileHandleToSavedFile(this.handles, fileId, resolved.folderPath, resolved.displayPath, installed);
         return projectedDocument(fileId, resolved.displayPath, document);
       } catch (error) {
+        if (error instanceof AidenRemoteServiceError) throw error;
         if (error instanceof ManagedWorktreeFileIoError && error.code === "recovery_limit") {
           throw new AidenRemoteServiceError("workspace_unavailable", "Review and remove unneeded .aiden-recovery files in this folder on your computer before saving again.", 409);
         }

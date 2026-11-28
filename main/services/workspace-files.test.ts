@@ -544,3 +544,94 @@ test("a synchronous metadata inspector failure still drains its started siblings
   await rejection;
   assert.deepEqual(await mapWorkspaceMetadata([3], async value => value), [3]);
 });
+
+test("workspace enumeration, reads, and writes hide .git entries while keeping .gitignore, .gitattributes, and local config files editable", async (t) => {
+  const root = await workspace(t);
+  await fs.mkdir(path.join(root, "packages", "submodule"), { recursive: true });
+  await fs.mkdir(path.join(root, "nested"), { recursive: true });
+  await fs.mkdir(path.join(root, "links"), { recursive: true });
+  await fs.mkdir(path.join(root, ".claude"), { recursive: true });
+  await fs.mkdir(path.join(root, ".aiden"), { recursive: true });
+
+  const worktreeGit = "gitdir: /private/host/repo/.git/worktrees/feature-wt\n";
+  const submoduleGit = "gitdir: ../../.git/modules/submodule\n";
+  await fs.writeFile(path.join(root, ".git"), worktreeGit, "utf8");
+  await fs.writeFile(path.join(root, "packages", "submodule", ".git"), submoduleGit, "utf8");
+  await fs.writeFile(path.join(root, "nested", ".GIT"), worktreeGit, "utf8");
+  await fs.writeFile(path.join(root, "README.md"), "# Project\n", "utf8");
+  await fs.writeFile(path.join(root, ".gitignore"), "node_modules/\n", "utf8");
+  await fs.writeFile(path.join(root, ".gitattributes"), "* text=auto\n", "utf8");
+  await fs.writeFile(path.join(root, ".claude", "settings.json"), "{\"permissions\":{}}\n", "utf8");
+  await fs.writeFile(path.join(root, ".aiden", "hooks.json"), "{\"hooks\":[]}\n", "utf8");
+  await fs.symlink(path.join(root, "README.md"), path.join(root, "links", ".git"));
+  await fs.symlink(path.join(root, ".git"), path.join(root, "git-pointer.txt"));
+
+  const index = await listWorkspaceFiles(root);
+  const listedPaths = index.entries.map((entry) => entry.path);
+  assert.equal(listedPaths.includes(".git"), false);
+  assert.equal(listedPaths.includes("packages/submodule/.git"), false);
+  assert.equal(listedPaths.includes("nested/.GIT"), false);
+  assert.equal(listedPaths.includes("links/.git"), false);
+  assert.equal(listedPaths.includes(".gitignore"), true);
+  assert.equal(listedPaths.includes(".gitattributes"), true);
+  assert.equal(listedPaths.includes("README.md"), true);
+
+  const pointerLink = index.entries.find((entry) => entry.path === "git-pointer.txt");
+  assert.equal(pointerLink?.kind, "symlink");
+  assert.equal(pointerLink?.size, undefined);
+
+  for (const blocked of [".git", ".GIT", "packages/submodule/.git", "nested/.GIT", "git-pointer.txt", "packages/.git/../submodule/file.txt"]) {
+    await assert.rejects(readWorkspaceFile(root, blocked), /Git metadata/);
+    await assert.rejects(
+      writeWorkspaceFile(root, blocked, "tampered\n", "0".repeat(64)),
+      /Git metadata/,
+    );
+  }
+  assert.equal(await fs.readFile(path.join(root, ".git"), "utf8"), worktreeGit);
+  assert.equal(await fs.readFile(path.join(root, "packages", "submodule", ".git"), "utf8"), submoduleGit);
+
+  const gitignore = await readWorkspaceFile(root, ".gitignore");
+  const savedGitignore = await writeWorkspaceFile(
+    root,
+    ".gitignore",
+    "node_modules/\ndist/\n",
+    gitignore.version,
+    undefined,
+    { recoveryUse: async () => "clear" },
+  );
+  assert.equal(savedGitignore.content, "node_modules/\ndist/\n");
+
+  const gitattributes = await readWorkspaceFile(root, ".gitattributes");
+  const savedGitattributes = await writeWorkspaceFile(
+    root,
+    ".gitattributes",
+    "* text=auto eol=lf\n",
+    gitattributes.version,
+    undefined,
+    { recoveryUse: async () => "clear" },
+  );
+  assert.equal(savedGitattributes.content, "* text=auto eol=lf\n");
+
+  // Local desktop editing (main/handlers/workspaces.ts -> writeWorkspaceFile) stays open for the owner.
+  const claudeSettings = await readWorkspaceFile(root, ".claude/settings.json");
+  const savedClaude = await writeWorkspaceFile(
+    root,
+    ".claude/settings.json",
+    "{\"permissions\":{\"allow\":[]}}\n",
+    claudeSettings.version,
+    undefined,
+    { recoveryUse: async () => "clear" },
+  );
+  assert.equal(savedClaude.content, "{\"permissions\":{\"allow\":[]}}\n");
+
+  const aidenHooks = await readWorkspaceFile(root, ".aiden/hooks.json");
+  const savedHooks = await writeWorkspaceFile(
+    root,
+    ".aiden/hooks.json",
+    "{\"hooks\":[{\"event\":\"stop\"}]}\n",
+    aidenHooks.version,
+    undefined,
+    { recoveryUse: async () => "clear" },
+  );
+  assert.equal(savedHooks.content, "{\"hooks\":[{\"event\":\"stop\"}]}\n");
+});

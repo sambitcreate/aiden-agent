@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import fsPromises from "node:fs/promises";
+import { createServer } from "node:http";
 import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -8,7 +10,10 @@ import test from "node:test";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { listWorkspaceFiles } from "./workspace-files.js";
 import { AidenRemoteFileService } from "./aiden-remote-files.js";
-import { AidenOpaqueHandleStore } from "./aiden-remote-opaque-handles.js";
+import { AidenOpaqueHandleStore, inspectAidenFilesystemIdentity } from "./aiden-remote-opaque-handles.js";
+import { AIDEN_REMOTE_BASE_PATH, type AidenRemoteCapability } from "./aiden-remote-protocol.js";
+import { createAidenRemoteRequestHandler } from "./aiden-remote-router.js";
+import { projectAidenRemoteWorkspace } from "./aiden-remote-workspaces.js";
 import { AidenRemoteWorkspaceOwnerRegistry } from "./aiden-remote-workspace-owners.js";
 import type { Workspace } from "./types.js";
 import { createWorkspaceEnvironmentApplicationService } from "./workspace-environment-application-service.js";
@@ -708,4 +713,229 @@ test("re-listing reclaims a superseded listing's unopened handles instead of loc
   }
   await assert.rejects(service.read("device-1", "workspace", first.entries[1]!.id), (error: unknown) =>
     error instanceof AidenRemoteServiceError && error.code === "handle_invalid");
+});
+
+test("remote Workspace Files HTTP routes omit worktree and submodule .git files and reject protected config writes", async (t) => {
+  const temporary = await fs.mkdtemp(path.join(os.homedir(), ".aiden-remote-files-guard-"));
+  t.after(() => fs.rm(temporary, { recursive: true, force: true }));
+  const root = path.join(temporary, "secret-host-worktree");
+  await fs.mkdir(path.join(root, "vendor", "sub"), { recursive: true });
+  await fs.mkdir(path.join(root, "alt"), { recursive: true });
+  await fs.mkdir(path.join(root, ".claude"), { recursive: true });
+  await fs.mkdir(path.join(root, ".aiden"), { recursive: true });
+  await fs.mkdir(path.join(root, ".codex"), { recursive: true });
+
+  const gitPointer = "gitdir: /Users/owner/private-repo/.git/worktrees/ws-wt\n";
+  const subGitPointer = "gitdir: ../../.git/modules/sub\n";
+  const initialClaude = "{\"permissions\":{\"allow\":[\"Read\"]}}\n";
+  const initialHooks = "{\"hooks\":[]}\n";
+  const initialCodex = "model = \"gpt-5\"\n";
+
+  await fs.writeFile(path.join(root, ".git"), gitPointer, "utf8");
+  await fs.writeFile(path.join(root, "vendor", "sub", ".git"), subGitPointer, "utf8");
+  await fs.writeFile(path.join(root, "alt", ".GIT"), gitPointer, "utf8");
+  await fs.writeFile(path.join(root, "README.md"), "# Worktree\n", "utf8");
+  await fs.writeFile(path.join(root, ".gitignore"), "dist/\n", "utf8");
+  await fs.writeFile(path.join(root, ".gitattributes"), "* text=auto\n", "utf8");
+  await fs.writeFile(path.join(root, ".claude", "settings.json"), initialClaude, "utf8");
+  await fs.writeFile(path.join(root, ".aiden", "hooks.json"), initialHooks, "utf8");
+  await fs.writeFile(path.join(root, ".codex", "config.toml"), initialCodex, "utf8");
+  await fs.symlink(path.join(root, ".claude", "settings.json"), path.join(root, "alias-settings.json"));
+
+  const workspace: Workspace = {
+    id: "ws-wt",
+    name: "Managed Worktree",
+    folderPath: await fs.realpath(root),
+    permission: "full",
+    createdAt: 1,
+    updatedAt: 2,
+  };
+  const application = createWorkspaceEnvironmentApplicationService({
+    configStore: { getWorkspace: async (id) => (id === workspace.id ? workspace : undefined) },
+    workspaceMutationGate: new WorkspaceMutationGate(),
+    workspaceOperationRegistry: new WorkspaceOperationRegistry(),
+    assertManagedWorktreeAdmission: async () => undefined,
+    realpath: fs.realpath,
+    stat: fs.stat,
+  });
+  const handles = new AidenOpaqueHandleStore();
+  const service = new AidenRemoteFileService({
+    instanceId: "instance-guard",
+    application,
+    owners: new AidenRemoteWorkspaceOwnerRegistry(),
+    handles,
+  });
+
+  const readToken = "r".repeat(43);
+  const writeToken = "w".repeat(43);
+  const handler = createAidenRemoteRequestHandler({
+    instanceId: "instance-guard",
+    displayName: () => "Studio Mac",
+    appVersion: "0.70.0",
+    devices: {
+      authenticate: async (credential) => {
+        if (credential === readToken) {
+          return {
+            id: "device-ro",
+            revoked: false,
+            capabilities: new Set<AidenRemoteCapability>(["files:read"]),
+          };
+        }
+        if (credential === writeToken) {
+          return {
+            id: "device-rw",
+            revoked: false,
+            capabilities: new Set<AidenRemoteCapability>(["files:read", "files:write"]),
+          };
+        }
+        return null;
+      },
+      acquireDeviceAuthorization: () => () => undefined,
+    },
+    pairing: { exchange: async () => { throw new Error("unused"); } },
+    files: service,
+    connectionMode: () => "lan",
+    now: () => 1_000,
+    log: () => undefined,
+  });
+  const server = createServer(handler);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("server failed to bind");
+  const baseUrl = `http://127.0.0.1:${address.port}${AIDEN_REMOTE_BASE_PATH}`;
+  const readHeaders = { authorization: `Bearer ${readToken}`, "aiden-protocol-version": "1" };
+  const writeHeaders = {
+    authorization: `Bearer ${writeToken}`,
+    "aiden-protocol-version": "1",
+    "content-type": "application/json",
+  };
+
+  const roListRes = await fetch(`${baseUrl}/workspaces/ws-wt/files`, { headers: readHeaders });
+  assert.equal(roListRes.status, 200);
+  const roListBody = await roListRes.json() as { entries: Array<{ id: string; displayPath: string }> };
+  assert.equal(roListBody.entries.find((entry) => entry.displayPath === ".git"), undefined);
+  assert.equal(roListBody.entries.find((entry) => entry.displayPath === "vendor/sub/.git"), undefined);
+  assert.equal(roListBody.entries.find((entry) => entry.displayPath === "alt/.GIT"), undefined);
+  assert.ok(roListBody.entries.find((entry) => entry.displayPath === "README.md"));
+  assert.ok(roListBody.entries.find((entry) => entry.displayPath === ".gitignore"));
+  assert.ok(roListBody.entries.find((entry) => entry.displayPath === ".gitattributes"));
+  assert.equal(JSON.stringify(roListBody).includes("secret-host-worktree"), false);
+  assert.equal(JSON.stringify(roListBody).includes("private-repo"), false);
+
+  const rwListRes = await fetch(`${baseUrl}/workspaces/ws-wt/files`, { headers: writeHeaders });
+  assert.equal(rwListRes.status, 200);
+  const rwEntries = (await rwListRes.json() as { entries: Array<{ id: string; displayPath: string }> }).entries;
+
+  for (const ordinary of [".gitignore", ".gitattributes"]) {
+    const entry = rwEntries.find((candidate) => candidate.displayPath === ordinary)!;
+    const docRes = await fetch(`${baseUrl}/workspaces/ws-wt/files/${entry.id}`, { headers: writeHeaders });
+    assert.equal(docRes.status, 200);
+    const doc = await docRes.json() as { version: string; content: string };
+    const updatedContent = `${doc.content}# remote edit\n`;
+    const putRes = await fetch(`${baseUrl}/workspaces/ws-wt/files/${entry.id}`, {
+      method: "PUT",
+      headers: writeHeaders,
+      body: JSON.stringify({ content: updatedContent, expectedVersion: doc.version }),
+    });
+    assert.equal(putRes.status, 200);
+    assert.equal(await fs.readFile(path.join(root, ordinary), "utf8"), updatedContent);
+  }
+
+  const canary = "{\"pwned\":true}\n";
+  for (const [displayPath, diskPath, original] of [
+    [".claude/settings.json", path.join(root, ".claude", "settings.json"), initialClaude],
+    [".aiden/hooks.json", path.join(root, ".aiden", "hooks.json"), initialHooks],
+    [".codex/config.toml", path.join(root, ".codex", "config.toml"), initialCodex],
+    ["alias-settings.json", path.join(root, ".claude", "settings.json"), initialClaude],
+  ] as const) {
+    const entry = rwEntries.find((candidate) => candidate.displayPath === displayPath);
+    assert.ok(entry, `expected ${displayPath} in snapshot listing`);
+    const docRes = await fetch(`${baseUrl}/workspaces/ws-wt/files/${entry.id}`, { headers: writeHeaders });
+    assert.equal(docRes.status, 200);
+    const doc = await docRes.json() as { version: string };
+    const putRes = await fetch(`${baseUrl}/workspaces/ws-wt/files/${entry.id}`, {
+      method: "PUT",
+      headers: writeHeaders,
+      body: JSON.stringify({ content: canary, expectedVersion: doc.version }),
+    });
+    assert.equal(putRes.status, 403, `expected 403 for ${displayPath}`);
+    const errorBody = await putRes.json() as { error: { code: string; message: string; details?: unknown } };
+    assert.equal(errorBody.error.code, "capability_denied");
+    assert.equal(JSON.stringify(errorBody).includes("secret-host-worktree"), false);
+    assert.equal(JSON.stringify(errorBody).includes(workspace.folderPath!), false);
+    assert.equal(await fs.readFile(diskPath, "utf8"), original);
+  }
+
+  // Even if a client holds a pre-issued handle to .git or a lazy-confined protected file,
+  // read/write fail closed and lazy writes do not reserve new save handles before rejection.
+  const gitIdentity = await inspectAidenFilesystemIdentity(workspace.folderPath!, path.join(workspace.folderPath!, ".git"));
+  const revision = projectAidenRemoteWorkspace(workspace).revision;
+  const staleGitHandle = handles.issue("file", {
+    instanceId: "instance-guard",
+    deviceId: "device-rw",
+    workspaceId: workspace.id,
+    rootId: workspace.id,
+    policyRevision: revision,
+    ...gitIdentity,
+    displayPath: ".git",
+    snapshotId: "files_synthetic",
+    expiresAt: Date.now() + 60_000,
+  });
+  const gitReadRes = await fetch(`${baseUrl}/workspaces/ws-wt/files/${staleGitHandle}`, { headers: writeHeaders });
+  assert.equal(gitReadRes.status, 409);
+  const gitReadError = await gitReadRes.json();
+  assert.equal(JSON.stringify(gitReadError).includes("private-repo"), false);
+  const gitPutRes = await fetch(`${baseUrl}/workspaces/ws-wt/files/${staleGitHandle}`, {
+    method: "PUT",
+    headers: writeHeaders,
+    body: JSON.stringify({
+      content: "gitdir: /tmp/hijack\n",
+      expectedVersion: createHash("sha256").update(gitPointer, "utf8").digest("hex"),
+    }),
+  });
+  assert.equal(gitPutRes.status, 403);
+  assert.equal((await gitPutRes.json()).error.code, "capability_denied");
+  assert.equal(await fs.readFile(path.join(root, ".git"), "utf8"), gitPointer);
+
+  const rootStat = await fs.stat(workspace.folderPath!, { bigint: true });
+  const claudeIdentity = await inspectAidenFilesystemIdentity(
+    workspace.folderPath!,
+    path.join(workspace.folderPath!, ".claude", "settings.json"),
+  );
+  const lazyClaudeHandle = handles.issue("file", {
+    instanceId: "instance-guard",
+    deviceId: "device-rw",
+    workspaceId: workspace.id,
+    rootId: workspace.id,
+    policyRevision: revision,
+    ...claudeIdentity,
+    confinedRootDevice: rootStat.dev.toString(),
+    confinedRootInode: rootStat.ino.toString(),
+    displayPath: ".claude/settings.json",
+    snapshotId: "files_lazy_synthetic",
+    expiresAt: Date.now() + 60_000,
+  });
+  let issuedDuringWrite = 0;
+  const originalIssue = handles.issue.bind(handles);
+  handles.issue = ((...args: Parameters<typeof originalIssue>) => {
+    issuedDuringWrite += 1;
+    return originalIssue(...args);
+  }) as typeof handles.issue;
+  try {
+    await assert.rejects(
+      () => service.write("device-rw", workspace.id, lazyClaudeHandle, {
+        content: canary,
+        expectedVersion: createHash("sha256").update(initialClaude, "utf8").digest("hex"),
+      }),
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError &&
+        error.code === "capability_denied" &&
+        error.status === 403,
+    );
+  } finally {
+    handles.issue = originalIssue;
+  }
+  assert.equal(issuedDuringWrite, 0, "protected lazy write must fail before reserving a save handle");
+  assert.equal(await fs.readFile(path.join(root, ".claude", "settings.json"), "utf8"), initialClaude);
 });

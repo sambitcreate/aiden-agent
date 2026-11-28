@@ -12,6 +12,7 @@
 #include <string.h>
 #include <sys/clonefile.h>
 #include <sys/file.h>
+#include <sys/param.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/xattr.h>
@@ -92,6 +93,30 @@ static int open_root(const char *path, uint64_t device, uint64_t inode) {
   return fd;
 }
 
+static int is_git_segment_len(const char *part, size_t size) {
+  return size == 4 && part[0] == '.' &&
+         (part[1] == 'g' || part[1] == 'G') &&
+         (part[2] == 'i' || part[2] == 'I') &&
+         (part[3] == 't' || part[3] == 'T');
+}
+
+static int is_git_segment(const char *name) {
+  return is_git_segment_len(name, strlen(name));
+}
+
+static int path_has_git_segment(const char *value) {
+  if (value == NULL) return 0;
+  const char *part = value;
+  for (const char *cursor = value;; cursor++) {
+    if (*cursor == '/' || *cursor == '\\' || *cursor == '\0') {
+      if (is_git_segment_len(part, (size_t)(cursor - part))) return 1;
+      if (*cursor == '\0') break;
+      part = cursor + 1;
+    }
+  }
+  return 0;
+}
+
 static int valid_editor_relative(const char *value) {
   size_t length = strlen(value);
   if (length == 0 || length > 4096 || value[0] == '/' || value[length - 1] == '/') return 0;
@@ -101,7 +126,8 @@ static int valid_editor_relative(const char *value) {
     if (*cursor == '/' || *cursor == '\0') {
       size_t size = (size_t)(cursor - part);
       if (size == 0 || size > 255 || (size == 1 && part[0] == '.') ||
-          (size == 2 && part[0] == '.' && part[1] == '.')) return 0;
+          (size == 2 && part[0] == '.' && part[1] == '.') ||
+          is_git_segment_len(part, size)) return 0;
       if (*cursor == '\0') break;
       part = cursor + 1;
     }
@@ -279,6 +305,7 @@ static int list_directory(int argc, char **argv) {
   if (argc != 8 || strlen(argv[5]) > 4096 ||
       !decimal(argv[3], &root_device) || !decimal(argv[4], &root_inode) ||
       !decimal(argv[6], &directory_device) || !decimal(argv[7], &directory_inode)) return fail("invalid_input");
+  if (path_has_git_segment(argv[2])) return fail("unsafe_source");
   int current = open_root(argv[2], root_device, root_inode);
   if (current < 0) return fail("unsafe_source");
   char *parts = strdup(argv[5]);
@@ -288,6 +315,7 @@ static int list_directory(int argc, char **argv) {
     char *slash = strchr(part, '/');
     if (slash != NULL) *slash = '\0';
     if (*part == '\0' || strcmp(part, ".") == 0 || strcmp(part, "..") == 0 ||
+        is_git_segment(part) ||
         strchr(part, '\\') != NULL || (slash != NULL && slash[1] == '\0')) {
       free(parts); close(current); return fail("invalid_input");
     }
@@ -304,6 +332,11 @@ static int list_directory(int argc, char **argv) {
       (uint64_t)metadata.st_dev != directory_device || (uint64_t)metadata.st_ino != directory_inode) {
     close(current); return fail("source_changed");
   }
+  char resolved_directory[MAXPATHLEN];
+  if (fcntl(current, F_GETPATH, resolved_directory) == 0 &&
+      path_has_git_segment(resolved_directory)) {
+    close(current); return fail("unsafe_source");
+  }
   if (test_checkpoint('L') != 0) { close(current); return fail("io_failed"); }
   DIR *directory = fdopendir(current);
   if (directory == NULL) { close(current); return fail("io_failed"); }
@@ -318,6 +351,7 @@ static int list_directory(int argc, char **argv) {
     }
     if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
     if (++scanned > 8000 || emitted >= 4000) { truncated = 1; break; }
+    if (is_git_segment(entry->d_name)) continue;
     struct stat child;
     if (fstatat(current, entry->d_name, &child, AT_SYMLINK_NOFOLLOW) != 0) { truncated = 1; continue; }
     if (!S_ISDIR(child.st_mode) && !exclusive_regular(&child)) continue;
@@ -356,6 +390,7 @@ static int editor_file(int argc, char **argv, int edit) {
       received += (size_t)count;
     }
   }
+  if (path_has_git_segment(argv[2])) { free(input); return fail("unsafe_source"); }
   int root = open_root(argv[2], root_device, root_inode);
   if (root < 0) { free(input); return fail("unsafe_source"); }
   char leaf[256];
@@ -372,6 +407,11 @@ static int editor_file(int argc, char **argv, int edit) {
       (uint64_t)before.st_ino != file_inode) {
     if (source >= 0) close(source);
     free(input); close(parent); return fail("source_changed");
+  }
+  char resolved_source[MAXPATHLEN];
+  if (fcntl(source, F_GETPATH, resolved_source) == 0 &&
+      path_has_git_segment(resolved_source)) {
+    close(source); free(input); close(parent); return fail("unsafe_source");
   }
   if ((uint64_t)before.st_size > MAX_EDITOR_BYTES) {
     close(source); free(input); close(parent); return fail("too_many_bytes");
@@ -435,6 +475,8 @@ static int editor_file(int argc, char **argv, int edit) {
   if (good && (fchmod(target, before.st_mode & 07777) != 0 || fsync(target) != 0)) good = 0;
   struct stat current;
   if (good && test_checkpoint('D') != 0) good = 0;
+  if (good && fcntl(source, F_GETPATH, resolved_source) == 0 &&
+      path_has_git_segment(resolved_source)) good = 0;
   if (good && (fstat(source, &after) != 0 || !exclusive_regular(&after) || !same_source(&before, &after) ||
       fstatat(parent, leaf, &current, AT_SYMLINK_NOFOLLOW) != 0 ||
       !exclusive_regular(&current) || !same_source(&before, &current))) good = 0;

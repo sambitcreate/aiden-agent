@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
@@ -9,7 +10,7 @@ import path from "node:path";
 import test from "node:test";
 import { AidenRemoteBotFileService } from "./aiden-remote-bot-files.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
-import { AidenOpaqueHandleStore } from "./aiden-remote-opaque-handles.js";
+import { AidenOpaqueHandleStore, inspectAidenFilesystemIdentity } from "./aiden-remote-opaque-handles.js";
 import { AIDEN_REMOTE_BASE_PATH, type AidenRemoteCapability } from "./aiden-remote-protocol.js";
 import { createAidenRemoteRequestHandler } from "./aiden-remote-router.js";
 import {
@@ -623,4 +624,175 @@ test("Bot revocation during identity inspection drains work before releasing aut
   assert.equal(active, 0);
   assert.equal(releases(), 1);
   assert.equal(handles.storedTokenMaterialForTesting().length, 0);
+});
+
+test("remote Bot Files HTTP routes omit .git entries and reject protected config and .git writes", async (t) => {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-bot-guard-"));
+  t.after(() => fs.rm(temporary, { recursive: true, force: true }));
+  const root = path.join(temporary, "secret-bot-home");
+  await fs.mkdir(path.join(root, "sub"), { recursive: true });
+  await fs.mkdir(path.join(root, ".claude"), { recursive: true });
+  await fs.mkdir(path.join(root, ".aiden"), { recursive: true });
+  await fs.mkdir(path.join(root, ".codex"), { recursive: true });
+
+  const gitPointer = "gitdir: /Users/owner/bot-repo/.git/worktrees/bot-home\n";
+  const initialClaude = "{\"permissions\":{\"allow\":[]}}\n";
+  const initialHooks = "{\"hooks\":[]}\n";
+  const initialCodex = "sandbox_mode = \"workspace-write\"\n";
+
+  await fs.writeFile(path.join(root, ".git"), gitPointer, "utf8");
+  await fs.writeFile(path.join(root, "sub", ".GIT"), gitPointer, "utf8");
+  await fs.writeFile(path.join(root, ".gitignore"), ".DS_Store\n", "utf8");
+  await fs.writeFile(path.join(root, ".gitattributes"), "* text=auto\n", "utf8");
+  await fs.writeFile(path.join(root, "README.md"), "# Bot Home\n", "utf8");
+  await fs.writeFile(path.join(root, ".claude", "settings.json"), initialClaude, "utf8");
+  await fs.writeFile(path.join(root, ".aiden", "hooks.json"), initialHooks, "utf8");
+  await fs.writeFile(path.join(root, ".codex", "config.toml"), initialCodex, "utf8");
+  await fs.symlink(path.join(root, ".aiden", "hooks.json"), path.join(root, "linked-hooks.json"));
+
+  const realRoot = await fs.realpath(root);
+  const chat: Chat = {
+    id: "chat-bot-guard",
+    botId: "bot-guard",
+    workspaceId: "managed-bot-ws",
+    title: "Assistant",
+    messages: [],
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  const handles = new AidenOpaqueHandleStore();
+  const botFiles = new AidenRemoteBotFileService({
+    instanceId: "instance-bot-guard",
+    botAudienceId: "desktop:local",
+    chats: { get: async (chatId) => (chatId === chat.id ? chat : null) },
+    handles,
+    authority: {
+      admit: async ({ botId, chatId }): Promise<BotRuntimeAuthorityAdmission> => ({
+        authority: authorityFixture({
+          root: realRoot,
+          botId,
+          chatId,
+          workspaceId: chat.workspaceId!,
+          epoch: "1",
+          botHome: true,
+        }),
+        signal: new AbortController().signal,
+        revalidateBeforeEffect: async () => undefined,
+        release: () => undefined,
+      }),
+    },
+  });
+
+  const handler = createAidenRemoteRequestHandler({
+    instanceId: "instance-bot-guard",
+    displayName: () => "Studio Mac",
+    appVersion: "0.70.0",
+    devices: {
+      authenticate: async (credential) => credential === "a".repeat(43)
+        ? {
+            id: "device-authorized-12345678",
+            revoked: false,
+            acceptsBotCapabilities: true,
+            capabilities: new Set<AidenRemoteCapability>(["bot:read", "bot:write", "files:read", "files:write"]),
+          }
+        : null,
+      acquireDeviceAuthorization: () => () => undefined,
+    },
+    pairing: { exchange: async () => { throw new Error("unused"); } },
+    botFiles,
+    connectionMode: () => "lan",
+    now: () => 1_000,
+    log: () => undefined,
+  });
+  const server = createServer(handler);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("server failed to bind");
+  const baseUrl = `http://127.0.0.1:${address.port}${AIDEN_REMOTE_BASE_PATH}`;
+  const writeHeaders = { ...authorizationHeaders, "content-type": "application/json" };
+
+  const listRes = await fetch(`${baseUrl}/bot-conversations/${chat.id}/files`, {
+    headers: authorizationHeaders,
+  });
+  assert.equal(listRes.status, 200);
+  const listBody = await listRes.json() as { entries: Array<{ id: string; displayPath: string }> };
+  assert.equal(listBody.entries.find((entry) => entry.displayPath === ".git"), undefined);
+  assert.equal(listBody.entries.find((entry) => entry.displayPath === "sub/.GIT"), undefined);
+  assert.ok(listBody.entries.find((entry) => entry.displayPath === ".gitignore"));
+  assert.ok(listBody.entries.find((entry) => entry.displayPath === ".gitattributes"));
+  assert.equal(JSON.stringify(listBody).includes("secret-bot-home"), false);
+
+  const gitignoreEntry = listBody.entries.find((entry) => entry.displayPath === ".gitignore")!;
+  const gitignoreDoc = await (await fetch(
+    `${baseUrl}/bot-conversations/${chat.id}/files/${gitignoreEntry.id}`,
+    { headers: authorizationHeaders },
+  )).json() as { version: string };
+  const gitignorePut = await fetch(`${baseUrl}/bot-conversations/${chat.id}/files/${gitignoreEntry.id}`, {
+    method: "PUT",
+    headers: writeHeaders,
+    body: JSON.stringify({ content: ".DS_Store\ntmp/\n", expectedVersion: gitignoreDoc.version }),
+  });
+  assert.equal(gitignorePut.status, 200);
+  assert.equal(await fs.readFile(path.join(root, ".gitignore"), "utf8"), ".DS_Store\ntmp/\n");
+
+  const canary = "{\"pwned\":true}\n";
+  for (const [displayPath, diskPath, original] of [
+    [".claude/settings.json", path.join(root, ".claude", "settings.json"), initialClaude],
+    [".aiden/hooks.json", path.join(root, ".aiden", "hooks.json"), initialHooks],
+    [".codex/config.toml", path.join(root, ".codex", "config.toml"), initialCodex],
+    ["linked-hooks.json", path.join(root, ".aiden", "hooks.json"), initialHooks],
+  ] as const) {
+    const entry = listBody.entries.find((candidate) => candidate.displayPath === displayPath);
+    assert.ok(entry, `expected ${displayPath} in Bot file listing`);
+    const docRes = await fetch(`${baseUrl}/bot-conversations/${chat.id}/files/${entry.id}`, {
+      headers: authorizationHeaders,
+    });
+    assert.equal(docRes.status, 200);
+    const doc = await docRes.json() as { version: string };
+    const putRes = await fetch(`${baseUrl}/bot-conversations/${chat.id}/files/${entry.id}`, {
+      method: "PUT",
+      headers: writeHeaders,
+      body: JSON.stringify({ content: canary, expectedVersion: doc.version }),
+    });
+    assert.equal(putRes.status, 403, `expected 403 for ${displayPath}`);
+    const errorBody = await putRes.json() as { error: { code: string; message: string } };
+    assert.equal(errorBody.error.code, "capability_denied");
+    assert.equal(JSON.stringify(errorBody).includes("secret-bot-home"), false);
+    assert.equal(JSON.stringify(errorBody).includes(realRoot), false);
+    assert.equal(await fs.readFile(diskPath, "utf8"), original);
+  }
+
+  // Verify pre-issued .git handle also fails closed on write without touching disk.
+  const gitIdentity = await inspectAidenFilesystemIdentity(realRoot, path.join(realRoot, ".git"));
+  const rootId = `botfiles_${createHash("sha256").update(`${chat.botId}\u0000${chat.id}`, "utf8").digest("base64url")}`;
+  const policyRevision = `botfiles_${createHash("sha256").update(JSON.stringify({
+    botId: chat.botId,
+    chatId: chat.id,
+    workspaceId: chat.workspaceId,
+    botPolicy: { revision: "policy-1", epoch: "epoch:1" },
+    chatPolicy: { mode: "inherit", revision: "chat-policy-1", epoch: "epoch:1" },
+  }), "utf8").digest("base64url")}`;
+  const staleGitHandle = handles.issue("file", {
+    instanceId: "instance-bot-guard",
+    deviceId: "device-authorized-12345678",
+    workspaceId: chat.workspaceId!,
+    rootId,
+    policyRevision,
+    ...gitIdentity,
+    displayPath: ".git",
+    snapshotId: "files_bot_synthetic",
+    expiresAt: Date.now() + 60_000,
+  });
+  const gitPutRes = await fetch(`${baseUrl}/bot-conversations/${chat.id}/files/${staleGitHandle}`, {
+    method: "PUT",
+    headers: writeHeaders,
+    body: JSON.stringify({
+      content: "gitdir: /tmp/hijack\n",
+      expectedVersion: createHash("sha256").update(gitPointer, "utf8").digest("hex"),
+    }),
+  });
+  assert.equal(gitPutRes.status, 403);
+  assert.equal((await gitPutRes.json()).error.code, "capability_denied");
+  assert.equal(await fs.readFile(path.join(root, ".git"), "utf8"), gitPointer);
 });

@@ -180,6 +180,27 @@ function sortWorkspaceEntries(entries: WorkspaceFileEntry[]): void {
   });
 }
 
+function foldWorkspaceSegment(segment: string): string {
+  return segment
+    .normalize("NFKC")
+    .replace(/\p{Default_Ignorable_Code_Point}/gu, "")
+    .toLocaleLowerCase("en-US");
+}
+
+function isGitSegment(segment: string): boolean {
+  return foldWorkspaceSegment(segment) === ".git";
+}
+
+export function hasWorkspaceGitSegment(candidate: string): boolean {
+  return candidate.split(/[\\/]+/u).some((segment) => segment !== "" && isGitSegment(segment));
+}
+
+function assertNoGitSegment(...candidates: readonly string[]): void {
+  if (candidates.some(hasWorkspaceGitSegment)) {
+    throw new Error("Git metadata paths cannot be accessed as workspace files.");
+  }
+}
+
 function assertRelativePath(value: string): string {
   if (!value || value.includes("\u0000") || path.isAbsolute(value)) {
     throw new Error("Choose a file inside the workspace.");
@@ -208,9 +229,11 @@ async function resolveExistingPath(
 ): Promise<{ root: string; fullPath: string; relativePath: string }> {
   const realRoot = await canonicalRoot(root);
   const relativePath = assertRelativePath(suppliedPath);
+  assertNoGitSegment(suppliedPath, relativePath);
   const lexicalPath = path.resolve(realRoot, relativePath);
   assertInRoot(realRoot, lexicalPath, suppliedPath);
   const fullPath = assertInRoot(realRoot, await fs.realpath(lexicalPath), suppliedPath);
+  assertNoGitSegment(path.relative(realRoot, fullPath), fullPath);
   return { root: realRoot, fullPath, relativePath: toPortablePath(relativePath) };
 }
 
@@ -302,6 +325,10 @@ export async function listWorkspaceFiles(
       ));
       childIndex += batch.length;
       const inspected = await mapWorkspaceMetadata(batch, async (child): Promise<WorkspaceFileEntry | undefined> => {
+        if (isGitSegment(child.name)) {
+          if (child.isDirectory()) skippedDirectories += 1;
+          return undefined;
+        }
         if (child.isDirectory() && SKIP_DIRECTORIES.has(child.name)) {
           skippedDirectories += 1;
           return undefined;
@@ -315,6 +342,7 @@ export async function listWorkspaceFiles(
         if (child.isSymbolicLink()) {
           try {
             const target = assertInRoot(realRoot, await fs.realpath(lexicalPath), portablePath);
+            assertNoGitSegment(path.relative(realRoot, target), target);
             const targetStats = await fs.stat(target);
             return {
               path: portablePath,
