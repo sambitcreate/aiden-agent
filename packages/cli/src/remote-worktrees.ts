@@ -76,13 +76,8 @@ return createWorkspaceWorktreeApplicationService({
   snapshotContentBytes: (repositoryPath, worktreePath) => git.managedWorktreeDirtyBytes(repositoryPath, worktreePath),
   captureWorktreeSnapshot: (repositoryPath, worktreePath, snapshotId, signal) =>
     git.captureManagedWorktreeSnapshot(repositoryPath, worktreePath, snapshotId, signal),
-  snapshotRefCommit: (repositoryPath, snapshotId) => git.managedWorktreeSnapshotCommit(repositoryPath, snapshotId),
   deleteSnapshotRef: (repositoryPath, snapshotId, expectedCommit) =>
     git.deleteManagedWorktreeSnapshotRef(repositoryPath, snapshotId, expectedCommit),
-  restoreManagedCheckout: (...args) => git.restoreManagedWorktreeCheckout(...args),
-  resumeManagedCheckout: (...args) => git.resumeManagedWorktreeCheckout(...args),
-  applyWorktreeSnapshot: (worktreePath, snapshotCommit, signal) =>
-    git.applyManagedWorktreeSnapshot(worktreePath, worktreePath, snapshotCommit, signal),
   workspacePathExists: async (worktreePath) => {
     try {
       await fs.stat(worktreePath);

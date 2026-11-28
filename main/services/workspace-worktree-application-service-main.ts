@@ -3,7 +3,6 @@ import { ipcMain, logger } from "../platform.js";
 import { configStore } from "./config-store.js";
 import { ensureUserDataDir } from "./data-store.js";
 import {
-  gitApplyManagedWorktreeSnapshot,
   gitCaptureManagedWorktreeSnapshot,
   gitCheckIgnoredPaths,
   gitCreateWorktree,
@@ -16,11 +15,8 @@ import {
   gitManagedWorktreeDirtyBytes,
   gitManagedWorktreeDirtyState,
   gitManagedWorktreeRegistered,
-  gitManagedWorktreeSnapshotCommit,
   gitManagedWorktreeUsable,
   gitRepositoryPaths,
-  gitRestoreManagedWorktreeCheckout,
-  gitResumeManagedWorktreeCheckout,
   gitRestoreDeletedManagedWorktreeCheckout,
   gitRollbackWorktree,
   gitExpandManagedWorktreeIgnored,
@@ -111,11 +107,8 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
   expandIgnoredPaths: gitExpandManagedWorktreeIgnored,
   snapshotContentBytes: gitManagedWorktreeDirtyBytes,
   captureWorktreeSnapshot: gitCaptureManagedWorktreeSnapshot,
-  snapshotRefCommit: gitManagedWorktreeSnapshotCommit,
   deleteSnapshotRef: (repositoryPath, snapshotId, expectedCommit) =>
     gitDeleteManagedWorktreeSnapshotRef(repositoryPath, snapshotId, expectedCommit),
-  restoreManagedCheckout: gitRestoreManagedWorktreeCheckout,
-  resumeManagedCheckout: gitResumeManagedWorktreeCheckout,
   restoreDeletedCheckout: (managed, root, workspaceSubpath, commit, signal) => gitRestoreDeletedManagedWorktreeCheckout(
     managed.repositoryPath,
     root,
@@ -127,8 +120,6 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
     commit,
     signal,
   ),
-  applyWorktreeSnapshot: (worktreePath, snapshotCommit, signal) =>
-    gitApplyManagedWorktreeSnapshot(worktreePath, worktreePath, snapshotCommit, signal),
   workspacePathExists: async (worktreePath) => {
     try {
       await fs.stat(worktreePath);

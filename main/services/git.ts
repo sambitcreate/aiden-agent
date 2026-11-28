@@ -13,7 +13,7 @@ import { createProcessGroupTerminator, decodeCappedUtf8 } from "../shared/proces
 import { redactUrlCredentials } from "../shared/redaction.js";
 import { execFile, spawn, type ChildProcess } from "child_process";
 import { createHash, randomUUID } from "crypto";
-import { constants as fsConstants, type BigIntStats, type Stats } from "fs";
+import { constants as fsConstants, type BigIntStats } from "fs";
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
@@ -8001,113 +8001,6 @@ export class GitService {
     return bytes;
   }
 
-  /**
-   * Adopt a checkout a previous restore attempt created before it could journal
-   * the result. Reads the persisted ownership marker rather than trusting the
-   * caller and fails closed when any identity check does not match.
-   */
-  async resumeManagedWorktreeCheckout(
-    cwd: string,
-    worktreePath: string,
-    branch: string,
-    baseCommit: string,
-    workspaceSubpath: string,
-    signal?: AbortSignal,
-  ): Promise<GitCreatedWorktree> {
-    const repo = this.requireRepository(await this.repository(cwd));
-    await this.validateBranchName(repo, branch);
-    if (!GIT_OBJECT_ID.test(baseCommit)) {
-      throw new GitServiceError("invalid_input", "The managed worktree snapshot base is invalid.");
-    }
-    if (
-      workspaceSubpath !== "" &&
-      normalizedRelativeWorktreePath(workspaceSubpath) !== workspaceSubpath
-    ) {
-      throw new GitServiceError("invalid_input", "The managed worktree workspace path is invalid.");
-    }
-    return this.enqueueMutation(repo.commonDir, async () => {
-      signal?.throwIfAborted();
-      const candidate = path.resolve(worktreePath);
-      const checkoutIdentity = await fs.lstat(candidate).catch(() => undefined);
-      if (
-        checkoutIdentity === undefined ||
-        !checkoutIdentity.isDirectory() ||
-        checkoutIdentity.isSymbolicLink()
-      ) {
-        throw new GitServiceError(
-          "command_failed",
-          "A partially restored managed worktree could not be verified.",
-        );
-      }
-      // Git records canonical paths in the gitdir backlink and `worktree list`;
-      // resolve so symlinked ancestors (e.g. /var on macOS) compare equal.
-      const resolvedTarget = await fs.realpath(candidate);
-      const gitFileContents = (
-        await fs.readFile(path.join(resolvedTarget, ".git"), "utf8")
-      ).trim();
-      const gitdirMatch = /^gitdir:\s+(.+)$/u.exec(gitFileContents);
-      if (gitdirMatch === null) {
-        throw new GitServiceError(
-          "command_failed",
-          "A partially restored managed worktree could not be verified.",
-        );
-      }
-      const worktreeGitDir = this.validatedWorktreeGitDir(
-        repo,
-        await fs.realpath(
-          path.isAbsolute(gitdirMatch[1])
-            ? gitdirMatch[1]
-            : path.resolve(resolvedTarget, gitdirMatch[1]),
-        ),
-      );
-      const ownershipToken = this.validatedWorktreeOwnershipToken(
-        (
-          await fs.readFile(path.join(worktreeGitDir, WORKTREE_OWNER_MARKER), "utf8")
-        ).trim(),
-      );
-      const registeredGitFile = (
-        await fs.readFile(path.join(worktreeGitDir, "gitdir"), "utf8")
-      ).trim();
-      if (
-        path.basename(registeredGitFile) !== ".git" ||
-        path.resolve(
-          path.isAbsolute(registeredGitFile)
-            ? path.dirname(registeredGitFile)
-            : path.dirname(path.resolve(worktreeGitDir, registeredGitFile)),
-        ) !== resolvedTarget
-      ) {
-        throw new GitServiceError(
-          "command_failed",
-          "A partially restored managed worktree could not be verified.",
-        );
-      }
-      const registration = (await this.inspectWorktrees(repo, resolvedTarget)).find(
-        (worktree) => path.resolve(worktree.path) === resolvedTarget,
-      );
-      if (
-        registration === undefined ||
-        registration.branch !== branch ||
-        registration.head !== baseCommit
-      ) {
-        throw new GitServiceError(
-          "command_failed",
-          "A partially restored managed worktree could not be verified.",
-        );
-      }
-      return {
-        ...registration,
-        branch,
-        workspacePath: path.join(resolvedTarget, workspaceSubpath),
-        repositoryPath: repo.topLevel,
-        worktreeGitDir,
-        ownershipToken,
-        worktreeDevice: checkoutIdentity.dev,
-        worktreeInode: checkoutIdentity.ino,
-        createdFromHead: baseCommit,
-      };
-    });
-  }
-
   /** Resolve a branch's commit, or undefined when the branch does not exist. */
   async managedWorktreeBranchHead(cwd: string, branch: string): Promise<string | undefined> {
     const repo = this.requireRepository(await this.repository(cwd));
@@ -8218,159 +8111,6 @@ export class GitService {
         return true;
       } catch {
         return false;
-      }
-    });
-  }
-
-  /**
-   * Recreate a managed worktree for a restore: attach the recorded branch when
-   * it still points at the snapshot's base commit, otherwise recreate it at the
-   * base commit. Fails closed on any existing destination or branch conflict.
-   */
-  async restoreManagedWorktreeCheckout(
-    cwd: string,
-    root: string,
-    worktreePath: string,
-    branch: string,
-    baseCommit: string,
-    workspaceSubpath: string,
-    signal?: AbortSignal,
-  ): Promise<GitCreatedWorktree> {
-    const repo = this.requireRepository(await this.repository(cwd));
-    await this.validateBranchName(repo, branch);
-    if (!GIT_OBJECT_ID.test(baseCommit)) {
-      throw new GitServiceError("invalid_input", "The managed worktree snapshot base is invalid.");
-    }
-    if (
-      workspaceSubpath !== "" &&
-      normalizedRelativeWorktreePath(workspaceSubpath) !== workspaceSubpath
-    ) {
-      throw new GitServiceError("invalid_input", "The managed worktree workspace path is invalid.");
-    }
-    return this.enqueueMutation(repo.commonDir, async () => {
-      const managedRoot = await fs.realpath(root);
-      // The target does not exist yet, so canonicalize its parent: ancestors
-      // may legitimately traverse platform symlinks (e.g. /var on macOS).
-      const requestedTarget = path.resolve(worktreePath);
-      const parent = path.dirname(requestedTarget);
-      let parentStat: Stats;
-      let canonicalParent: string;
-      try {
-        [parentStat, canonicalParent] = await Promise.all([
-          fs.lstat(parent),
-          fs.realpath(parent),
-        ]);
-      } catch (cause) {
-        throw new GitServiceError(
-          "command_failed",
-          "The managed worktree restore path's parent could not be verified.",
-          cause,
-        );
-      }
-      if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) {
-        throw new GitServiceError(
-          "command_failed",
-          "The managed worktree restore path's parent could not be verified.",
-        );
-      }
-      const resolvedTarget = path.join(canonicalParent, path.basename(requestedTarget));
-      const relativeTarget = path.relative(managedRoot, resolvedTarget);
-      if (
-        relativeTarget.length === 0 ||
-        relativeTarget.startsWith("..") ||
-        path.isAbsolute(relativeTarget)
-      ) {
-        throw new GitServiceError(
-          "invalid_input",
-          "The managed worktree restore path must stay inside Aiden's worktree root.",
-        );
-      }
-      if (await this.pathExists(resolvedTarget)) {
-        throw new GitServiceError(
-          "command_failed",
-          "A file already exists at the managed worktree restore path.",
-        );
-      }
-      const existingHead = await this.managedWorktreeBranchHead(repo.cwd, branch);
-      let createdByCommand = false;
-      try {
-        if (existingHead !== undefined) {
-          if (existingHead !== baseCommit) {
-            throw new GitServiceError(
-              "invalid_ref",
-              `Branch "${branch}" exists at a different commit and cannot be reused for restore.`,
-            );
-          }
-          await this.run(repo.cwd, ["worktree", "add", "--", resolvedTarget, branch], {
-            hooksDisabled: true,
-            mutation: true,
-            signal,
-            extraConfig: parallelCheckoutConfig(),
-          });
-        } else {
-          await this.run(repo.cwd, ["worktree", "add", "-b", branch, "--", resolvedTarget, baseCommit], {
-            hooksDisabled: true,
-            mutation: true,
-            signal,
-            extraConfig: parallelCheckoutConfig(),
-          });
-        }
-        createdByCommand = true;
-        const registered = (await this.inspectWorktrees(repo, resolvedTarget)).find(
-          (worktree) =>
-            worktree.branch === branch && path.resolve(worktree.path) === resolvedTarget,
-        );
-        if (!registered || registered.head !== baseCommit) {
-          throw new GitServiceError(
-            "command_failed",
-            "The restored managed worktree could not be verified.",
-          );
-        }
-        const gitDirResult = await this.run(registered.path, [
-          "rev-parse",
-          "--path-format=absolute",
-          "--git-dir",
-        ]);
-        const worktreeGitDir = this.validatedWorktreeGitDir(
-          repo,
-          await fs.realpath(gitDirResult.stdout.trim()),
-        );
-        const ownershipToken = randomUUID();
-        await this.persistWorktreeOwnership(worktreeGitDir, ownershipToken);
-        const checkoutIdentity = await fs.lstat(registered.path);
-        if (!checkoutIdentity.isDirectory() || checkoutIdentity.isSymbolicLink()) {
-          throw new GitServiceError(
-            "command_failed",
-            "The restored managed worktree checkout identity could not be verified.",
-          );
-        }
-        return {
-          ...registered,
-          branch,
-          workspacePath: path.join(registered.path, workspaceSubpath),
-          repositoryPath: repo.topLevel,
-          worktreeGitDir,
-          ownershipToken,
-          worktreeDevice: checkoutIdentity.dev,
-          worktreeInode: checkoutIdentity.ino,
-          createdFromHead: baseCommit,
-        };
-      } catch (error) {
-        const rollbackError = await this.rollbackCreatedWorktree(
-          repo,
-          resolvedTarget,
-          branch,
-          baseCommit,
-          createdByCommand,
-        );
-        if (rollbackError) {
-          throw new GitServiceError(
-            "command_failed",
-            "Managed worktree restore failed, and Aiden could not fully roll it back.",
-            { operationError: error, rollbackError },
-          );
-        }
-        throw error;
       }
     });
   }
@@ -8651,33 +8391,6 @@ export class GitService {
       }
     });
   }
-
-  /**
-   * Apply a snapshot commit to a restored worktree: the working tree gains the
-   * snapshot contents while HEAD and index stay at the base commit, so the
-   * delta reports as ordinary unstaged/untracked dirt and the synthetic commit
-   * never enters branch history.
-   */
-  async applyManagedWorktreeSnapshot(
-    cwd: string,
-    worktreePath: string,
-    snapshotCommit: string,
-    signal?: AbortSignal,
-  ): Promise<void> {
-    await this.requireRepository(await this.repository(cwd));
-    if (!GIT_OBJECT_ID.test(snapshotCommit)) {
-      throw new GitServiceError("invalid_input", "The managed worktree snapshot commit is invalid.");
-    }
-    await this.run(
-      worktreePath,
-      ["read-tree", "--reset", "-u", snapshotCommit],
-      { mutation: true, signal, hooksDisabled: true },
-    );
-    const head = (
-      await this.run(worktreePath, ["rev-parse", "--verify", "HEAD"], { signal })
-    ).stdout.trim();
-    await this.run(worktreePath, ["read-tree", head], { mutation: true, signal, hooksDisabled: true });
-  }
 }
 
 const gitService = new GitService();
@@ -8776,31 +8489,11 @@ export const gitCaptureManagedWorktreeSnapshot = (
   snapshotId: string,
   signal?: AbortSignal,
 ) => gitService.captureManagedWorktreeSnapshot(folderPath, worktreePath, snapshotId, signal);
-export const gitManagedWorktreeSnapshotCommit = (folderPath: string, snapshotId: string) =>
-  gitService.managedWorktreeSnapshotCommit(folderPath, snapshotId);
 export const gitDeleteManagedWorktreeSnapshotRef = (
   folderPath: string,
   snapshotId: string,
   expectedCommit: string,
 ) => gitService.deleteManagedWorktreeSnapshotRef(folderPath, snapshotId, expectedCommit);
-export const gitRestoreManagedWorktreeCheckout = (
-  folderPath: string,
-  root: string,
-  worktreePath: string,
-  branch: string,
-  baseCommit: string,
-  workspaceSubpath: string,
-  signal?: AbortSignal,
-) =>
-  gitService.restoreManagedWorktreeCheckout(
-    folderPath,
-    root,
-    worktreePath,
-    branch,
-    baseCommit,
-    workspaceSubpath,
-    signal,
-  );
 export const gitRestoreDeletedManagedWorktreeCheckout = (
   folderPath: string,
   root: string,
@@ -8825,28 +8518,6 @@ export const gitRestoreDeletedManagedWorktreeCheckout = (
   );
 export const gitManagedWorktreeBranchHead = (folderPath: string, branch: string) =>
   gitService.managedWorktreeBranchHead(folderPath, branch);
-export const gitApplyManagedWorktreeSnapshot = (
-  folderPath: string,
-  worktreePath: string,
-  snapshotCommit: string,
-  signal?: AbortSignal,
-) => gitService.applyManagedWorktreeSnapshot(folderPath, worktreePath, snapshotCommit, signal);
-export const gitResumeManagedWorktreeCheckout = (
-  folderPath: string,
-  worktreePath: string,
-  branch: string,
-  baseCommit: string,
-  workspaceSubpath: string,
-  signal?: AbortSignal,
-) =>
-  gitService.resumeManagedWorktreeCheckout(
-    folderPath,
-    worktreePath,
-    branch,
-    baseCommit,
-    workspaceSubpath,
-    signal,
-  );
 export const gitExpandManagedWorktreeIgnored = (
   folderPath: string,
   worktreePath: string,

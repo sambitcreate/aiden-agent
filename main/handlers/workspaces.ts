@@ -420,25 +420,6 @@ export function registerWorkspaceHandlers(): void {
     },
   );
 
-  ipcMain.handle(
-    "git:restoreManagedWorktree",
-    async (event, workspaceId: unknown, snapshotId: unknown, name: unknown) => {
-      const id = asString(workspaceId, "workspaceId");
-      const snapshot = asString(snapshotId, "snapshotId");
-      if (
-        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(snapshot)
-      ) {
-        throw new Error("The snapshot identifier is invalid.");
-      }
-      const requestedName = name === undefined ? undefined : asString(name, "name");
-      const owner = rendererDocumentOwner(
-        event,
-        () => new Error("Workspace access requires the active renderer document."),
-      );
-      return workspaceWorktreeApplicationService.restore(owner, id, snapshot, requestedName);
-    },
-  );
-
   // Whether the workspace's folder is still on disk, so the composer can say it
   // was moved or deleted before a send fails inside a tool.
   ipcMain.handle("workspaces:folderPresence", async (_event, workspaceId: unknown) => {

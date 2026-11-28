@@ -6,14 +6,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { ManagedWorktreeFileIoError, transferManagedWorktreeFile, type ManagedWorktreeRootIdentity } from "./managed-worktree-file-io.js";
+import { transferManagedWorktreeFile, type ManagedWorktreeRootIdentity } from "./managed-worktree-file-io.js";
 import { syncDirectory } from "./durable-fs.js";
 
 const SNAPSHOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const GIT_OBJECT_ID = /^[0-9a-f]{40}$/u;
 const DIGEST = /^[0-9a-f]{64}$/u;
-const MANIFEST_BYTES = 64 * 1024;
-const RESTORE_BYTES = 16 * 1024;
 const MAX_PROVISIONED_FILES = 4_096;
 const MAX_PROVISIONED_BLOB_BYTES = 256 * 1024 * 1024;
 
@@ -109,10 +107,6 @@ function manifestPath(dir: string): string {
   return path.join(dir, "manifest.json");
 }
 
-function restoreJournalPath(dir: string): string {
-  return path.join(dir, "restore.json");
-}
-
 async function pathExists(target: string): Promise<boolean> {
   try {
     await fs.lstat(target);
@@ -139,30 +133,6 @@ async function persistJsonFile(target: string, value: unknown): Promise<void> {
   } catch (error) {
     await fs.unlink(temp).catch(() => undefined);
     throw error;
-  }
-}
-
-async function readJsonFile(target: string, maxBytes: number): Promise<unknown | undefined> {
-  let stat;
-  try {
-    stat = await fs.lstat(target);
-  } catch {
-    return undefined;
-  }
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maxBytes) {
-    throw new ManagedWorktreeSnapshotError(
-      "snapshot_invalid",
-      "A managed worktree snapshot file could not be verified.",
-    );
-  }
-  try {
-    return JSON.parse(await fs.readFile(target, "utf8"));
-  } catch (error) {
-    throw new ManagedWorktreeSnapshotError(
-      "snapshot_invalid",
-      "A managed worktree snapshot file could not be parsed.",
-      error,
-    );
   }
 }
 
@@ -251,38 +221,6 @@ function validatedManifest(value: unknown, snapshotId: string): ManagedWorktreeS
   };
 }
 
-/** Read a snapshot manifest; undefined when the record does not exist. */
-export async function readManagedWorktreeSnapshot(
-  root: string,
-  snapshotId: string,
-): Promise<ManagedWorktreeSnapshot | undefined> {
-  const dir = snapshotDir(root, snapshotId);
-  const value = await readJsonFile(manifestPath(dir), MANIFEST_BYTES);
-  if (value === undefined) return undefined;
-  return validatedManifest(value, snapshotId);
-}
-
-/** Require a snapshot manifest in the ready (or restoring) state. */
-export async function requireReadyManagedWorktreeSnapshot(
-  root: string,
-  snapshotId: string,
-): Promise<ManagedWorktreeSnapshot> {
-  const manifest = await readManagedWorktreeSnapshot(root, snapshotId);
-  if (!manifest) {
-    throw new ManagedWorktreeSnapshotError(
-      "snapshot_incomplete",
-      "The managed worktree snapshot does not exist.",
-    );
-  }
-  if (manifest.state !== "ready" && manifest.state !== "restoring") {
-    throw new ManagedWorktreeSnapshotError(
-      "snapshot_incomplete",
-      "The managed worktree snapshot is incomplete.",
-    );
-  }
-  return manifest;
-}
-
 /**
  * Create the snapshot record directory and write the durable manifest. The
  * manifest is written last (tmp + rename) so a present manifest always implies
@@ -297,16 +235,6 @@ export async function persistManagedWorktreeSnapshot(
   validatedManifest(record, snapshot.id);
   await fs.mkdir(path.join(dir, "files"), { recursive: true, mode: 0o700 });
   await persistJsonFile(manifestPath(dir), record);
-}
-
-export async function updateManagedWorktreeSnapshotState(
-  root: string,
-  snapshot: ManagedWorktreeSnapshot,
-  state: ManagedWorktreeSnapshot["state"],
-): Promise<ManagedWorktreeSnapshot> {
-  const next = { ...snapshot, state };
-  await persistJsonFile(manifestPath(snapshotDir(root, snapshot.id)), next);
-  return next;
 }
 
 /**
@@ -373,173 +301,4 @@ export async function captureProvisionedFile(
     digest: copied.digest,
     blobPath,
   };
-}
-
-/** Verify every provisioned blob still hashes to its recorded digest. */
-export async function verifyProvisionedFileBlobs(
-  snapshotDirPath: string,
-  provisionedFiles: readonly ProvisionedFileSnapshot[],
-): Promise<void> {
-  for (const file of provisionedFiles) {
-    const target = path.join(snapshotDirPath, file.blobPath);
-    let bytes: Buffer;
-    try {
-      bytes = await fs.readFile(target);
-    } catch (error) {
-      throw new ManagedWorktreeSnapshotError(
-        "blob_missing",
-        "A provisioned-file snapshot blob is missing.",
-        error,
-      );
-    }
-    if (
-      bytes.length !== file.size ||
-      createHash("sha256").update(bytes).digest("hex") !== file.digest
-    ) {
-      throw new ManagedWorktreeSnapshotError(
-        "blob_corrupt",
-        "A provisioned-file snapshot blob failed verification.",
-      );
-    }
-  }
-}
-
-/** Restore each verified blob through descriptor-relative no-follow traversal. */
-export async function restoreProvisionedFiles(
-  snapshotDirPath: string,
-  provisionedFiles: readonly ProvisionedFileSnapshot[],
-  worktreePath: string,
-  worktreeIdentity?: ManagedWorktreeRootIdentity,
-): Promise<void> {
-  await verifyProvisionedFileBlobs(snapshotDirPath, provisionedFiles);
-  for (const file of provisionedFiles) {
-    if (normalizedRelativePath(file.relativePath) !== file.relativePath ||
-        normalizedRelativePath(file.blobPath) !== file.blobPath) {
-      throw new ManagedWorktreeSnapshotError(
-        "snapshot_invalid", "A provisioned-file snapshot entry could not be verified.",
-      );
-    }
-    try {
-      await transferManagedWorktreeFile({
-        operation: "restore",
-        sourceRoot: snapshotDirPath,
-        sourceRelativePath: file.blobPath,
-        destinationRoot: worktreePath,
-        destinationIdentity: worktreeIdentity,
-        destinationRelativePath: file.relativePath,
-        byteLimit: file.size,
-        digest: file.digest,
-        mode: file.mode & 0o777,
-      });
-    } catch (error) {
-      const code = error instanceof ManagedWorktreeFileIoError ? error.code : undefined;
-      throw new ManagedWorktreeSnapshotError(
-        code === "destination_exists" ? "destination_exists"
-          : code === "blob_corrupt" ? "blob_corrupt" : "snapshot_invalid",
-        "A provisioned-file destination could not be restored safely.",
-        error,
-      );
-    }
-  }
-}
-
-export type ManagedWorktreeRestorePhase =
-  | "checkout_planned"
-  | "checkout_created"
-  | "snapshot_applied"
-  | "complete";
-
-export interface ManagedWorktreeRestoreJournal {
-  version: 1;
-  phase: ManagedWorktreeRestorePhase;
-  snapshotId: string;
-  workspaceId: string;
-  worktreePath: string;
-  /** Identity of the checkout created for this restore, for resume checks. */
-  worktreeGitDir?: string;
-  ownershipToken?: string;
-  worktreeDevice?: number;
-  worktreeInode?: number;
-}
-
-/** Read the partial-restore journal inside a snapshot directory. */
-export async function readManagedWorktreeRestoreJournal(
-  root: string,
-  snapshotId: string,
-): Promise<ManagedWorktreeRestoreJournal | undefined> {
-  const dir = snapshotDir(root, snapshotId);
-  const value = await readJsonFile(restoreJournalPath(dir), RESTORE_BYTES);
-  if (value === undefined) return undefined;
-  const journal = value as Partial<ManagedWorktreeRestoreJournal>;
-  if (
-    typeof journal !== "object" ||
-    journal === null ||
-    journal.version !== 1 ||
-    (journal.phase !== "checkout_planned" &&
-      journal.phase !== "checkout_created" &&
-      journal.phase !== "snapshot_applied" &&
-      journal.phase !== "complete") ||
-    journal.snapshotId !== snapshotId ||
-    !isBoundedString(journal.workspaceId, 128) ||
-    !isBoundedString(journal.worktreePath, 4096) ||
-    !path.isAbsolute(journal.worktreePath) ||
-    (journal.ownershipToken !== undefined && !isBoundedString(journal.ownershipToken, 128)) ||
-    (journal.worktreeGitDir !== undefined &&
-      (!isBoundedString(journal.worktreeGitDir, 4096) ||
-        !path.isAbsolute(journal.worktreeGitDir))) ||
-    (journal.worktreeDevice !== undefined && !Number.isSafeInteger(journal.worktreeDevice)) ||
-    (journal.worktreeInode !== undefined && !Number.isSafeInteger(journal.worktreeInode))
-  ) {
-    throw new ManagedWorktreeSnapshotError(
-      "snapshot_invalid",
-      "The managed worktree restore journal could not be verified.",
-    );
-  }
-  return journal as ManagedWorktreeRestoreJournal;
-}
-
-export async function writeManagedWorktreeRestoreJournal(
-  root: string,
-  journal: ManagedWorktreeRestoreJournal,
-): Promise<void> {
-  await persistJsonFile(restoreJournalPath(snapshotDir(root, journal.snapshotId)), {
-    ...journal,
-    version: 1,
-  });
-}
-
-/**
- * Publish the first restore journal atomically: fails with EEXIST when a
- * journal already exists so two concurrent restores cannot plan divergent
- * checkouts for the same snapshot.
- *
- * The journal is written and fsynced under a temporary name and then linked to
- * its final name. `link` publishes a complete file in one step and still fails
- * with EEXIST when a competing planner won the claim, so a crash can only leave
- * no readable journal or one complete journal, never a truncated one that the
- * retry would reject as invalid.
- */
-export async function createManagedWorktreeRestoreJournal(
-  root: string,
-  journal: ManagedWorktreeRestoreJournal,
-): Promise<void> {
-  const dir = snapshotDir(root, journal.snapshotId);
-  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const target = restoreJournalPath(dir);
-  const temporary = `${target}.${randomUUID()}.tmp`;
-  let handle: fs.FileHandle | undefined;
-  try {
-    handle = await fs.open(temporary, "wx", 0o600);
-    await handle.writeFile(JSON.stringify({ ...journal, version: 1 }), "utf8");
-    await handle.sync();
-    await handle.close();
-    handle = undefined;
-    await fs.link(temporary, target);
-    await syncDirectory(dir);
-  } finally {
-    await handle?.close().catch(() => undefined);
-    // The temporary name is never the published journal; the target link keeps
-    // the bytes alive when the claim succeeded.
-    await fs.unlink(temporary).catch(() => undefined);
-  }
 }
