@@ -4,7 +4,7 @@ import {
   isSafeSubagentIdentifier,
   parseSubagentMessageReferenceV1,
   parseSubagentRunSnapshot,
-  subagentRunSnapshotUpdateIsMonotonic,
+  parsedSubagentRunSnapshotUpdateIsMonotonic,
   type SubagentMessageReferenceV1,
   type SubagentRunSnapshot,
   type SubagentRunStateV2,
@@ -98,6 +98,29 @@ export interface SubagentDetailRequest {
   runId: string;
   generationId: string;
   minimumRevision?: number;
+}
+
+const VALIDATED_VIEW_SNAPSHOTS = new WeakSet<SubagentRunSnapshot>();
+
+function freezeValidatedSnapshot<T extends SubagentRunSnapshot>(snapshot: T): T {
+  Object.freeze(snapshot.warnings);
+  if (snapshot.milestones) Object.freeze(snapshot.milestones);
+  if (snapshot.projectionNotices) Object.freeze(snapshot.projectionNotices);
+  Object.freeze(snapshot);
+  VALIDATED_VIEW_SNAPSHOTS.add(snapshot);
+  return snapshot;
+}
+
+function ensureValidatedSnapshot(value: unknown): SubagentRunSnapshot | undefined {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    VALIDATED_VIEW_SNAPSHOTS.has(value as SubagentRunSnapshot)
+  ) {
+    return value as SubagentRunSnapshot;
+  }
+  const parsed = parseSubagentRunSnapshot(value);
+  return parsed ? freezeValidatedSnapshot(parsed) : undefined;
 }
 
 function snapshotBelongsToOwner(
@@ -239,13 +262,13 @@ export function mergeSubagentSnapshot(
   incoming: SubagentRunSnapshot,
   owner?: SubagentSnapshotOwner,
 ): SubagentRunSnapshot | undefined {
-  const parsedCurrent = current ? parseSubagentRunSnapshot(current) : undefined;
+  const parsedCurrent = current ? ensureValidatedSnapshot(current) : undefined;
   const safeCurrent =
     parsedCurrent && snapshotBelongsToOwner(parsedCurrent, owner) ? parsedCurrent : undefined;
-  const parsedIncoming = parseSubagentRunSnapshot(incoming);
+  const parsedIncoming = ensureValidatedSnapshot(incoming);
   if (!parsedIncoming || !snapshotBelongsToOwner(parsedIncoming, owner)) return safeCurrent;
   if (!safeCurrent) return parsedIncoming;
-  return subagentRunSnapshotUpdateIsMonotonic(safeCurrent, parsedIncoming)
+  return parsedSubagentRunSnapshotUpdateIsMonotonic(safeCurrent, parsedIncoming)
     ? parsedIncoming
     : safeCurrent;
 }
@@ -265,8 +288,12 @@ export function mergeSubagentSnapshots(
 ): SubagentRunSnapshot[] {
   const merged = new Map<string, SubagentRunSnapshot>();
   for (const candidate of [...current, ...incoming]) {
-    const next = mergeSubagentSnapshot(merged.get(candidate.runId), candidate, owner);
-    if (next) merged.set(next.runId, next);
+    const parsedCandidate = ensureValidatedSnapshot(candidate);
+    if (!parsedCandidate || !snapshotBelongsToOwner(parsedCandidate, owner)) continue;
+    const existing = merged.get(parsedCandidate.runId);
+    if (!existing || parsedSubagentRunSnapshotUpdateIsMonotonic(existing, parsedCandidate)) {
+      merged.set(parsedCandidate.runId, parsedCandidate);
+    }
   }
   return [...merged.values()].sort((left, right) =>
     snapshotSortKey(left).localeCompare(snapshotSortKey(right)),
@@ -285,22 +312,29 @@ export function mergeSubagentHistorySnapshot(
   incoming: SubagentRunSnapshot,
   owner: SubagentSnapshotOwner,
 ): SubagentHistorySnapshotMerge {
+  const parsedIncoming = ensureValidatedSnapshot(incoming);
+  const targetRunId = parsedIncoming ? parsedIncoming.runId : incoming.runId;
   const current = mergeSubagentSnapshots(
     [],
     [...loadedSnapshots, ...handoffSnapshots, ...liveSnapshots],
     owner,
-  ).find((snapshot) => snapshot.runId === incoming.runId);
+  ).find((snapshot) => snapshot.runId === targetRunId);
   if (
     current &&
-    !subagentRunSnapshotUpdateIsMonotonic(current, incoming, {
-      allowExactReplay: true,
-    })
+    (!parsedIncoming ||
+      !parsedSubagentRunSnapshotUpdateIsMonotonic(current, parsedIncoming, {
+        allowExactReplay: true,
+      }))
   ) {
     return { accepted: false, loadedSnapshots: [...loadedSnapshots] };
   }
   return {
     accepted: true,
-    loadedSnapshots: mergeSubagentSnapshots(loadedSnapshots, [incoming], owner),
+    loadedSnapshots: mergeSubagentSnapshots(
+      loadedSnapshots,
+      parsedIncoming ? [parsedIncoming] : [],
+      owner,
+    ),
   };
 }
 
@@ -317,8 +351,25 @@ function persistedSnapshotReference(
     if (runIndex === -1) continue;
     if (reference.generationId !== snapshot.generationId) return "conflicting";
     const item = reference.items?.[runIndex];
-    const referenceSnapshot =
-      snapshot.version === 2 ? adaptSubagentRunSnapshotV2ToV1(snapshot) : snapshot;
+    const referenceSnapshot = VALIDATED_VIEW_SNAPSHOTS.has(snapshot)
+      ? {
+          runId: snapshot.runId,
+          label: snapshot.label,
+          role: snapshot.role,
+          state:
+            snapshot.version === 2
+              ? snapshot.state === "needs_attention"
+                ? "running"
+                : snapshot.state === "stopped"
+                  ? "interrupted"
+                  : snapshot.state === "unknown"
+                    ? "failed"
+                    : snapshot.state
+              : snapshot.state,
+        }
+      : snapshot.version === 2
+        ? adaptSubagentRunSnapshotV2ToV1(snapshot)
+        : snapshot;
     if (!referenceSnapshot) return "conflicting";
     if (
       item &&
@@ -722,7 +773,7 @@ export function resolveSubagentDetailResult(
   ) {
     return undefined;
   }
-  const snapshot = parseSubagentRunSnapshot(value);
+  const snapshot = ensureValidatedSnapshot(value);
   if (
     !snapshot ||
     snapshot.chatId !== request.chatId ||
@@ -733,13 +784,16 @@ export function resolveSubagentDetailResult(
   ) {
     return undefined;
   }
-  if (
-    currentSnapshot &&
-    !subagentRunSnapshotUpdateIsMonotonic(currentSnapshot, snapshot, {
-      allowExactReplay: true,
-    })
-  ) {
-    return undefined;
+  if (currentSnapshot) {
+    const validatedCurrent = ensureValidatedSnapshot(currentSnapshot);
+    if (
+      !validatedCurrent ||
+      !parsedSubagentRunSnapshotUpdateIsMonotonic(validatedCurrent, snapshot, {
+        allowExactReplay: true,
+      })
+    ) {
+      return undefined;
+    }
   }
   return snapshot;
 }
