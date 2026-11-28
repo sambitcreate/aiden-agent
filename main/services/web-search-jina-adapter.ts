@@ -1,25 +1,21 @@
 /** Jina Search Foundation API adapter (API-key mode only). */
 
-import { isRecord, normalizeWebSearchSourceUrl } from "./web-search-adapter-kit.js";
-import { cancelWebSearchResponse } from "./web-search-response.js";
+import { isRecord } from "./web-search-adapter-kit.js";
 import {
-  WEB_SEARCH_JSON_RESPONSE_MAX_BYTES,
+  collectUniqueWebSearchResults,
+  createWebSearchJsonAdapter,
+  extractWebSearchApiKeyCredential,
+  freezeWebSearchJsonRequest,
+  isValidWebSearchResultCount,
   mapWebSearchJsonHttpError,
-  mapWebSearchJsonTransportError,
-  normalizeWebSearchApiKey,
   normalizeWebSearchJsonInput,
-  readBoundedWebSearchJsonResponse,
   requireWebSearchApiKey,
+  type WebSearchJsonAdapterDefinition,
   type WebSearchJsonAdapterOptions,
   type WebSearchJsonRawResult,
   type WebSearchJsonRequestContract,
 } from "./web-search-json-adapter.js";
-import {
-  normalizeWebSearchResultSet,
-  webSearchError,
-  WebSearchError,
-  type WebSearchResultSet,
-} from "./web-search-core.js";
+import { webSearchError } from "./web-search-core.js";
 import type {
   WebSearchAdapter,
   WebSearchAdapterRequest,
@@ -36,39 +32,6 @@ export interface JinaWebSearchApiKeyCredential {
 
 export type JinaWebSearchCredential = JinaWebSearchApiKeyCredential | string;
 
-function credentialValue(value: unknown): string {
-  if (typeof value === "string") return normalizeWebSearchApiKey("jina", value);
-  if (isRecord(value) && value.mode === "api-key" && typeof value.apiKey === "string") {
-    return normalizeWebSearchApiKey("jina", value.apiKey);
-  }
-  throw webSearchError("auth", "jina");
-}
-
-function requestContract(
-  query: string,
-  numResults: number,
-  apiKey: string,
-): WebSearchJsonRequestContract {
-  const url = new URL(encodeURIComponent(query), JINA_WEB_SEARCH_ENDPOINT);
-  url.searchParams.set("count", String(numResults));
-  return Object.freeze({
-    url: url.toString(),
-    init: Object.freeze({
-      method: "GET" as const,
-      redirect: "error" as const,
-      credentials: "omit" as const,
-      cache: "no-store" as const,
-      referrerPolicy: "no-referrer" as const,
-      headers: Object.freeze({
-        Accept: "application/json",
-        Authorization: `Bearer ${apiKey}`,
-        "X-Respond-With": "no-content",
-        "X-Retain-Images": "none",
-      }),
-    }),
-  });
-}
-
 /** Build the fixed-origin Jina Search request without performing I/O. */
 export function buildJinaWebSearchRequest(
   queryValue: unknown,
@@ -76,28 +39,29 @@ export function buildJinaWebSearchRequest(
   credential: JinaWebSearchCredential,
 ): WebSearchJsonRequestContract {
   const { query, numResults } = normalizeWebSearchJsonInput("jina", queryValue, numResultsValue);
-  return requestContract(query, numResults, credentialValue(credential));
+  const apiKey = extractWebSearchApiKeyCredential("jina", credential);
+  const url = new URL(encodeURIComponent(query), JINA_WEB_SEARCH_ENDPOINT);
+  url.searchParams.set("count", String(numResults));
+  return freezeWebSearchJsonRequest({
+    url: url.toString(),
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${apiKey}`,
+      "X-Respond-With": "no-content",
+      "X-Retain-Images": "none",
+    },
+  });
 }
 
 function mapJinaItems(
-  items: unknown[],
+  items: readonly unknown[],
   maximumResults: number,
 ): { results: readonly WebSearchJsonRawResult[] } {
-  const results: WebSearchJsonRawResult[] = [];
-  const seen = new Set<string>();
-  for (const item of items) {
-    if (!isRecord(item)) continue;
-    const url = normalizeWebSearchSourceUrl(item.url);
-    if (!url || seen.has(url)) continue;
-    seen.add(url);
-    results.push({
-      title: item.title,
-      url,
-      text: item.description ?? item.content,
-    });
-    if (results.length >= maximumResults) break;
-  }
-  return { results };
+  return collectUniqueWebSearchResults(items, maximumResults, (item) => ({
+    title: item.title,
+    text: item.description ?? item.content,
+  }));
 }
 
 /**
@@ -109,9 +73,7 @@ export function parseJinaWebSearchResponse(
   payload: unknown,
   maximumResults: number,
 ): { results: readonly WebSearchJsonRawResult[] } | undefined {
-  if (!Number.isSafeInteger(maximumResults) || maximumResults < 1 || maximumResults > 10) {
-    return undefined;
-  }
+  if (!isValidWebSearchResultCount(maximumResults)) return undefined;
   if (Array.isArray(payload)) return mapJinaItems(payload, maximumResults);
   if (!isRecord(payload)) return undefined;
 
@@ -125,151 +87,26 @@ export function parseJinaWebSearchResponse(
   return mapJinaItems(payload.data, maximumResults);
 }
 
-function fixedJinaEndpointMatches(requestUrl: string): boolean {
-  try {
-    const expected = new URL(JINA_WEB_SEARCH_ORIGIN);
-    const actual = new URL(requestUrl);
-    return (
-      expected.protocol === "https:" &&
-      actual.protocol === expected.protocol &&
-      actual.origin === expected.origin &&
-      actual.pathname.startsWith("/") &&
-      !actual.username &&
-      !actual.password &&
-      !actual.hash
-    );
-  } catch {
-    return false;
-  }
-}
-
-function decodeJsonBody(body: Uint8Array, contentType: string | undefined): unknown {
-  const mediaType =
-    typeof contentType === "string"
-      ? contentType.split(";", 1)[0]?.trim().toLowerCase()
-      : undefined;
-  if (mediaType !== undefined && mediaType !== "application/json" && !mediaType.endsWith("+json")) {
-    throw webSearchError("invalid-response", "jina");
-  }
-  let text: string;
-  try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(body);
-  } catch {
-    throw webSearchError("invalid-response", "jina");
-  }
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    throw webSearchError("invalid-response", "jina");
-  }
-}
-
-function ensureJinaResponseShape(response: Response): void {
-  if (
-    !response ||
-    typeof response.status !== "number" ||
-    !Number.isSafeInteger(response.status) ||
-    response.status < 100 ||
-    response.status > 599 ||
-    !response.headers ||
-    typeof response.headers.get !== "function"
-  ) {
-    throw webSearchError("invalid-response", "jina");
-  }
-}
-
-function requestWithSignal(
-  contract: WebSearchJsonRequestContract,
-  signal: AbortSignal,
-): RequestInit {
-  return {
-    method: contract.init.method,
-    headers: contract.init.headers,
-    ...(contract.init.body === undefined ? {} : { body: contract.init.body }),
-    redirect: contract.init.redirect,
-    credentials: contract.init.credentials,
-    cache: contract.init.cache,
-    referrerPolicy: contract.init.referrerPolicy,
-    signal,
-  };
-}
+const JINA_DEFINITION: WebSearchJsonAdapterDefinition = Object.freeze({
+  providerId: "jina",
+  endpoint: JINA_WEB_SEARCH_ENDPOINT,
+  allowQuery: true,
+  allowOriginScopedPath: true,
+  quotaStatuses: Object.freeze([402]),
+  buildRequest: (request: WebSearchAdapterRequest) => {
+    if (request.credentialMode !== "api-key" || request.credential === undefined) {
+      throw webSearchError("auth", "jina");
+    }
+    return buildJinaWebSearchRequest(request.query, request.numResults, request.credential);
+  },
+  parse: parseJinaWebSearchResponse,
+});
 
 /** Factory consumed by the main-only provider registry integration. */
 export function createJinaWebSearchAdapter(
   options: WebSearchJsonAdapterOptions = {},
 ): WebSearchAdapter {
-  const fetchImpl = options.fetch ?? globalThis.fetch;
-  if (typeof fetchImpl !== "function") throw webSearchError("unavailable", "jina");
-
-  return Object.freeze({
-    providerId: "jina" as const,
-    adapterVersion: 1,
-    async search(request: WebSearchAdapterRequest): Promise<WebSearchResultSet> {
-      if (request.signal.aborted) {
-        throw webSearchError(request.timedOut?.() === true ? "timeout" : "cancelled", "jina");
-      }
-
-      let contract: WebSearchJsonRequestContract;
-      try {
-        if (request.credentialMode !== "api-key" || request.credential === undefined) {
-          throw webSearchError("auth", "jina");
-        }
-        contract = buildJinaWebSearchRequest(request.query, request.numResults, request.credential);
-      } catch (error) {
-        if (error instanceof WebSearchError) throw error;
-        throw webSearchError("invalid-request", "jina");
-      }
-      if (!fixedJinaEndpointMatches(contract.url)) {
-        throw webSearchError("config", "jina");
-      }
-
-      let response: Response;
-      try {
-        response = await fetchImpl(contract.url, requestWithSignal(contract, request.signal));
-      } catch (error) {
-        throw mapWebSearchJsonTransportError("jina", error, request);
-      }
-      ensureJinaResponseShape(response);
-      if (response.status < 200 || response.status >= 300) {
-        cancelWebSearchResponse(response.body);
-        throw mapWebSearchJsonHttpError("jina", response.status, [402]);
-      }
-
-      let bytes: Uint8Array;
-      try {
-        bytes = await readBoundedWebSearchJsonResponse(
-          response,
-          request.signal,
-          WEB_SEARCH_JSON_RESPONSE_MAX_BYTES,
-          "jina",
-        );
-      } catch (error) {
-        if (error instanceof WebSearchError) throw error;
-        throw mapWebSearchJsonTransportError("jina", error, request);
-      }
-      if (request.signal.aborted) {
-        throw webSearchError(request.timedOut?.() === true ? "timeout" : "cancelled", "jina");
-      }
-
-      let contentType: string | undefined;
-      try {
-        contentType = response.headers.get("content-type") ?? undefined;
-      } catch {
-        throw webSearchError("invalid-response", "jina");
-      }
-      const payload = decodeJsonBody(bytes, contentType);
-      const parsed = parseJinaWebSearchResponse(payload, request.numResults);
-      if (!parsed || !Array.isArray(parsed.results)) {
-        throw webSearchError("invalid-response", "jina");
-      }
-      try {
-        return normalizeWebSearchResultSet("jina", { results: parsed.results });
-      } catch (error) {
-        if (error instanceof WebSearchError) throw error;
-        throw webSearchError("invalid-response", "jina");
-      }
-    },
-  });
+  return createWebSearchJsonAdapter(JINA_DEFINITION, options);
 }
 
 export const jinaWebSearchAdapterFactory = createJinaWebSearchAdapter;

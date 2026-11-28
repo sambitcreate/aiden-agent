@@ -1,9 +1,12 @@
 /** Serper Google Search API web-search adapter (API-key mode only). */
 
-import { isRecord, normalizeWebSearchSourceUrl } from "./web-search-adapter-kit.js";
+import { isRecord } from "./web-search-adapter-kit.js";
 import {
+  collectUniqueWebSearchResults,
   createWebSearchJsonAdapter,
-  normalizeWebSearchApiKey,
+  extractWebSearchApiKeyCredential,
+  freezeWebSearchJsonRequest,
+  isValidWebSearchResultCount,
   normalizeWebSearchJsonInput,
   type WebSearchJsonAdapterDefinition,
   type WebSearchJsonAdapterOptions,
@@ -24,45 +27,23 @@ export interface SerperWebSearchApiKeyCredential {
 
 export type SerperWebSearchCredential = SerperWebSearchApiKeyCredential | string;
 
-function credentialValue(value: unknown): string {
-  if (typeof value === "string") return normalizeWebSearchApiKey("serper", value);
-  if (isRecord(value) && value.mode === "api-key" && typeof value.apiKey === "string") {
-    return normalizeWebSearchApiKey("serper", value.apiKey);
-  }
-  throw webSearchError("auth", "serper");
-}
-
-function requestContract(
-  query: string,
-  numResults: number,
-  apiKey: string,
-): WebSearchJsonRequestContract {
-  const body = JSON.stringify({ q: query, num: numResults });
-  return Object.freeze({
-    url: SERPER_WEB_SEARCH_ENDPOINT,
-    init: Object.freeze({
-      method: "POST" as const,
-      redirect: "error" as const,
-      credentials: "omit" as const,
-      cache: "no-store" as const,
-      referrerPolicy: "no-referrer" as const,
-      headers: Object.freeze({
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        "X-API-KEY": apiKey,
-      }),
-      body,
-    }),
-  });
-}
-
 function buildRequestValues(
   queryValue: unknown,
   numResultsValue: unknown,
   credential: unknown,
 ): WebSearchJsonRequestContract {
   const { query, numResults } = normalizeWebSearchJsonInput("serper", queryValue, numResultsValue);
-  return requestContract(query, numResults, credentialValue(credential));
+  const apiKey = extractWebSearchApiKeyCredential("serper", credential);
+  return freezeWebSearchJsonRequest({
+    url: SERPER_WEB_SEARCH_ENDPOINT,
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-API-KEY": apiKey,
+    },
+    body: JSON.stringify({ q: query, num: numResults }),
+  });
 }
 
 /** Build the fixed-origin Serper request without performing I/O. */
@@ -79,26 +60,23 @@ export function parseSerperWebSearchResponse(
   payload: unknown,
   maximumResults: number,
 ): { results: readonly WebSearchJsonRawResult[] } | undefined {
-  if (!Number.isSafeInteger(maximumResults) || maximumResults < 1 || maximumResults > 10) {
+  if (
+    !isValidWebSearchResultCount(maximumResults) ||
+    !isRecord(payload) ||
+    !Array.isArray(payload.organic)
+  ) {
     return undefined;
   }
-  if (!isRecord(payload) || !Array.isArray(payload.organic)) return undefined;
 
-  const results: WebSearchJsonRawResult[] = [];
-  const seen = new Set<string>();
-  for (const item of payload.organic) {
-    if (!isRecord(item)) continue;
-    const url = normalizeWebSearchSourceUrl(item.link);
-    if (!url || seen.has(url)) continue;
-    seen.add(url);
-    results.push({
+  return collectUniqueWebSearchResults(
+    payload.organic,
+    maximumResults,
+    (item) => ({
       title: item.title,
-      url,
       text: item.snippet,
-    });
-    if (results.length >= maximumResults) break;
-  }
-  return { results };
+    }),
+    (item) => item.link,
+  );
 }
 
 const SERPER_DEFINITION: WebSearchJsonAdapterDefinition = Object.freeze({

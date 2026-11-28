@@ -7,7 +7,23 @@
  * declared and streamed response limits, and closed provider errors.
  */
 
-import { isRecord } from "../shared/guards.js";
+import {
+  WEB_SEARCH_API_KEY_MAX_CHARACTERS,
+  WEB_SEARCH_API_KEY_MAX_UTF8_BYTES,
+  WEB_SEARCH_QUERY_MAX_CHARACTERS,
+  WEB_SEARCH_QUERY_MAX_UTF8_BYTES,
+  classifyWebSearchHttpStatus,
+  isRecord,
+  isRedirectTransportFailure,
+  isValidWebSearchResultCount,
+  normalizeWebSearchSourceUrl,
+  parseWebSearchApiKey,
+  parseWebSearchMediaType,
+  parseWebSearchQuery,
+  parseWebSearchResultCount,
+  utf8ByteLength,
+  webSearchErrorKindFromCoreCategory,
+} from "./web-search-adapter-kit.js";
 import {
   normalizeWebSearchResultSet,
   webSearchError,
@@ -26,11 +42,12 @@ import {
   readBoundedWebSearchResponse as readBoundedWebSearchJsonResponse,
 } from "./web-search-response.js";
 export { readBoundedWebSearchResponse as readBoundedWebSearchJsonResponse } from "./web-search-response.js";
+export { isValidWebSearchResultCount } from "./web-search-adapter-kit.js";
 
 export const WEB_SEARCH_JSON_RESPONSE_MAX_BYTES = 256 * 1_024;
 export const WEB_SEARCH_JSON_REQUEST_MAX_BYTES = 8 * 1_024;
-export const WEB_SEARCH_API_KEY_MAX_CHARS = 4_096;
-export const WEB_SEARCH_API_KEY_MAX_BYTES = 8_192;
+export const WEB_SEARCH_API_KEY_MAX_CHARS = WEB_SEARCH_API_KEY_MAX_CHARACTERS;
+export const WEB_SEARCH_API_KEY_MAX_BYTES = WEB_SEARCH_API_KEY_MAX_UTF8_BYTES;
 
 export interface WebSearchJsonRequestContract {
   readonly url: string;
@@ -43,6 +60,13 @@ export interface WebSearchJsonRequestContract {
     readonly headers: Readonly<Record<string, string>>;
     readonly body?: string;
   };
+}
+
+export interface WebSearchJsonRequestEnvelopeInit {
+  readonly url: string;
+  readonly method: "GET" | "POST";
+  readonly headers: Readonly<Record<string, string>>;
+  readonly body?: string;
 }
 
 export interface WebSearchJsonRawResult {
@@ -60,6 +84,8 @@ export interface WebSearchJsonAdapterDefinition {
   readonly providerId: WebSearchProviderId;
   readonly endpoint: string;
   readonly allowQuery?: boolean;
+  /** Allow path-encoded queries beneath the fixed HTTPS endpoint origin/base path. */
+  readonly allowOriginScopedPath?: boolean;
   /** Provider-specific quota responses in addition to the common 429. */
   readonly quotaStatuses?: readonly number[];
   readonly buildRequest: (request: WebSearchAdapterRequest) => WebSearchJsonRequestContract;
@@ -73,20 +99,6 @@ export interface WebSearchJsonAdapterOptions {
   readonly fetch?: WebSearchFetch;
 }
 
-function utf8ByteLength(value: string): number {
-  return new TextEncoder().encode(value).byteLength;
-}
-
-function codePointLength(value: string): number {
-  return Array.from(value).length;
-}
-
-const CONTROL_CHARACTERS = /\p{Cc}/u;
-
-function hasControlCharacter(value: string): boolean {
-  return CONTROL_CHARACTERS.test(value);
-}
-
 /**
  * Validate the common model-facing query/count pair at each adapter boundary.
  * The service validates this first, but direct adapter callers must also fail
@@ -97,23 +109,15 @@ export function normalizeWebSearchJsonInput(
   queryValue: unknown,
   numResultsValue: unknown,
 ): { query: string; numResults: number } {
-  if (
-    typeof queryValue !== "string" ||
-    !queryValue.trim() ||
-    hasControlCharacter(queryValue) ||
-    codePointLength(queryValue) > 2_000 ||
-    utf8ByteLength(queryValue) > 8_192
-  ) {
+  const query = parseWebSearchQuery(queryValue, {
+    maxRawCharacters: WEB_SEARCH_QUERY_MAX_CHARACTERS,
+    maxRawBytes: WEB_SEARCH_QUERY_MAX_UTF8_BYTES,
+  });
+  if (query === undefined) {
     throw webSearchError("invalid-request", providerId);
   }
-  const query = queryValue.trim();
-  const numResults = numResultsValue ?? 5;
-  if (
-    typeof numResults !== "number" ||
-    !Number.isSafeInteger(numResults) ||
-    numResults < 1 ||
-    numResults > 10
-  ) {
+  const numResults = parseWebSearchResultCount(numResultsValue);
+  if (numResults === undefined) {
     throw webSearchError("invalid-request", providerId);
   }
   return { query, numResults };
@@ -121,18 +125,23 @@ export function normalizeWebSearchJsonInput(
 
 /** Normalize and validate a provider API key without retaining it in errors. */
 export function normalizeWebSearchApiKey(providerId: WebSearchProviderId, value: unknown): string {
-  if (typeof value !== "string" || hasControlCharacter(value)) {
-    throw webSearchError("auth", providerId);
-  }
-  const key = value.trim();
-  if (
-    key.length === 0 ||
-    codePointLength(key) > WEB_SEARCH_API_KEY_MAX_CHARS ||
-    utf8ByteLength(key) > WEB_SEARCH_API_KEY_MAX_BYTES
-  ) {
+  const key = parseWebSearchApiKey(value);
+  if (key === undefined) {
     throw webSearchError("auth", providerId);
   }
   return key;
+}
+
+/** Extract and validate a direct string or `{ mode: "api-key", apiKey }` credential. */
+export function extractWebSearchApiKeyCredential(
+  providerId: WebSearchProviderId,
+  value: unknown,
+): string {
+  if (typeof value === "string") return normalizeWebSearchApiKey(providerId, value);
+  if (isRecord(value) && value.mode === "api-key" && typeof value.apiKey === "string") {
+    return normalizeWebSearchApiKey(providerId, value.apiKey);
+  }
+  throw webSearchError("auth", providerId);
 }
 
 /** Require the API-key route; anonymous and provider-auth routes are not valid here. */
@@ -144,15 +153,103 @@ export function requireWebSearchApiKey(
   return normalizeWebSearchApiKey(providerId, request.credential);
 }
 
+/** Freeze a provider request into the standard no-redirect, no-ambient-state envelope. */
+export function freezeWebSearchJsonRequest(
+  request: WebSearchJsonRequestEnvelopeInit,
+): WebSearchJsonRequestContract {
+  return Object.freeze({
+    url: request.url,
+    init: Object.freeze({
+      method: request.method,
+      redirect: "error" as const,
+      credentials: "omit" as const,
+      cache: "no-store" as const,
+      referrerPolicy: "no-referrer" as const,
+      headers: Object.freeze({ ...request.headers }),
+      ...(request.body === undefined ? {} : { body: request.body }),
+    }),
+  });
+}
+
+export interface WebSearchJsonResultCollector {
+  readonly size: number;
+  add(result: WebSearchJsonRawResult | undefined): void;
+  results(maximumResults?: number): WebSearchJsonParsedResponse;
+}
+
+/**
+ * Deduplicate normalized source URLs in insertion order, optionally backfilling
+ * empty text when a later citation repeats an already-seen URL.
+ */
+export function createWebSearchResultCollector(options?: {
+  readonly backfillEmptyText?: boolean;
+}): WebSearchJsonResultCollector {
+  const collected: WebSearchJsonRawResult[] = [];
+  const indexByUrl = new Map<string, number>();
+  return {
+    get size(): number {
+      return collected.length;
+    },
+    add(result: WebSearchJsonRawResult | undefined): void {
+      if (!result || typeof result.url !== "string") return;
+      const existingIndex = indexByUrl.get(result.url);
+      if (existingIndex !== undefined) {
+        if (
+          options?.backfillEmptyText === true &&
+          (collected[existingIndex]?.text === undefined || collected[existingIndex]?.text === "") &&
+          typeof result.text === "string" &&
+          result.text.length > 0
+        ) {
+          collected[existingIndex] = { ...collected[existingIndex], text: result.text };
+        }
+        return;
+      }
+      indexByUrl.set(result.url, collected.length);
+      collected.push(result);
+    },
+    results(maximumResults?: number): WebSearchJsonParsedResponse {
+      return {
+        results: maximumResults === undefined ? collected : collected.slice(0, maximumResults),
+      };
+    },
+  };
+}
+
+/**
+ * Normalize, deduplicate, and cap an array of untrusted provider items using
+ * `normalizeWebSearchSourceUrl`.
+ */
+export function collectUniqueWebSearchResults(
+  items: readonly unknown[],
+  maximumResults: number,
+  mapItem: (
+    item: Record<string, unknown>,
+    url: string,
+  ) => Omit<WebSearchJsonRawResult, "url"> | undefined,
+  selectUrl: (item: Record<string, unknown>) => unknown = (item) => item.url,
+): WebSearchJsonParsedResponse {
+  if (!isValidWebSearchResultCount(maximumResults)) return { results: [] };
+  const results: WebSearchJsonRawResult[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (!isRecord(item)) continue;
+    const url = normalizeWebSearchSourceUrl(selectUrl(item));
+    if (!url || seen.has(url)) continue;
+    const mapped = mapItem(item, url);
+    if (!mapped) continue;
+    seen.add(url);
+    results.push({ ...mapped, url });
+    if (results.length >= maximumResults) break;
+  }
+  return { results };
+}
+
 function decodeJsonBody(
   body: Uint8Array,
   providerId: WebSearchProviderId,
   contentType: string | undefined,
 ): unknown {
-  const mediaType =
-    typeof contentType === "string"
-      ? contentType.split(";", 1)[0]?.trim().toLowerCase()
-      : undefined;
+  const mediaType = parseWebSearchMediaType(contentType);
   if (mediaType !== undefined && mediaType !== "application/json" && !mediaType.endsWith("+json")) {
     throw webSearchError("invalid-response", providerId);
   }
@@ -174,24 +271,10 @@ function statusError(
   status: unknown,
   quotaStatuses: readonly number[] = [],
 ): WebSearchError {
-  if (typeof status !== "number" || !Number.isSafeInteger(status) || status < 100 || status > 599) {
-    return webSearchError("invalid-response", providerId);
-  }
-  if (status >= 300 && status < 400) return webSearchError("config", providerId);
-  if (status === 401 || status === 403) return webSearchError("auth", providerId);
-  if (status === 408) return webSearchError("timeout", providerId);
-  if (status === 429 || quotaStatuses.includes(status)) {
-    return webSearchError("quota", providerId);
-  }
-  if (status >= 500) return webSearchError("transient", providerId);
-  if (status >= 400) return webSearchError("invalid-request", providerId);
-  return webSearchError("invalid-response", providerId);
-}
-
-function redirectFailure(error: unknown): boolean {
-  if (error instanceof Error) return /redirect|maximum redirect/iu.test(error.message);
-  if (!isRecord(error) || typeof error.code !== "string") return false;
-  return /redirect/iu.test(error.code);
+  return webSearchError(
+    webSearchErrorKindFromCoreCategory(classifyWebSearchHttpStatus(status, quotaStatuses)),
+    providerId,
+  );
 }
 
 /** Map fetch failures without retaining an upstream message, URL, or body. */
@@ -203,7 +286,7 @@ export function mapWebSearchJsonTransportError(
   if (request.signal.aborted) {
     return webSearchError(request.timedOut?.() === true ? "timeout" : "cancelled", providerId);
   }
-  if (redirectFailure(error)) return webSearchError("config", providerId);
+  if (isRedirectTransportFailure(error)) return webSearchError("config", providerId);
   return webSearchError("network", providerId);
 }
 
@@ -235,10 +318,22 @@ function requestWithSignal(
   };
 }
 
-function fixedEndpointMatches(endpoint: string, requestUrl: string, allowQuery: boolean): boolean {
+function fixedEndpointMatches(
+  endpoint: string,
+  requestUrl: string,
+  options: {
+    readonly allowQuery?: boolean;
+    readonly allowOriginScopedPath?: boolean;
+  } = {},
+): boolean {
   try {
     const expected = new URL(endpoint);
     const actual = new URL(requestUrl);
+    const basePath = expected.pathname.endsWith("/") ? expected.pathname : `${expected.pathname}/`;
+    const pathMatches =
+      options.allowOriginScopedPath === true
+        ? actual.pathname === expected.pathname || actual.pathname.startsWith(basePath)
+        : actual.pathname === expected.pathname;
     return (
       expected.protocol === "https:" &&
       !expected.username &&
@@ -247,11 +342,11 @@ function fixedEndpointMatches(endpoint: string, requestUrl: string, allowQuery: 
       !expected.hash &&
       actual.protocol === expected.protocol &&
       actual.origin === expected.origin &&
-      actual.pathname === expected.pathname &&
+      pathMatches &&
       !actual.username &&
       !actual.password &&
       !actual.hash &&
-      (allowQuery || actual.search === expected.search)
+      (options.allowQuery === true || actual.search === expected.search)
     );
   } catch {
     return false;
@@ -270,6 +365,12 @@ export function createWebSearchJsonAdapter(
     providerId: definition.providerId,
     adapterVersion: 1,
     async search(request: WebSearchAdapterRequest): Promise<WebSearchResultSet> {
+      if (request.signal.aborted) {
+        throw webSearchError(
+          request.timedOut?.() === true ? "timeout" : "cancelled",
+          definition.providerId,
+        );
+      }
       let contract: WebSearchJsonRequestContract;
       try {
         contract = definition.buildRequest(request);
@@ -278,7 +379,10 @@ export function createWebSearchJsonAdapter(
         throw webSearchError("invalid-request", definition.providerId);
       }
       if (
-        !fixedEndpointMatches(definition.endpoint, contract.url, definition.allowQuery === true)
+        !fixedEndpointMatches(definition.endpoint, contract.url, {
+          allowQuery: definition.allowQuery,
+          allowOriginScopedPath: definition.allowOriginScopedPath,
+        })
       ) {
         throw webSearchError("config", definition.providerId);
       }
@@ -297,6 +401,9 @@ export function createWebSearchJsonAdapter(
       if (
         !response ||
         typeof response.status !== "number" ||
+        !Number.isSafeInteger(response.status) ||
+        response.status < 100 ||
+        response.status > 599 ||
         !response.headers ||
         typeof response.headers.get !== "function"
       ) {

@@ -1,9 +1,12 @@
 /** Kagi Search API web-search adapter (API-key mode only). */
 
-import { isRecord, normalizeWebSearchSourceUrl } from "./web-search-adapter-kit.js";
+import { isRecord } from "./web-search-adapter-kit.js";
 import {
+  collectUniqueWebSearchResults,
   createWebSearchJsonAdapter,
-  normalizeWebSearchApiKey,
+  extractWebSearchApiKeyCredential,
+  freezeWebSearchJsonRequest,
+  isValidWebSearchResultCount,
   normalizeWebSearchJsonInput,
   type WebSearchJsonAdapterDefinition,
   type WebSearchJsonAdapterOptions,
@@ -24,45 +27,23 @@ export interface KagiWebSearchApiKeyCredential {
 
 export type KagiWebSearchCredential = KagiWebSearchApiKeyCredential | string;
 
-function credentialValue(value: unknown): string {
-  if (typeof value === "string") return normalizeWebSearchApiKey("kagi", value);
-  if (isRecord(value) && value.mode === "api-key" && typeof value.apiKey === "string") {
-    return normalizeWebSearchApiKey("kagi", value.apiKey);
-  }
-  throw webSearchError("auth", "kagi");
-}
-
-function requestContract(
-  query: string,
-  numResults: number,
-  apiKey: string,
-): WebSearchJsonRequestContract {
-  const body = JSON.stringify({ query, limit: numResults });
-  return Object.freeze({
-    url: KAGI_WEB_SEARCH_ENDPOINT,
-    init: Object.freeze({
-      method: "POST" as const,
-      redirect: "error" as const,
-      credentials: "omit" as const,
-      cache: "no-store" as const,
-      referrerPolicy: "no-referrer" as const,
-      headers: Object.freeze({
-        Accept: "application/json",
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      }),
-      body,
-    }),
-  });
-}
-
 function buildRequestValues(
   queryValue: unknown,
   numResultsValue: unknown,
   credential: unknown,
 ): WebSearchJsonRequestContract {
   const { query, numResults } = normalizeWebSearchJsonInput("kagi", queryValue, numResultsValue);
-  return requestContract(query, numResults, credentialValue(credential));
+  const apiKey = extractWebSearchApiKeyCredential("kagi", credential);
+  return freezeWebSearchJsonRequest({
+    url: KAGI_WEB_SEARCH_ENDPOINT,
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ query, limit: numResults }),
+  });
 }
 
 /** Build the fixed-origin Kagi request without performing I/O. */
@@ -79,28 +60,19 @@ export function parseKagiWebSearchResponse(
   payload: unknown,
   maximumResults: number,
 ): { results: readonly WebSearchJsonRawResult[] } | undefined {
-  if (!Number.isSafeInteger(maximumResults) || maximumResults < 1 || maximumResults > 10) {
-    return undefined;
-  }
-  if (!isRecord(payload) || !isRecord(payload.data) || !Array.isArray(payload.data.search)) {
+  if (
+    !isValidWebSearchResultCount(maximumResults) ||
+    !isRecord(payload) ||
+    !isRecord(payload.data) ||
+    !Array.isArray(payload.data.search)
+  ) {
     return undefined;
   }
 
-  const results: WebSearchJsonRawResult[] = [];
-  const seen = new Set<string>();
-  for (const item of payload.data.search) {
-    if (!isRecord(item)) continue;
-    const url = normalizeWebSearchSourceUrl(item.url);
-    if (!url || seen.has(url)) continue;
-    seen.add(url);
-    results.push({
-      title: item.title,
-      url,
-      text: item.snippet,
-    });
-    if (results.length >= maximumResults) break;
-  }
-  return { results };
+  return collectUniqueWebSearchResults(payload.data.search, maximumResults, (item) => ({
+    title: item.title,
+    text: item.snippet,
+  }));
 }
 
 const KAGI_DEFINITION: WebSearchJsonAdapterDefinition = Object.freeze({

@@ -1,9 +1,12 @@
 /** XCrawl hosted web-search adapter (API-key mode only). */
 
-import { isRecord, normalizeWebSearchSourceUrl } from "./web-search-adapter-kit.js";
+import { isRecord } from "./web-search-adapter-kit.js";
 import {
+  collectUniqueWebSearchResults,
   createWebSearchJsonAdapter,
-  normalizeWebSearchApiKey,
+  extractWebSearchApiKeyCredential,
+  freezeWebSearchJsonRequest,
+  isValidWebSearchResultCount,
   normalizeWebSearchJsonInput,
   type WebSearchJsonAdapterDefinition,
   type WebSearchJsonAdapterOptions,
@@ -24,45 +27,23 @@ export interface XCrawlWebSearchApiKeyCredential {
 
 export type XCrawlWebSearchCredential = XCrawlWebSearchApiKeyCredential | string;
 
-function credentialValue(value: unknown): string {
-  if (typeof value === "string") return normalizeWebSearchApiKey("xcrawl", value);
-  if (isRecord(value) && value.mode === "api-key" && typeof value.apiKey === "string") {
-    return normalizeWebSearchApiKey("xcrawl", value.apiKey);
-  }
-  throw webSearchError("auth", "xcrawl");
-}
-
-function requestContract(
-  query: string,
-  numResults: number,
-  apiKey: string,
-): WebSearchJsonRequestContract {
-  const body = JSON.stringify({ query, limit: numResults });
-  return Object.freeze({
-    url: XCRAWL_WEB_SEARCH_ENDPOINT,
-    init: Object.freeze({
-      method: "POST" as const,
-      redirect: "error" as const,
-      credentials: "omit" as const,
-      cache: "no-store" as const,
-      referrerPolicy: "no-referrer" as const,
-      headers: Object.freeze({
-        Accept: "application/json",
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      }),
-      body,
-    }),
-  });
-}
-
 function buildRequestValues(
   queryValue: unknown,
   numResultsValue: unknown,
   credential: XCrawlWebSearchCredential,
 ): WebSearchJsonRequestContract {
   const { query, numResults } = normalizeWebSearchJsonInput("xcrawl", queryValue, numResultsValue);
-  return requestContract(query, numResults, credentialValue(credential));
+  const apiKey = extractWebSearchApiKeyCredential("xcrawl", credential);
+  return freezeWebSearchJsonRequest({
+    url: XCRAWL_WEB_SEARCH_ENDPOINT,
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ query, limit: numResults }),
+  });
 }
 
 /** Build the fixed-origin XCrawl request without performing I/O. */
@@ -84,9 +65,7 @@ export function parseXCrawlWebSearchResponse(
   maximumResults: number,
 ): { results: readonly WebSearchJsonRawResult[] } | undefined {
   if (
-    !Number.isSafeInteger(maximumResults) ||
-    maximumResults < 1 ||
-    maximumResults > 10 ||
+    !isValidWebSearchResultCount(maximumResults) ||
     !isRecord(payload) ||
     payload.endpoint !== "search" ||
     payload.status !== "completed" ||
@@ -97,19 +76,10 @@ export function parseXCrawlWebSearchResponse(
     return undefined;
   }
 
-  const results: WebSearchJsonRawResult[] = [];
-  const seen = new Set<string>();
-  for (const item of payload.data.data) {
-    if (!isRecord(item)) continue;
-    const url = normalizeWebSearchSourceUrl(item.url);
-    if (!url || seen.has(url)) continue;
-    const title = typeof item.title === "string" && item.title.trim() ? item.title : url;
-    const text = typeof item.description === "string" ? item.description : "";
-    seen.add(url);
-    results.push({ title, url, text });
-    if (results.length >= maximumResults) break;
-  }
-  return { results };
+  return collectUniqueWebSearchResults(payload.data.data, maximumResults, (item, url) => ({
+    title: typeof item.title === "string" && item.title.trim() ? item.title : url,
+    text: typeof item.description === "string" ? item.description : "",
+  }));
 }
 
 const XCRAWL_DEFINITION: WebSearchJsonAdapterDefinition = Object.freeze({

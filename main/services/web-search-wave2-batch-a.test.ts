@@ -36,6 +36,8 @@ import {
 import {
   WEB_SEARCH_API_KEY_MAX_CHARS,
   WEB_SEARCH_JSON_RESPONSE_MAX_BYTES,
+  createWebSearchJsonAdapter,
+  freezeWebSearchJsonRequest,
   mapWebSearchJsonHttpError,
 } from "./web-search-json-adapter.js";
 import { WebSearchError } from "./web-search-core.js";
@@ -560,4 +562,95 @@ test("Wave 2 credentials and caller cancellation fail closed", async () => {
       return true;
     },
   );
+});
+
+test("createWebSearchJsonAdapter rejects unexpected path suffixes unless allowOriginScopedPath is enabled", async () => {
+  let fetchCalls = 0;
+  const neverFetch: WebSearchFetch = async () => {
+    fetchCalls += 1;
+    return new Response(JSON.stringify({ results: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  for (const [endpoint, forgedUrl] of [
+    [TINYFISH_WEB_SEARCH_ENDPOINT, `${TINYFISH_WEB_SEARCH_ORIGIN}/unexpected-suffix`],
+    [PARALLEL_WEB_SEARCH_ENDPOINT, `${PARALLEL_WEB_SEARCH_ORIGIN}/v1/search/extra`],
+    [PARALLEL_WEB_SEARCH_ENDPOINT, `${PARALLEL_WEB_SEARCH_ORIGIN}/v1/search-evil`],
+  ] as const) {
+    const strictAdapter = createWebSearchJsonAdapter(
+      {
+        providerId: "parallel",
+        endpoint,
+        allowQuery: true,
+        buildRequest: () =>
+          freezeWebSearchJsonRequest({
+            url: forgedUrl,
+            method: "GET",
+            headers: { Accept: "application/json" },
+          }),
+        parse: () => ({ results: [] }),
+      },
+      { fetch: neverFetch },
+    );
+    await assert.rejects(strictAdapter.search(adapterRequest("parallel")), (error: unknown) => {
+      assertNoSecretInError(error);
+      assert.equal(error.kind, "config");
+      return true;
+    });
+  }
+  assert.equal(fetchCalls, 0);
+
+  for (const rejectedScopedUrl of [
+    `${PARALLEL_WEB_SEARCH_ORIGIN}/v1/search-evil`,
+    `https://evil.example.test/query`,
+    `https://user:pass@s.jina.ai/query`,
+    `${JINA_WEB_SEARCH_ORIGIN}/query#fragment`,
+  ]) {
+    const scopedRejectAdapter = createWebSearchJsonAdapter(
+      {
+        providerId: "jina",
+        endpoint: rejectedScopedUrl.startsWith(PARALLEL_WEB_SEARCH_ORIGIN)
+          ? PARALLEL_WEB_SEARCH_ENDPOINT
+          : `${JINA_WEB_SEARCH_ORIGIN}/`,
+        allowQuery: true,
+        allowOriginScopedPath: true,
+        buildRequest: () =>
+          freezeWebSearchJsonRequest({
+            url: rejectedScopedUrl,
+            method: "GET",
+            headers: { Accept: "application/json" },
+          }),
+        parse: () => ({ results: [] }),
+      },
+      { fetch: neverFetch },
+    );
+    await assert.rejects(scopedRejectAdapter.search(adapterRequest("jina")), (error: unknown) => {
+      assertNoSecretInError(error);
+      assert.equal(error.kind, "config");
+      return true;
+    });
+  }
+  assert.equal(fetchCalls, 0);
+
+  const scopedAllowedAdapter = createWebSearchJsonAdapter(
+    {
+      providerId: "jina",
+      endpoint: `${JINA_WEB_SEARCH_ORIGIN}/`,
+      allowQuery: true,
+      allowOriginScopedPath: true,
+      buildRequest: () =>
+        freezeWebSearchJsonRequest({
+          url: `${JINA_WEB_SEARCH_ORIGIN}/encoded%20query?count=2`,
+          method: "GET",
+          headers: { Accept: "application/json" },
+        }),
+      parse: () => ({ results: [] }),
+    },
+    { fetch: neverFetch },
+  );
+  const allowed = await scopedAllowedAdapter.search(adapterRequest("jina"));
+  assert.equal(fetchCalls, 1);
+  assert.deepEqual(allowed.results, []);
 });

@@ -6,6 +6,25 @@
  * main-owned Gemini API key, sent in the reviewed header placement.
  */
 
+import {
+  WEB_SEARCH_RESULTS_MAX_COUNT,
+  boundWebSearchText,
+  createWebSearchCoreError,
+  decodeWebSearchBody,
+  isRecord,
+  isValidWebSearchResultCount,
+  mapWebSearchCoreHttpError,
+  mapWebSearchCoreTransportError,
+  parseWebSearchMediaType,
+  requireWebSearchCoreApiKey,
+  requireWebSearchCoreQuery,
+  requireWebSearchCoreResultCount,
+  validateWebSearchResultUrl,
+  webSearchBodyByteLength,
+  type WebSearchCoreErrorCategory,
+  type WebSearchCoreErrorContract,
+} from "./web-search-adapter-kit.js";
+
 export const GEMINI_ORIGIN = "https://generativelanguage.googleapis.com";
 export const GEMINI_API_VERSION = "v1beta";
 export const GEMINI_MODEL = "gemini-3.6-flash";
@@ -16,12 +35,7 @@ export const MAX_GEMINI_RESULT_TITLE_BYTES = 512;
 export const MAX_GEMINI_RESULT_URL_BYTES = 2_048;
 export const MAX_GEMINI_RESULT_TEXT_BYTES = 4_096;
 
-const MAX_QUERY_CHARACTERS = 2_000;
-const MAX_API_KEY_CHARACTERS = 4_096;
-const MAX_API_KEY_BYTES = 8 * 1_024;
-const MAX_RESULTS = 10;
-const CONTROL_CHARACTERS = /\p{Cc}/u;
-const CONTROL_CHARACTERS_GLOBAL = /\p{Cc}/gu;
+const GEMINI_LABEL = "Gemini";
 
 export interface GeminiRequestContract {
   url: typeof GEMINI_API_ENDPOINT;
@@ -41,23 +55,9 @@ export interface GeminiApiKeyCredential {
   readonly apiKey: string;
 }
 
-export type GeminiErrorCategory =
-  | "invalid_request"
-  | "authentication"
-  | "rate_limit"
-  | "upstream"
-  | "network"
-  | "timeout"
-  | "cancelled"
-  | "policy"
-  | "invalid_response";
+export type GeminiErrorCategory = WebSearchCoreErrorCategory;
 
-export interface GeminiErrorContract {
-  providerId: "gemini";
-  category: GeminiErrorCategory;
-  fallbackEligible: boolean;
-  message: string;
-}
+export type GeminiErrorContract = WebSearchCoreErrorContract<"gemini">;
 
 export interface GeminiResult {
   title: string;
@@ -81,91 +81,8 @@ export interface GeminiResponseContract {
   contentType?: string;
 }
 
-type JsonRecord = Record<string, unknown>;
-
-function codePointLength(value: string): number {
-  return Array.from(value).length;
-}
-
-function utf8ByteLength(value: string): number {
-  return new TextEncoder().encode(value).byteLength;
-}
-
-function responseBytes(body: string | Uint8Array): number {
-  return typeof body === "string" ? utf8ByteLength(body) : body.byteLength;
-}
-
-function sliceUtf8(value: string, maximum: number): string {
-  if (utf8ByteLength(value) <= maximum) return value;
-  let result = "";
-  let used = 0;
-  for (const character of value) {
-    const bytes = utf8ByteLength(character);
-    if (used + bytes > maximum) break;
-    result += character;
-    used += bytes;
-  }
-  return result;
-}
-
 function closedError(category: GeminiErrorCategory): GeminiErrorContract {
-  const fallbackEligible =
-    category === "rate_limit" ||
-    category === "upstream" ||
-    category === "network" ||
-    category === "timeout" ||
-    category === "invalid_response";
-  const messages: Record<GeminiErrorCategory, string> = {
-    invalid_request: "Gemini rejected the search request.",
-    authentication: "Gemini authentication failed.",
-    rate_limit: "Gemini search is temporarily rate limited.",
-    upstream: "Gemini search is temporarily unavailable.",
-    network: "Gemini search could not reach the provider.",
-    timeout: "Gemini search timed out.",
-    cancelled: "Gemini search was cancelled.",
-    policy: "Gemini search was blocked by the network policy.",
-    invalid_response: "Gemini returned an invalid response.",
-  };
-  return Object.freeze({
-    providerId: "gemini",
-    category,
-    fallbackEligible,
-    message: messages[category],
-  });
-}
-
-function normalizedQuery(value: unknown): string {
-  if (typeof value !== "string" || CONTROL_CHARACTERS.test(value)) {
-    throw new Error(closedError("invalid_request").message);
-  }
-  const query = value.trim();
-  if (!query || codePointLength(query) > MAX_QUERY_CHARACTERS) {
-    throw new Error(closedError("invalid_request").message);
-  }
-  return query;
-}
-
-function normalizedResultCount(value: number | undefined): number {
-  const count = value ?? 5;
-  if (!Number.isSafeInteger(count) || count < 1 || count > MAX_RESULTS) {
-    throw new Error(closedError("invalid_request").message);
-  }
-  return count;
-}
-
-function normalizedApiKey(value: unknown): string {
-  if (typeof value !== "string" || CONTROL_CHARACTERS.test(value)) {
-    throw new Error(closedError("authentication").message);
-  }
-  const key = value.trim();
-  if (
-    !key ||
-    codePointLength(key) > MAX_API_KEY_CHARACTERS ||
-    utf8ByteLength(key) > MAX_API_KEY_BYTES
-  ) {
-    throw new Error(closedError("authentication").message);
-  }
-  return key;
+  return createWebSearchCoreError("gemini", GEMINI_LABEL, category);
 }
 
 /** Build Gemini's fixed-origin `generateContent` request with Google Search. */
@@ -174,23 +91,23 @@ export function buildGeminiRequest(
   numResultsValue: number | undefined,
   apiKeyValue: string | GeminiApiKeyCredential,
 ): GeminiRequestContract {
-  const query = normalizedQuery(queryValue);
+  const query = requireWebSearchCoreQuery(queryValue, "gemini", GEMINI_LABEL);
   // Google Search grounding does not expose a result-count request field;
   // Aiden applies the common cap while mapping grounding chunks below.
-  normalizedResultCount(numResultsValue);
+  requireWebSearchCoreResultCount(numResultsValue, "gemini", GEMINI_LABEL);
   const rawApiKey =
     typeof apiKeyValue === "string"
       ? apiKeyValue
       : apiKeyValue?.mode === "api-key"
         ? apiKeyValue.apiKey
         : undefined;
-  const apiKey = normalizedApiKey(rawApiKey);
+  const apiKey = requireWebSearchCoreApiKey(rawApiKey, "gemini", GEMINI_LABEL);
   const body = JSON.stringify({
     contents: [{ role: "user", parts: [{ text: query }] }],
     // Keep this spelling aligned with the audited Pi Web Access integration.
     tools: [{ google_search: {} }],
   });
-  if (responseBytes(body) > MAX_GEMINI_REQUEST_BYTES) {
+  if (webSearchBodyByteLength(body) > MAX_GEMINI_REQUEST_BYTES) {
     throw new Error(closedError("invalid_request").message);
   }
   return Object.freeze({
@@ -212,65 +129,11 @@ export function buildGeminiRequest(
 }
 
 export function geminiHttpError(status: unknown): GeminiErrorContract {
-  if (typeof status !== "number" || !Number.isSafeInteger(status)) {
-    return closedError("invalid_response");
-  }
-  if (status < 100 || status > 599) return closedError("invalid_response");
-  if (status >= 300 && status < 400) return closedError("policy");
-  if (status === 401 || status === 403) return closedError("authentication");
-  if (status === 408) return closedError("timeout");
-  if (status === 429) return closedError("rate_limit");
-  if (status >= 400 && status < 500) return closedError("invalid_request");
-  if (status >= 500) return closedError("upstream");
-  return closedError("invalid_response");
+  return mapWebSearchCoreHttpError("gemini", GEMINI_LABEL, status);
 }
 
 export function geminiTransportError(kind: unknown): GeminiErrorContract {
-  if (kind === "redirect") return closedError("policy");
-  if (kind === "network" || kind === "timeout" || kind === "cancelled") {
-    return closedError(kind);
-  }
-  return closedError("invalid_response");
-}
-
-function isRecord(value: unknown): value is JsonRecord {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function decodeResponseBody(body: unknown): string | undefined {
-  if (typeof body !== "string" && !(body instanceof Uint8Array)) return undefined;
-  if (responseBytes(body) > MAX_GEMINI_RESPONSE_BYTES) return undefined;
-  if (typeof body === "string") return body;
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(body);
-  } catch {
-    return undefined;
-  }
-}
-
-function boundedText(value: unknown, maximum: number): string {
-  if (typeof value !== "string") return "";
-  const normalized = value.replace(CONTROL_CHARACTERS_GLOBAL, " ").replace(/\s+/gu, " ").trim();
-  return sliceUtf8(normalized, maximum);
-}
-
-function safeResultUrl(value: unknown): string | undefined {
-  if (typeof value !== "string" || CONTROL_CHARACTERS.test(value)) return undefined;
-  const url = value.trim();
-  if (!url || utf8ByteLength(url) > MAX_GEMINI_RESULT_URL_BYTES) return undefined;
-  try {
-    const parsed = new URL(url);
-    if (
-      (parsed.protocol !== "https:" && parsed.protocol !== "http:") ||
-      parsed.username ||
-      parsed.password
-    ) {
-      return undefined;
-    }
-  } catch {
-    return undefined;
-  }
-  return url;
+  return mapWebSearchCoreTransportError("gemini", GEMINI_LABEL, kind);
 }
 
 interface GroundingChunk {
@@ -298,7 +161,7 @@ function parseGroundingChunks(
   const resultIndexByChunk = new Map<number, number>();
   for (const [index, chunk] of chunks.entries()) {
     if (!isRecord(chunk) || !isRecord(chunk.web)) continue;
-    const url = safeResultUrl(chunk.web.uri);
+    const url = validateWebSearchResultUrl(chunk.web.uri, MAX_GEMINI_RESULT_URL_BYTES);
     if (!url) continue;
     const duplicateResultIndex = results.findIndex((result) => result.url === url);
     if (duplicateResultIndex >= 0) {
@@ -306,7 +169,7 @@ function parseGroundingChunks(
       continue;
     }
     const title =
-      boundedText(chunk.web.title, MAX_GEMINI_RESULT_TITLE_BYTES) || `Source ${index + 1}`;
+      boundWebSearchText(chunk.web.title, MAX_GEMINI_RESULT_TITLE_BYTES) || `Source ${index + 1}`;
     resultIndexByChunk.set(index, results.length);
     results.push({ title, url, text: "" });
     if (results.length >= maximumResults) break;
@@ -322,7 +185,7 @@ function applyGroundingSupports(
   if (!Array.isArray(value)) return;
   for (const support of value as unknown as GroundingSupport[]) {
     if (!isRecord(support)) continue;
-    const text = boundedText(
+    const text = boundWebSearchText(
       isRecord(support.segment) ? support.segment.text : undefined,
       MAX_GEMINI_RESULT_TEXT_BYTES,
     );
@@ -338,9 +201,9 @@ function applyGroundingSupports(
 /** Parse one bounded Gemini grounding response into attributed source evidence. */
 export function parseGeminiResponse(
   response: GeminiResponseContract,
-  maximumResults = MAX_RESULTS,
+  maximumResults = WEB_SEARCH_RESULTS_MAX_COUNT,
 ): GeminiParseOutcome {
-  if (!Number.isSafeInteger(maximumResults) || maximumResults < 1 || maximumResults > MAX_RESULTS) {
+  if (!isValidWebSearchResultCount(maximumResults)) {
     return { ok: false, error: closedError("invalid_request") };
   }
   if (
@@ -351,14 +214,11 @@ export function parseGeminiResponse(
   ) {
     return { ok: false, error: geminiHttpError(response?.status) };
   }
-  const mediaType =
-    typeof response.contentType === "string"
-      ? response.contentType.split(";", 1)[0]?.trim().toLowerCase()
-      : undefined;
+  const mediaType = parseWebSearchMediaType(response.contentType);
   if (mediaType !== undefined && mediaType !== "application/json") {
     return { ok: false, error: closedError("invalid_response") };
   }
-  const body = decodeResponseBody(response?.body);
+  const body = decodeWebSearchBody(response?.body, MAX_GEMINI_RESPONSE_BYTES);
   if (body === undefined) return { ok: false, error: closedError("invalid_response") };
   let payload: unknown;
   try {

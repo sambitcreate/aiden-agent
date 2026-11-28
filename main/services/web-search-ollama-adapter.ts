@@ -1,9 +1,12 @@
 /** Ollama Cloud web-search adapter (API-key mode only). */
 
-import { isRecord, normalizeWebSearchSourceUrl } from "./web-search-adapter-kit.js";
+import { isRecord } from "./web-search-adapter-kit.js";
 import {
+  collectUniqueWebSearchResults,
   createWebSearchJsonAdapter,
-  normalizeWebSearchApiKey,
+  extractWebSearchApiKeyCredential,
+  freezeWebSearchJsonRequest,
+  isValidWebSearchResultCount,
   normalizeWebSearchJsonInput,
   type WebSearchJsonAdapterDefinition,
   type WebSearchJsonAdapterOptions,
@@ -24,45 +27,23 @@ export interface OllamaCloudWebSearchApiKeyCredential {
 
 export type OllamaCloudWebSearchCredential = OllamaCloudWebSearchApiKeyCredential | string;
 
-function credentialValue(value: unknown): string {
-  if (typeof value === "string") return normalizeWebSearchApiKey("ollama", value);
-  if (isRecord(value) && value.mode === "api-key" && typeof value.apiKey === "string") {
-    return normalizeWebSearchApiKey("ollama", value.apiKey);
-  }
-  throw webSearchError("auth", "ollama");
-}
-
-function requestContract(
-  query: string,
-  numResults: number,
-  apiKey: string,
-): WebSearchJsonRequestContract {
-  const body = JSON.stringify({ query, max_results: numResults });
-  return Object.freeze({
-    url: OLLAMA_CLOUD_WEB_SEARCH_ENDPOINT,
-    init: Object.freeze({
-      method: "POST" as const,
-      redirect: "error" as const,
-      credentials: "omit" as const,
-      cache: "no-store" as const,
-      referrerPolicy: "no-referrer" as const,
-      headers: Object.freeze({
-        Accept: "application/json",
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      }),
-      body,
-    }),
-  });
-}
-
 function buildRequestValues(
   queryValue: unknown,
   numResultsValue: unknown,
   credential: unknown,
 ): WebSearchJsonRequestContract {
   const { query, numResults } = normalizeWebSearchJsonInput("ollama", queryValue, numResultsValue);
-  return requestContract(query, numResults, credentialValue(credential));
+  const apiKey = extractWebSearchApiKeyCredential("ollama", credential);
+  return freezeWebSearchJsonRequest({
+    url: OLLAMA_CLOUD_WEB_SEARCH_ENDPOINT,
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ query, max_results: numResults }),
+  });
 }
 
 /** Build the fixed-origin Ollama Cloud request without performing I/O. */
@@ -79,26 +60,18 @@ export function parseOllamaCloudWebSearchResponse(
   payload: unknown,
   maximumResults: number,
 ): { results: readonly WebSearchJsonRawResult[] } | undefined {
-  if (!Number.isSafeInteger(maximumResults) || maximumResults < 1 || maximumResults > 10) {
+  if (
+    !isValidWebSearchResultCount(maximumResults) ||
+    !isRecord(payload) ||
+    !Array.isArray(payload.results)
+  ) {
     return undefined;
   }
-  if (!isRecord(payload) || !Array.isArray(payload.results)) return undefined;
 
-  const results: WebSearchJsonRawResult[] = [];
-  const seen = new Set<string>();
-  for (const item of payload.results) {
-    if (!isRecord(item)) continue;
-    const url = normalizeWebSearchSourceUrl(item.url);
-    if (!url || seen.has(url)) continue;
-    seen.add(url);
-    results.push({
-      title: item.title,
-      url,
-      text: item.content,
-    });
-    if (results.length >= maximumResults) break;
-  }
-  return { results };
+  return collectUniqueWebSearchResults(payload.results, maximumResults, (item) => ({
+    title: item.title,
+    text: item.content,
+  }));
 }
 
 const OLLAMA_CLOUD_DEFINITION: WebSearchJsonAdapterDefinition = Object.freeze({

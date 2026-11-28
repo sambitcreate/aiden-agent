@@ -1,9 +1,12 @@
 /** Brave Search web-search adapter (API-key mode only). */
 
-import { isRecord, normalizeWebSearchSourceUrl } from "./web-search-adapter-kit.js";
+import { codePointLength, isRecord } from "./web-search-adapter-kit.js";
 import {
+  collectUniqueWebSearchResults,
   createWebSearchJsonAdapter,
-  normalizeWebSearchApiKey,
+  extractWebSearchApiKeyCredential,
+  freezeWebSearchJsonRequest,
+  isValidWebSearchResultCount,
   normalizeWebSearchJsonInput,
   requireWebSearchApiKey,
   type WebSearchJsonAdapterDefinition,
@@ -26,21 +29,15 @@ export interface BraveWebSearchApiKeyCredential {
 
 export type BraveWebSearchCredential = BraveWebSearchApiKeyCredential | string;
 
-function credentialValue(value: unknown): string {
-  if (typeof value === "string") return normalizeWebSearchApiKey("brave", value);
-  if (isRecord(value) && value.mode === "api-key" && typeof value.apiKey === "string") {
-    return normalizeWebSearchApiKey("brave", value.apiKey);
-  }
-  throw webSearchError("auth", "brave");
-}
-
-function requestContract(
-  query: string,
-  numResults: number,
-  apiKey: string,
+function buildRequestValues(
+  queryValue: unknown,
+  numResultsValue: unknown,
+  credential: unknown,
 ): WebSearchJsonRequestContract {
+  const { query, numResults } = normalizeWebSearchJsonInput("brave", queryValue, numResultsValue);
+  const apiKey = extractWebSearchApiKeyCredential("brave", credential);
   if (
-    Array.from(query).length > BRAVE_WEB_SEARCH_QUERY_MAX_CHARS ||
+    codePointLength(query) > BRAVE_WEB_SEARCH_QUERY_MAX_CHARS ||
     query.split(/\s+/u).length > BRAVE_WEB_SEARCH_QUERY_MAX_WORDS
   ) {
     throw webSearchError("invalid-request", "brave");
@@ -48,29 +45,14 @@ function requestContract(
   const url = new URL(BRAVE_WEB_SEARCH_ENDPOINT);
   url.searchParams.set("q", query);
   url.searchParams.set("count", String(numResults));
-  return Object.freeze({
+  return freezeWebSearchJsonRequest({
     url: url.toString(),
-    init: Object.freeze({
-      method: "GET" as const,
-      redirect: "error" as const,
-      credentials: "omit" as const,
-      cache: "no-store" as const,
-      referrerPolicy: "no-referrer" as const,
-      headers: Object.freeze({
-        Accept: "application/json",
-        "X-Subscription-Token": apiKey,
-      }),
-    }),
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      "X-Subscription-Token": apiKey,
+    },
   });
-}
-
-function buildRequestValues(
-  queryValue: unknown,
-  numResultsValue: unknown,
-  credential: unknown,
-): WebSearchJsonRequestContract {
-  const { query, numResults } = normalizeWebSearchJsonInput("brave", queryValue, numResultsValue);
-  return requestContract(query, numResults, credentialValue(credential));
 }
 
 /** Build the fixed-origin Brave request without performing I/O. */
@@ -87,31 +69,17 @@ export function parseBraveWebSearchResponse(
   payload: unknown,
   maximumResults: number,
 ): { results: readonly WebSearchJsonRawResult[] } | undefined {
-  if (!Number.isSafeInteger(maximumResults) || maximumResults < 1 || maximumResults > 10) {
-    return undefined;
-  }
-  if (!isRecord(payload)) return undefined;
+  if (!isValidWebSearchResultCount(maximumResults) || !isRecord(payload)) return undefined;
   // Brave documents `web` as nullable for a successful search with no web
   // matches. Preserve that valid empty result set while rejecting an absent
   // or incorrectly typed envelope.
   if (payload.web === null) return { results: [] };
   if (!isRecord(payload.web) || !Array.isArray(payload.web.results)) return undefined;
 
-  const results: WebSearchJsonRawResult[] = [];
-  const seen = new Set<string>();
-  for (const item of payload.web.results) {
-    if (!isRecord(item)) continue;
-    const url = normalizeWebSearchSourceUrl(item.url);
-    if (!url || seen.has(url)) continue;
-    seen.add(url);
-    results.push({
-      title: item.title,
-      url,
-      text: item.description ?? item.snippet,
-    });
-    if (results.length >= maximumResults) break;
-  }
-  return { results };
+  return collectUniqueWebSearchResults(payload.web.results, maximumResults, (item) => ({
+    title: item.title,
+    text: item.description ?? item.snippet,
+  }));
 }
 
 const BRAVE_DEFINITION: WebSearchJsonAdapterDefinition = Object.freeze({

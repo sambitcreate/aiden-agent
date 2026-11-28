@@ -1,9 +1,12 @@
 /** SERPdive Search API web-search adapter (API-key mode only). */
 
-import { isRecord, normalizeWebSearchSourceUrl } from "./web-search-adapter-kit.js";
+import { codePointLength, isRecord } from "./web-search-adapter-kit.js";
 import {
+  collectUniqueWebSearchResults,
   createWebSearchJsonAdapter,
-  normalizeWebSearchApiKey,
+  extractWebSearchApiKeyCredential,
+  freezeWebSearchJsonRequest,
+  isValidWebSearchResultCount,
   normalizeWebSearchJsonInput,
   type WebSearchJsonAdapterDefinition,
   type WebSearchJsonAdapterOptions,
@@ -27,42 +30,6 @@ export interface SerpDiveWebSearchApiKeyCredential {
 
 export type SerpDiveWebSearchCredential = SerpDiveWebSearchApiKeyCredential | string;
 
-function credentialValue(value: unknown): string {
-  if (typeof value === "string") return normalizeWebSearchApiKey("serpdive", value);
-  if (isRecord(value) && value.mode === "api-key" && typeof value.apiKey === "string") {
-    return normalizeWebSearchApiKey("serpdive", value.apiKey);
-  }
-  throw webSearchError("auth", "serpdive");
-}
-
-function requestContract(
-  query: string,
-  numResults: number,
-  apiKey: string,
-): WebSearchJsonRequestContract {
-  const body = JSON.stringify({
-    query,
-    model: SERPDIVE_WEB_SEARCH_MODEL,
-    max_results: numResults,
-  });
-  return Object.freeze({
-    url: SERPDIVE_WEB_SEARCH_ENDPOINT,
-    init: Object.freeze({
-      method: "POST" as const,
-      redirect: "error" as const,
-      credentials: "omit" as const,
-      cache: "no-store" as const,
-      referrerPolicy: "no-referrer" as const,
-      headers: Object.freeze({
-        Accept: "application/json",
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      }),
-      body,
-    }),
-  });
-}
-
 function buildRequestValues(
   queryValue: unknown,
   numResultsValue: unknown,
@@ -73,10 +40,24 @@ function buildRequestValues(
     queryValue,
     numResultsValue,
   );
-  if (Array.from(query).length > SERPDIVE_WEB_SEARCH_QUERY_MAX_CHARS) {
+  if (codePointLength(query) > SERPDIVE_WEB_SEARCH_QUERY_MAX_CHARS) {
     throw webSearchError("invalid-request", "serpdive");
   }
-  return requestContract(query, numResults, credentialValue(credential));
+  const apiKey = extractWebSearchApiKeyCredential("serpdive", credential);
+  return freezeWebSearchJsonRequest({
+    url: SERPDIVE_WEB_SEARCH_ENDPOINT,
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      query,
+      model: SERPDIVE_WEB_SEARCH_MODEL,
+      max_results: numResults,
+    }),
+  });
 }
 
 /** Build the fixed-origin SERPdive request without performing I/O. */
@@ -117,30 +98,16 @@ export function parseSerpDiveWebSearchResponse(
   payload: unknown,
   maximumResults: number,
 ): { results: readonly WebSearchJsonRawResult[] } | undefined {
-  if (!Number.isSafeInteger(maximumResults) || maximumResults < 1 || maximumResults > 10) {
-    return undefined;
-  }
-  if (!isRecord(payload)) return undefined;
+  if (!isValidWebSearchResultCount(maximumResults) || !isRecord(payload)) return undefined;
   if (payload.error !== undefined && payload.error !== null) {
     throw webSearchError(businessErrorKind(payload.error), "serpdive");
   }
   if (!Array.isArray(payload.results)) return undefined;
 
-  const results: WebSearchJsonRawResult[] = [];
-  const seen = new Set<string>();
-  for (const item of payload.results) {
-    if (!isRecord(item)) continue;
-    const url = normalizeWebSearchSourceUrl(item.url);
-    if (!url || seen.has(url)) continue;
-    seen.add(url);
-    results.push({
-      title: item.title,
-      url,
-      text: item.content ?? item.snippet,
-    });
-    if (results.length >= maximumResults) break;
-  }
-  return { results };
+  return collectUniqueWebSearchResults(payload.results, maximumResults, (item) => ({
+    title: item.title,
+    text: item.content ?? item.snippet,
+  }));
 }
 
 const SERPDIVE_DEFINITION: WebSearchJsonAdapterDefinition = Object.freeze({
