@@ -182,3 +182,37 @@ test("the real registry schedules every build and preserved command exactly once
     assert.deepEqual(plan.prerequisites.map((entry) => entry.id).toSorted(), [...required].toSorted(), label);
   }
 });
+
+test("renderer-other skips cli-package when packages/cli is unreachable and keeps it when reachable or forced", () => {
+  const registry = readRegistry();
+  const unreachable = buildPlan(registry, {
+    ...parseArguments(["--lane", "renderer-other"]),
+    selection: {
+      unit: { mode: "related", files: ["renderer/lib/chat-message-queue.test.ts"] },
+      cli: { run: false, reason: "unreachable" },
+    },
+  });
+  assert.ok(!unreachable.preserved.some((entry) => entry.id === "cli-package"));
+  assert.ok(unreachable.preserved.some((entry) => entry.id === "ios-release-policy"));
+
+  for (const [label, selection] of [
+    ["reachable-pr", { unit: { mode: "related", files: [] }, cli: { run: true, reason: "related" } }],
+    ["forced-full", { unit: { mode: "all", files: [] }, cli: { run: true, reason: "push" } }],
+    ["no-selection", null],
+  ]) {
+    const plan = buildPlan(registry, {
+      ...parseArguments(["--lane", "renderer-other"]),
+      selection,
+    });
+    assert.ok(plan.preserved.some((entry) => entry.id === "cli-package"), label);
+  }
+
+  const explicitPreserved = buildPlan(registry, {
+    ...parseArguments(["--lane", "renderer-other", "--preserved", "cli-package"]),
+    selection: {
+      unit: { mode: "related", files: [] },
+      cli: { run: false, reason: "unreachable" },
+    },
+  });
+  assert.deepEqual(explicitPreserved.preserved.map((entry) => entry.id), ["ios-release-policy", "cli-package"]);
+});

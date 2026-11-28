@@ -521,6 +521,49 @@ export function selectRelatedE2ESpecs({
   return { mode: "related", reason: "related", specs: specsSelected };
 }
 
+export function selectRelatedCli({
+  changedPaths,
+  testFiles,
+  sourceFiles,
+  readFile,
+} = {}) {
+  const changed = [...new Set((changedPaths ?? []).map(posix))];
+  const tests = [...new Set((testFiles ?? []).map(posix))];
+  if (changed.length === 0) return { run: true, reason: "invalid-path-list" };
+  if (changed.some((file) => requiresFullUnit(file))) {
+    return { run: true, reason: "infrastructure" };
+  }
+  if (changed.some((file) => file.startsWith("packages/cli/"))) {
+    return { run: true, reason: "related" };
+  }
+  if (changed.some((file) => !isScannedPath(file) && !tests.includes(file))) {
+    return { run: true, reason: "unmapped-path" };
+  }
+
+  const graphFiles = [...new Set([...(sourceFiles ?? []), ...tests])];
+  const { present, importers } = buildReverseImportGraph(graphFiles, readFile);
+  const reachable = new Set();
+  const queue = [];
+  for (const file of changed) {
+    if (!present.has(file) && !tests.includes(file)) {
+      return { run: true, reason: "unmapped-path" };
+    }
+    queue.push(file);
+    for (const companion of companionTestFiles(file, present)) queue.push(companion);
+  }
+  while (queue.length > 0) {
+    const file = queue.pop();
+    if (reachable.has(file)) continue;
+    reachable.add(file);
+    if (file.startsWith("packages/cli/")) {
+      return { run: true, reason: "related" };
+    }
+    for (const importer of importers.get(file) ?? []) queue.push(importer);
+  }
+
+  return { run: false, reason: "unreachable" };
+}
+
 export function selectReachableTests({
   eventName,
   changedPaths,
@@ -535,6 +578,7 @@ export function selectReachableTests({
       reason: eventName === "push" || eventName === "merge_group" ? "forced-full" : "non-pull-request",
       unit: { mode: "all", reason: "forced-full", files: testFiles ?? [] },
       e2e: { mode: "all", reason: "forced-full", specs: (specs ?? []).filter((file) => !file.endsWith(".live.spec.ts") && file !== "diagnostics-production.spec.ts") },
+      cli: { run: true, reason: "forced-full" },
     };
   }
   const reader = readFile ?? ((file) => readFileSync(path.join(PROJECT_ROOT, file), "utf8"));
@@ -543,6 +587,7 @@ export function selectReachableTests({
     reason: "related",
     unit: selectRelatedUnitFiles({ changedPaths, testFiles, sourceFiles: sources, readFile: reader }),
     e2e: selectRelatedE2ESpecs({ changedPaths, specs, map }),
+    cli: selectRelatedCli({ changedPaths, testFiles, sourceFiles: sources, readFile: reader }),
   };
 }
 

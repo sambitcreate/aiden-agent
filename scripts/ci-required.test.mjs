@@ -20,6 +20,7 @@ function needsFor(decisions = allTrue, overrides = {}) {
     "cli-linux": { result: "success" },
     e2e: { result: "success" },
     ios: { result: "success" },
+    "linux-build": { result: "success" },
     "linux-e2e": { result: "success" },
     policy: { result: "success" },
     static: { result: "success" },
@@ -65,6 +66,8 @@ test("a job selected by several areas may skip only when all of them are false",
     catalog: { result: "skipped" },
     e2e: { result: "skipped" },
     ios: { result: "skipped" },
+    "linux-build": { result: "skipped" },
+    "linux-e2e": { result: "skipped" },
     static: { result: "skipped" },
     unit: { result: "skipped" },
     verify: { result: "skipped" },
@@ -85,18 +88,25 @@ test("a job selected by several areas may skip only when all of them are false",
   assert.deepEqual(missingUnit.failures, [{ job: "unit", reason: "unexpected-skip" }]);
 });
 
-test("a desktop PR without macOS-only specs skips macOS E2E but still needs the Linux shards", () => {
+test("a desktop PR without macOS-only specs skips macOS build and E2E but still needs linux-build and Linux shards", () => {
   // A renderer-only PR: desktop selected, Linux packaging not, no macOS-only spec.
   const rendererPr = { ...allTrue, apple: false, ios: false, android: false, cli: false, linux: false, catalog: false, "mac-e2e": false };
   const skippedPlatforms = {
     android: { result: "skipped" },
     apple: { result: "skipped" },
+    build: { result: "skipped" },
     catalog: { result: "skipped" },
     "cli-linux": { result: "skipped" },
     e2e: { result: "skipped" },
     ios: { result: "skipped" },
   };
   assert.equal(evaluateRequiredGate(needsFor(rendererPr, skippedPlatforms).needs, rendererPr).ok, true);
+
+  const linuxBuildSkipped = evaluateRequiredGate(
+    needsFor(rendererPr, { ...skippedPlatforms, "linux-build": { result: "skipped" } }).needs,
+    rendererPr,
+  );
+  assert.deepEqual(linuxBuildSkipped.failures, [{ job: "linux-build", reason: "unexpected-skip" }]);
 
   const linuxSkipped = evaluateRequiredGate(
     needsFor(rendererPr, { ...skippedPlatforms, "linux-e2e": { result: "skipped" } }).needs,
@@ -109,10 +119,13 @@ test("a desktop PR without macOS-only specs skips macOS E2E but still needs the 
   );
   assert.deepEqual(linuxFailed.failures, [{ job: "linux-e2e", reason: "result-failure" }]);
 
-  // When the plan selects macOS E2E (main, or a PR touching a macOS-only spec), its skip fails.
+  // When the plan selects macOS E2E (main, or a PR touching a macOS-only spec), skipping build or e2e fails.
   const planned = { ...rendererPr, "mac-e2e": true };
   const macSkipped = evaluateRequiredGate(needsFor(planned, skippedPlatforms).needs, planned);
-  assert.deepEqual(macSkipped.failures, [{ job: "e2e", reason: "unexpected-skip" }]);
+  assert.deepEqual(macSkipped.failures, [
+    { job: "build", reason: "unexpected-skip" },
+    { job: "e2e", reason: "unexpected-skip" },
+  ]);
 });
 
 test("failed, canceled, unknown, and missing results fail the aggregate", () => {

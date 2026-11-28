@@ -61,8 +61,8 @@ test("CI assigns platform work conservatively and exposes one complete required 
   // requires its per-arch checks. A skipped matrix job reports under the
   // unexpanded name, so the job always starts and every step carries the gate.
   const linuxGate = "needs.changes.outputs.linux == 'true'";
-  assert.equal(jobs.linux.if, undefined);
-  assert.ok([jobs.linux.needs].flat().includes("changes"));
+  assert.equal(jobs.linux.if, "${{ !failure() && !cancelled() }}");
+  assert.deepEqual(jobs.linux.needs, ["changes", "linux-build"]);
   for (const step of jobs.linux.steps) {
     if (String(step.if ?? "").includes("failure()")) continue;
     assert.ok(String(step.if ?? "").includes(linuxGate), step.name);
@@ -153,14 +153,16 @@ test("Fedora installs the baseline-verified RPM instead of rebuilding native mod
   assert.doesNotMatch(rpmJob, /\brpm-build\b/u);
 });
 
-test("Linux pull-request E2E never grants privileges to checkout content", async () => {
+test("Linux pull-request builds and E2E never grant privileges to checkout content", async () => {
   const workflow = await readFile(workflowUrl, "utf8");
+  const linuxBuildJob = workflow.match(/^ {2}linux-build:\n[\s\S]*?(?=^ {2}\S|(?![\s\S]))/mu)?.[0];
   const linuxJob = workflow.match(/^ {2}linux:\n[\s\S]*?(?=^ {2}\S|(?![\s\S]))/mu)?.[0];
   const e2eJob = workflow.match(/^ {2}linux-e2e:\n[\s\S]*?(?=^ {2}\S|(?![\s\S]))/mu)?.[0];
+  assert.ok(linuxBuildJob, "Linux build job is missing");
   assert.ok(linuxJob, "Linux package job is missing");
   assert.ok(e2eJob, "Linux E2E job is missing");
 
-  for (const job of [linuxJob, e2eJob]) {
+  for (const job of [linuxBuildJob, linuxJob, e2eJob]) {
     assert.match(job, /^ {4}permissions:\n {6}contents: read\n/mu);
     const checkout = job.match(/- name: Check out source\n[\s\S]*?(?=\n {6}- name:)/u)?.[0];
     assert.match(checkout ?? "", /persist-credentials: false/u);
@@ -220,8 +222,13 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
     ["macos"],
   );
   assert.equal(jobs.unit["runs-on"], "${{ github.event_name == 'pull_request' && matrix.runner || 'macos-26' }}");
+  const playwrightCache = jobs.unit.steps.find((step) => step.id === "playwright-cache");
+  assert.equal(playwrightCache.if, "${{ matrix.chromium == true }}");
+  assert.equal(playwrightCache.uses, "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9");
   const browserInstall = jobs.unit.steps.find((step) => step.run === "npx playwright install --with-deps chromium");
-  assert.equal(browserInstall.if, "${{ matrix.chromium == true }}");
+  assert.equal(browserInstall.if, "${{ matrix.chromium == true && steps.playwright-cache.outputs.cache-hit != 'true' }}");
+  const browserDeps = jobs.unit.steps.find((step) => step.run === "npx playwright install-deps chromium");
+  assert.equal(browserDeps.if, "${{ matrix.chromium == true && runner.os == 'Linux' && steps.playwright-cache.outputs.cache-hit == 'true' }}");
   const registry = readRegistry();
   const browserModes = new Set(registry.preserved.filter((entry) => ["browser", "chromium"].includes(entry.kind)).map((entry) => entry.id));
   const browserLanes = registry.lanes.filter((lane) => lane.preserved.some((id) => browserModes.has(id))).map((lane) => lane.name);
@@ -276,23 +283,47 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
     "${{ runner.temp }}/AidenOnTheGoSimulator.xcresult\n${{ runner.temp }}/AidenOnTheGoShellUI.xcresult",
   );
   assert.equal(simulatorResults.with["retention-days"], 7);
-  // One macOS job builds the production bundles; E2E shards and verify reuse
-  // them. Linux shards build their own so they never wait for a macOS slot.
+  // One macOS job builds the production bundles when mac-e2e is selected; one
+  // Ubuntu linux-build job feeds Linux E2E shards, Linux x64 packaging, and verify.
   const builders = Object.entries(jobs)
     .filter(([, job]) => job.steps?.some((step) => step.run === "npm run build"))
     .map(([name]) => name);
-  assert.deepEqual(builders, ["build", "linux-e2e"]);
+  assert.deepEqual(builders, ["build", "linux-build"]);
+  assert.equal(jobs.build.if, "${{ needs.changes.outputs.mac-e2e == 'true' }}");
   const bundle = jobs.build.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
   // Downloads follow the producer output, even when only a consumer is rerun
   // and its github.run_attempt differs from the successful build's attempt.
   assert.equal(jobs.build.outputs["artifact-name"], bundle.with.name);
   assert.equal(bundle.with.name, "${{ steps.bundle.outputs.name }}");
   assert.ok(jobs.build.steps.some((step) => step.id === "bundle"));
-  for (const consumer of ["e2e", "verify"]) {
-    assert.ok(jobs[consumer].needs.includes("build"), consumer);
-    const download = jobs[consumer].steps.find((step) => step.with?.name === "${{ needs.build.outputs.artifact-name }}");
+  assert.ok(jobs.build.steps.some((step) => step.run === "npm run check:bundle-budget"));
+  assert.ok(jobs.e2e.needs.includes("build"));
+  assert.ok(jobs.e2e.steps.some((step) => step.with?.name === "${{ needs.build.outputs.artifact-name }}"));
+
+  assert.equal(jobs["linux-build"]["runs-on"], "ubuntu-24.04");
+  assert.equal(jobs["linux-build"].if, "${{ needs.changes.outputs.desktop == 'true' || needs.changes.outputs.linux == 'true' }}");
+  const linuxBundle = jobs["linux-build"].steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+  assert.equal(jobs["linux-build"].outputs["artifact-name"], linuxBundle.with.name);
+  assert.equal(linuxBundle.with.name, "${{ steps.bundle.outputs.name }}");
+  assert.match(linuxBundle.with.path, /linux-desktop-build\.tar$/u);
+  assert.ok(jobs["linux-build"].steps.some((step) => step.id === "bundle"));
+  assert.ok(jobs["linux-build"].steps.some((step) => step.run === "npm run check:bundle-budget"));
+  for (const consumer of ["verify", "linux-e2e", "linux"]) {
+    assert.ok(jobs[consumer].needs.includes("linux-build"), consumer);
+    const download = jobs[consumer].steps.find((step) => step.with?.name === "${{ needs.linux-build.outputs.artifact-name }}");
     assert.ok(download, consumer);
+    assert.equal(download.uses, "actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e", consumer);
   }
+  const restoreVerify = jobs.verify.steps.findIndex((step) => String(step.run ?? "").includes("linux-desktop-build.tar"));
+  const rebuildVerifyNative = jobs.verify.steps.findIndex((step) => step.run === "rm -rf build/native && npm run build:native:c");
+  const smokeVerify = jobs.verify.steps.findIndex((step) => step.run === "npm run test:foreground-file-tools:electron");
+  const diagnosticsVerify = jobs.verify.steps.findIndex((step) => step.run === "npm run test:e2e:diagnostics:production:run");
+  assert.ok(restoreVerify >= 0 && rebuildVerifyNative > restoreVerify && smokeVerify > rebuildVerifyNative && diagnosticsVerify > rebuildVerifyNative);
+  const linuxDistStep = jobs.linux.steps.find((step) => step.name === "Build, install, and verify Linux distributions");
+  assert.match(linuxDistStep.run, /AIDEN_DISTRIBUTION_BUILD=1 npm run build:electron:production/u);
+  assert.match(linuxDistStep.run, /npm run package:model-catalog/u);
+  assert.match(linuxDistStep.run, /\.\/node_modules\/\.bin\/electron-builder --linux AppImage deb rpm --config\.forceCodeSigning=false --config\.directories\.output=release\/linux-distribution --publish never/u);
+  assert.match(linuxDistStep.run, /npm run dist:linux/u);
   assert.ok(jobs.verify.steps.some((step) => step.run === "npm run test:e2e:diagnostics:production:run"));
   const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.match(manifest.scripts["test:e2e:diagnostics:production:run"], /^AIDEN_E2E_RUNTIME_PROFILE=production playwright test tests\/e2e\/diagnostics-production\.spec\.ts /u);
@@ -477,49 +508,152 @@ test("Linux required contexts exist for scoped PRs and fail closed", async () =>
   assert.equal(gate.name, "Linux ${{ matrix.arch }}");
   assert.equal(gate.if, "${{ always() }}");
   assert.deepEqual(gate.strategy.matrix.arch, ["x64", "arm64"]);
-  assert.deepEqual(gate.needs, ["changes", "linux", "linux-e2e"]);
+  assert.deepEqual(gate.needs, ["changes", "linux-build", "linux", "linux-e2e"]);
   assert.deepEqual(jobs["linux-e2e"].strategy.matrix.shard, [1, 2, 3]);
   assert.equal(jobs["linux-e2e"].strategy["fail-fast"], false);
   assert.notEqual(jobs.linux.name, gate.name);
   const step = gate.steps[0];
   assert.deepEqual(step.env, {
     CHANGES_RESULT: "${{ needs.changes.result }}",
+    DESKTOP_SELECTED: "${{ needs.changes.outputs.desktop }}",
     LINUX_SELECTED: "${{ needs.changes.outputs.linux }}",
+    LINUX_BUILD_RESULT: "${{ needs.linux-build.result }}",
     LINUX_RESULT: "${{ needs.linux.result }}",
     LINUX_E2E_RESULT: "${{ needs.linux-e2e.result }}",
   });
-  for (const [detection, selected, result, e2e, expected] of [
-    ["success", "false", "skipped", "skipped", 0],
+  for (const [detection, desktop, selected, linuxBuild, result, e2e, expected] of [
+    ["success", "false", "false", "skipped", "skipped", "skipped", 0],
     // The linux matrix always starts and skips its steps when unselected, so GitHub reports success.
-    ["success", "false", "success", "skipped", 0],
-    ["success", "true", "success", "success", 0],
-    // A desktop-only PR runs the Linux E2E shards without packaging.
-    ["success", "false", "success", "success", 0],
-    ["success", "true", "failure", "success", 1],
-    ["success", "true", "cancelled", "success", 1],
-    ["success", "true", "skipped", "success", 1],
-    ["failure", "false", "skipped", "skipped", 1],
-    ["cancelled", "false", "skipped", "skipped", 1],
-    ["success", "", "skipped", "skipped", 1],
-    ["success", "false", "failure", "skipped", 1],
+    ["success", "false", "false", "skipped", "success", "skipped", 0],
+    ["success", "true", "true", "success", "success", "success", 0],
+    ["success", "false", "true", "success", "success", "success", 0],
+    // A desktop-only PR runs linux-build and the Linux E2E shards without packaging.
+    ["success", "true", "false", "success", "success", "success", 0],
+    ["success", "true", "true", "success", "failure", "success", 1],
+    ["success", "true", "true", "success", "cancelled", "success", 1],
+    ["success", "true", "true", "success", "skipped", "success", 1],
+    ["success", "true", "false", "failure", "success", "success", 1],
+    ["success", "true", "false", "cancelled", "success", "success", 1],
+    ["success", "true", "false", "skipped", "success", "success", 1],
+    ["success", "false", "true", "failure", "success", "success", 1],
+    ["success", "false", "true", "skipped", "success", "success", 1],
+    ["failure", "false", "false", "skipped", "skipped", "skipped", 1],
+    ["cancelled", "false", "false", "skipped", "skipped", "skipped", 1],
+    ["success", "", "false", "skipped", "skipped", "skipped", 1],
+    ["success", "false", "", "skipped", "skipped", "skipped", 1],
+    ["success", "false", "false", "skipped", "failure", "skipped", 1],
     // A failed, cancelled or missing E2E shard fails the required checks.
-    ["success", "true", "success", "failure", 1],
-    ["success", "true", "success", "cancelled", 1],
-    ["success", "true", "success", "skipped", 1],
-    ["success", "false", "success", "failure", 1],
+    ["success", "true", "true", "success", "success", "failure", 1],
+    ["success", "true", "true", "success", "success", "cancelled", 1],
+    ["success", "true", "true", "success", "success", "skipped", 1],
+    ["success", "true", "false", "success", "success", "failure", 1],
+    ["success", "true", "false", "success", "success", "skipped", 1],
   ]) {
     const run = spawnSync("bash", ["-e", "-c", step.run], {
       env: {
         ...process.env,
         CHANGES_RESULT: detection,
+        DESKTOP_SELECTED: desktop,
         LINUX_SELECTED: selected,
+        LINUX_BUILD_RESULT: linuxBuild,
         LINUX_RESULT: result,
         LINUX_E2E_RESULT: e2e,
       },
       encoding: "utf8",
     });
-    assert.equal(run.status, expected, `${detection}/${selected}/${result}/${e2e}: ${run.stdout}${run.stderr}`);
+    assert.equal(run.status, expected, `${detection}/${desktop}/${selected}/${linuxBuild}/${result}/${e2e}: ${run.stdout}${run.stderr}`);
   }
+});
+
+test("modified workflows pin actions to 40-char SHAs, resolve dependencies, and configure toolchain caches", async () => {
+  const workflowFiles = [
+    "ci.yml",
+    "release.yml",
+    "linux-installers.yml",
+    "server-bundle.yml",
+    "aiden-on-the-go-internal-testflight.yml",
+    "aiden-on-the-go-external-testflight.yml",
+  ];
+  const parsed = new Map();
+  for (const name of workflowFiles) {
+    const raw = await readFile(new URL(`../.github/workflows/${name}`, import.meta.url), "utf8");
+    assert.doesNotMatch(raw, /ELECTRON_SKIP_BINARY_DOWNLOAD/u, `${name} must not set ELECTRON_SKIP_BINARY_DOWNLOAD`);
+    const doc = parse(raw);
+    parsed.set(name, { raw, doc });
+    for (const [jobName, job] of Object.entries(doc.jobs ?? {})) {
+      for (const dependency of [job.needs ?? []].flat()) {
+        assert.ok(doc.jobs[dependency], `${name}:${jobName} depends on missing job ${dependency}`);
+      }
+      for (const step of job.steps ?? []) {
+        if (step.uses) {
+          assert.match(step.uses, /^[^@]+@[0-9a-f]{40}$/u, `${name}:${jobName} unpinned action ${step.uses}`);
+        }
+      }
+    }
+  }
+
+  const cacheAction = "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9";
+  const hasCachePath = (job, substring) =>
+    job.steps.some((step) => step.uses === cacheAction && String(step.with?.path ?? "").includes(substring));
+
+  // Electron & electron-builder caches across all 16 Electron job instances.
+  const ciJobs = parsed.get("ci.yml").doc.jobs;
+  const releaseJobs = parsed.get("release.yml").doc.jobs;
+  const linuxInstallerJobs = parsed.get("linux-installers.yml").doc.jobs;
+  assert.ok(hasCachePath(ciJobs.e2e, "~/Library/Caches/electron"));
+  assert.ok(hasCachePath(ciJobs.verify, "~/Library/Caches/electron"));
+  assert.ok(hasCachePath(ciJobs.linux, "~/.cache/electron") && hasCachePath(ciJobs.linux, "~/.cache/electron-builder"));
+  assert.ok(hasCachePath(ciJobs["linux-e2e"], "~/.cache/electron"));
+  assert.ok(hasCachePath(linuxInstallerJobs.build, "~/.cache/electron") && hasCachePath(linuxInstallerJobs.build, "~/.cache/electron-builder"));
+  assert.ok(hasCachePath(releaseJobs.release, "~/Library/Caches/electron") && hasCachePath(releaseJobs.release, "~/Library/Caches/electron-builder"));
+  assert.ok(hasCachePath(releaseJobs["linux-release"], "~/.cache/electron") && hasCachePath(releaseJobs["linux-release"], "~/.cache/electron-builder"));
+
+  // Playwright Chromium cache in release.yml as well as ci.yml unit.
+  const releasePlaywright = releaseJobs.release.steps.find((step) => step.id === "playwright-cache");
+  assert.equal(releasePlaywright?.uses, cacheAction);
+  assert.ok(String(releasePlaywright?.with?.path ?? "").includes("~/Library/Caches/ms-playwright"));
+
+  // Cargo caches across all 9 Rust job instances, isolating fedora:44 keys from ubuntu-24.04.
+  assert.ok(hasCachePath(ciJobs.unit, "build/computer-use-broker-test"));
+  assert.ok(hasCachePath(ciJobs.linux, "native/linux-managed-payload/target"));
+  assert.ok(hasCachePath(ciJobs["linux-rpm"], "native/linux-managed-payload/target"));
+  assert.ok(hasCachePath(linuxInstallerJobs.build, "native/linux-managed-payload/target"));
+  assert.ok(hasCachePath(releaseJobs.release, "build/computer-use-broker-cargo"));
+  assert.ok(hasCachePath(releaseJobs["linux-release"], "native/linux-managed-payload/target"));
+  const fedoraCargo = ciJobs["linux-rpm"].steps.find((step) => step.uses === cacheAction && String(step.with?.path ?? "").includes("native/linux-managed-payload/target"));
+  const ubuntuCargo = ciJobs.linux.steps.find((step) => step.uses === cacheAction && String(step.with?.path ?? "").includes("native/linux-managed-payload/target"));
+  assert.match(fedoraCargo.with.key, /fedora-44/u);
+  assert.doesNotMatch(ubuntuCargo.with.key, /fedora-44/u);
+
+  // CLI npm lockfile caching across server-bundle.yml, ci.yml unit, and release.yml release.
+  for (const [label, job] of [
+    ["server-bundle", parsed.get("server-bundle.yml").doc.jobs.bundle],
+    ["ci-unit", ciJobs.unit],
+    ["release", releaseJobs.release],
+  ]) {
+    const setupNode = job.steps.find((step) => step.uses?.startsWith("actions/setup-node@"));
+    assert.match(String(setupNode?.with?.["cache-dependency-path"] ?? ""), /packages\/cli\/package-lock\.json/u, label);
+  }
+
+  // BuildKit cache in cli-linux and cache mounts in packages/cli/Dockerfile.
+  assert.ok(hasCachePath(ciJobs["cli-linux"], ".buildx-cache"));
+  assert.ok(ciJobs["cli-linux"].steps.some((step) => String(step.run ?? "").includes("docker buildx build --load")));
+  const cliDockerfile = await readFile(new URL("../packages/cli/Dockerfile", import.meta.url), "utf8");
+  assert.match(cliDockerfile, /--mount=type=cache,target=\/var\/cache\/apt,sharing=locked/u);
+  assert.match(cliDockerfile, /--mount=type=cache,target=\/root\/\.npm/u);
+
+  // SwiftPM caches in both TestFlight workflows (DerivedData kept uncached) and Android 36 SDK cache.
+  for (const name of ["aiden-on-the-go-internal-testflight.yml", "aiden-on-the-go-external-testflight.yml"]) {
+    const job = parsed.get(name).doc.jobs.upload;
+    const spmCache = job.steps.find((step) => step.uses === cacheAction);
+    assert.ok(spmCache, name);
+    assert.match(String(spmCache.with.path), /AidenOnTheGoSourcePackages/u);
+    assert.doesNotMatch(String(spmCache.with.path), /DerivedData/u);
+  }
+  const androidCache = ciJobs.android.steps.find((step) => step.id === "android-sdk-cache");
+  assert.equal(androidCache?.uses, cacheAction);
+  assert.match(String(androidCache?.with?.path ?? ""), /platforms\/android-36/u);
+  assert.match(String(androidCache?.with?.path ?? ""), /system-images\/android-36\/google_apis\/x86_64/u);
 });
 
 const ISSUE_TEMPLATE_DIR = new URL("../.github/ISSUE_TEMPLATE/", import.meta.url);

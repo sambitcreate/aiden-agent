@@ -36,6 +36,29 @@ jobs:
       - name: Install Linux package dependencies
         run: sudo apt-get update && sudo apt-get install --yes rpm xvfb pkg-config libsecret-1-dev libselinux1-dev
 
+      - name: Restore Electron and electron-builder caches
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: electron-packaging-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-packaging-${{ runner.os }}-${{ runner.arch }}-
+            electron-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Restore Cargo cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            native/linux-managed-payload/target
+          key: cargo-linux-payload-ubuntu-24.04-${{ runner.arch }}-${{ hashFiles('native/linux-managed-payload/Cargo.lock') }}
+          restore-keys: |
+            cargo-linux-payload-ubuntu-24.04-${{ runner.arch }}-
+
       - name: Install locked dependencies
         run: npm ci
 
