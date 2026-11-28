@@ -210,6 +210,17 @@ function verdict(allowed: boolean, reason: string): BotToolVerdict {
   return allowed ? { allowed: true } : { allowed: false, reason };
 }
 
+function proposesUrlWatch(args: unknown): boolean {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return false;
+  const record = args as Record<string, unknown>;
+  if (record.action !== "propose" && record.action !== "revise") return false;
+  if (!record.trigger || typeof record.trigger !== "object" || Array.isArray(record.trigger)) return false;
+  const trigger = record.trigger as Record<string, unknown>;
+  if (trigger.kind !== "watch") return false;
+  if (!trigger.source || typeof trigger.source !== "object" || Array.isArray(trigger.source)) return false;
+  return (trigger.source as Record<string, unknown>).type === "url";
+}
+
 /** Whether the Bot may use `name` now. */
 export async function botToolVerdict(
   name: string,
@@ -253,10 +264,13 @@ export async function botToolVerdict(
   if (name === "run_command") return verdict(authority.shell.enabled, "The shell is off for this Bot.");
   if (name === SHARE_IMAGE_TOOL_NAME) return verdict(authority.files.botHome, "Sharing images is off for this Bot.");
   if (name === ROUTINE_TOOL) {
-    return verdict(
-      hasCapability(facts, "schedules") && turn.telegram !== true && turn.routine !== true,
-      "Routines are off for this Bot turn.",
-    );
+    if (!hasCapability(facts, "schedules") || turn.telegram === true || turn.routine === true) {
+      return { allowed: false, reason: "Routines are off for this Bot turn." };
+    }
+    if (proposesUrlWatch(args) && !hasCapability(facts, "web") && !hasCapability(facts, "browser")) {
+      return { allowed: false, reason: "Watching a web address needs Web search or the Browser in this Bot's access." };
+    }
+    return { allowed: true };
   }
   if (name === ASK_USER_QUESTION_TOOL_NAME) {
     return verdict(turn.telegram !== true && turn.routine !== true, "Questions are off for this Bot.");

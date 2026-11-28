@@ -334,12 +334,16 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
     if (!dependencies.eventRoutines) throw new Error("Event routines aren't available here.");
     const name = routineText(input.name, "name");
     const prompt = routineText(input.prompt, "prompt");
-    const trigger = parseBotRoutineTrigger(input.trigger);
+    const parsedTrigger = parseBotRoutineTrigger(input.trigger);
     // Like a task Aiden proposes: never this computer or a private network.
     // The Bot's owner can still set one up in the Bot's profile.
-    if (trigger.kind === "watch" && trigger.source.type === "url" && isPrivateWatchAddress(trigger.source.url)) {
+    if (parsedTrigger.kind === "watch" && parsedTrigger.source.type === "url" && isPrivateWatchAddress(parsedTrigger.source.url)) {
       throw new Error("A routine a Bot proposes can't watch this computer or a private network address. The person can set that up in the Bot's profile.");
     }
+    const trigger: BotRoutineTrigger =
+      parsedTrigger.kind === "watch" && parsedTrigger.source.type === "url"
+        ? { ...parsedTrigger, agentProposed: true }
+        : parsedTrigger;
     if ((await dependencies.eventRoutines.list(botId)).length >= BOT_EVENT_ROUTINES_MAX) {
       throw new Error("This Bot has as many event routines as it can keep. The person can remove one in the Bot's profile.");
     }
@@ -513,10 +517,15 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
       try {
         if (data.trigger !== undefined) {
           if (data.schedule !== undefined || data.timezone !== undefined) throw new Error("both");
+          const parsedTrigger = parseBotRoutineTrigger(data.trigger);
+          const trigger: BotRoutineTrigger =
+            parsedTrigger.kind === "watch" && parsedTrigger.source.type === "url"
+              ? { ...parsedTrigger, agentProposed: true }
+              : parsedTrigger;
           proposal = {
             name: routineText(data.name, "name"),
             prompt: routineText(data.prompt, "prompt"),
-            trigger: parseBotRoutineTrigger(data.trigger),
+            trigger,
           };
         } else {
           if (typeof data.timezone !== "string") throw new Error("missing timezone");

@@ -828,6 +828,102 @@ test("a URL check reads the exact bytes, sends no cookies and follows no redirec
   assert.equal((await fetchBotWatchUrl("http://example.com/")).ok, false, "plain http beyond this Mac is refused before any request");
 });
 
+test("agentProposed is accepted only as a boolean on URL watches, defaulted for legacy proposals, and cleared only when trigger.source changes", async () => {
+  const { createPublicOnlyFetch } = await import("../public-only-fetch.js");
+  assert.deepEqual(
+    parseBotRoutineTrigger({ kind: "watch", source: { type: "url", url: "https://status.example.com/api" }, everyMinutes: 15, agentProposed: true }),
+    { kind: "watch", source: { type: "url", url: "https://status.example.com/api" }, everyMinutes: 15, agentProposed: true },
+  );
+  assert.deepEqual(
+    parseBotRoutineTrigger({ kind: "watch", source: { type: "url", url: "https://status.example.com/api" }, everyMinutes: 15, agentProposed: false }),
+    { kind: "watch", source: { type: "url", url: "https://status.example.com/api" }, everyMinutes: 15, agentProposed: false },
+  );
+  for (const invalid of [
+    { kind: "watch", source: { type: "url", url: "https://status.example.com/api" }, everyMinutes: 15, agentProposed: "true" },
+    { kind: "watch", source: { type: "script", script: "ci.sh" }, everyMinutes: 15, agentProposed: true },
+    { kind: "watch", source: { type: "connector", watchId: "00000000-0000-4000-8000-000000000001" }, everyMinutes: 15, agentProposed: false },
+  ]) {
+    assert.throws(() => parseBotRoutineTrigger(invalid));
+  }
+
+  const root = tempDir("aiden-watch-provenance-");
+  const at = Date.UTC(2026, 9, 28, 12);
+  const store = createBotEventRoutineStore({ profileDir: () => root, now: () => at });
+
+  // `store.create` defaults `agentProposed: true` when `sourceProposalId` exists on a URL watch and `agentProposed` is omitted.
+  const createdFromProposal = await store.create("bot-a", {
+    name: "Proposed status",
+    prompt: "Summarize changes.",
+    trigger: { kind: "watch", source: { type: "url", url: "https://status.example.com/api" }, everyMinutes: 15 },
+    sourceProposalId: "00000000-0000-4000-8000-000000000001",
+  });
+  assert.equal(createdFromProposal.routine.trigger.kind === "watch" && createdFromProposal.routine.trigger.agentProposed, true);
+
+  // Persisted legacy routines with `sourceProposalId` and no `agentProposed` field default to `agentProposed: true` on load.
+  const legacyFile = path.join(root, "bots", "bot-legacy", "event-routines.json");
+  mkdirSync(path.dirname(legacyFile), { recursive: true });
+  writeFileSync(legacyFile, JSON.stringify([{
+    id: "legacy-watch-1",
+    botId: "bot-legacy",
+    name: "Legacy proposed watch",
+    prompt: "Report status.",
+    trigger: { kind: "watch", source: { type: "url", url: "https://internal-corp.example/status" }, everyMinutes: 15 },
+    enabled: true,
+    createdAt: at,
+    updatedAt: at,
+    sourceProposalId: "00000000-0000-4000-8000-000000000002",
+    seenEventIds: [],
+    watch: { failures: 0, nextCheckAt: at },
+  }]));
+  const reloadedStore = createBotEventRoutineStore({ profileDir: () => root, now: () => at });
+  const [legacyLoaded] = await reloadedStore.list("bot-legacy");
+  assert.equal(legacyLoaded?.trigger.kind === "watch" && legacyLoaded.trigger.agentProposed, true);
+
+  const privateFetch = createPublicOnlyFetch({
+    surface: "bot",
+    resolve: (_host, cb) => cb(null, [{ address: "10.0.0.12", family: 4 }]),
+  });
+  if (legacyLoaded?.trigger.kind === "watch" && legacyLoaded.trigger.source.type === "url") {
+    const blocked = await fetchBotWatchUrl(legacyLoaded.trigger.source.url, {
+      ...(legacyLoaded.trigger.agentProposed ? { fetch: privateFetch } : {}),
+    });
+    assert.equal(blocked.ok, false);
+    assert.match(!blocked.ok ? blocked.error : "", /Set it up yourself in the Bot's profile to watch it\.$/u);
+  }
+
+  // Editing `name`, `prompt`, `enabled`, or `everyMinutes` keeps `agentProposed: true`.
+  const id = createdFromProposal.routine.id;
+  await store.update("bot-a", id, { name: "Renamed status" });
+  await store.update("bot-a", id, { prompt: "Updated prompt." });
+  await store.update("bot-a", id, { enabled: false });
+  const afterCadence = await store.update("bot-a", id, {
+    enabled: true,
+    trigger: { kind: "watch", source: { type: "url", url: "https://status.example.com/api" }, everyMinutes: 30 },
+  });
+  assert.equal(afterCadence.trigger.kind === "watch" && afterCadence.trigger.agentProposed, true);
+  assert.equal(afterCadence.sourceProposalId, "00000000-0000-4000-8000-000000000001");
+
+  // Editing `trigger.source` sets `agentProposed: false` while keeping `sourceProposalId`, and survives a fresh reload.
+  const localBase = await serve((_req, res) => res.end("local health ok"));
+  const afterSourceEdit = await store.update("bot-a", id, {
+    trigger: { kind: "watch", source: { type: "url", url: `${localBase}/health` }, everyMinutes: 30 },
+  });
+  assert.equal(afterSourceEdit.trigger.kind === "watch" && afterSourceEdit.trigger.agentProposed, false);
+  assert.equal(afterSourceEdit.sourceProposalId, "00000000-0000-4000-8000-000000000001");
+  assert.equal((await store.findBySourceProposal("bot-a", "00000000-0000-4000-8000-000000000001"))?.id, id);
+
+  const freshStore = createBotEventRoutineStore({ profileDir: () => root, now: () => at });
+  const [reloadedEdited] = await freshStore.list("bot-a");
+  assert.equal(reloadedEdited?.trigger.kind === "watch" && reloadedEdited.trigger.agentProposed, false);
+  assert.equal(reloadedEdited?.sourceProposalId, "00000000-0000-4000-8000-000000000001");
+  if (reloadedEdited?.trigger.kind === "watch" && reloadedEdited.trigger.source.type === "url") {
+    const allowed = await fetchBotWatchUrl(reloadedEdited.trigger.source.url, {
+      ...(reloadedEdited.trigger.agentProposed === true ? { fetch: privateFetch } : {}),
+    });
+    assert.deepEqual(allowed, { ok: true, bytes: new TextEncoder().encode("local health ok") });
+  }
+});
+
 function botHome() {
   const home = tempDir("aiden-watch-home-");
   return { home, write: (name: string, body: string) => {

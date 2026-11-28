@@ -5,7 +5,7 @@
 // address that was checked, so a name can't switch to a private address
 // between the check and the connection (DNS rebinding).
 
-import { lookup as dnsLookup, type LookupAddress } from "node:dns";
+import dns, { type LookupAddress } from "node:dns";
 import http from "node:http";
 import https from "node:https";
 import { isIP } from "node:net";
@@ -14,21 +14,31 @@ import { isPrivateIpAddress } from "../../renderer/shared/scheduled-task-trigger
 import { WatchAddressRefused } from "./bot-routine-events/watch-sources.js";
 
 type Resolve = (hostname: string, callback: (error: NodeJS.ErrnoException | null, addresses: LookupAddress[]) => void) => void;
+export type PublicOnlyFetchSurface = "task" | "bot";
 
-const systemResolve: Resolve = (hostname, callback) => dnsLookup(hostname, { all: true, verbatim: true }, callback);
+const systemResolve: Resolve = (hostname, callback) => dns.lookup(hostname, { all: true, verbatim: true }, callback);
 
-const refused = (host: string) =>
-  new WatchAddressRefused(`${host} points at this computer or a private network, which a watch Aiden proposed can't check. Set it up yourself in the task editor to watch it.`);
+const refused = (host: string, surface: PublicOnlyFetchSurface) =>
+  new WatchAddressRefused(
+    surface === "bot"
+      ? `${host} points at this computer or a private network, which a watch a Bot proposed can't check. Set it up yourself in the Bot's profile to watch it.`
+      : `${host} points at this computer or a private network, which a watch Aiden proposed can't check. Set it up yourself in the task editor to watch it.`,
+  );
 
-export function createPublicOnlyFetch(options: { resolve?: Resolve; isPrivate?: (address: string) => boolean } = {}) {
+export function createPublicOnlyFetch(options: {
+  resolve?: Resolve;
+  isPrivate?: (address: string) => boolean;
+  surface?: PublicOnlyFetchSurface;
+} = {}) {
   const resolve = options.resolve ?? systemResolve;
   const isPrivate = options.isPrivate ?? isPrivateIpAddress;
+  const surface = options.surface ?? "task";
 
   /** `lookup` for the request: only the checked public addresses are handed to the socket. */
   const lookup = (hostname: string, lookupOptions: { all?: boolean }, callback: (...args: unknown[]) => void) => {
     resolve(hostname, (error, addresses) => {
       if (error) return callback(error);
-      if (!addresses.length || addresses.some((entry) => isPrivate(entry.address))) return callback(refused(hostname));
+      if (!addresses.length || addresses.some((entry) => isPrivate(entry.address))) return callback(refused(hostname, surface));
       if (lookupOptions.all) return callback(null, addresses);
       return callback(null, addresses[0]!.address, addresses[0]!.family);
     });
@@ -37,7 +47,7 @@ export function createPublicOnlyFetch(options: { resolve?: Resolve; isPrivate?: 
   return (url: string, init: RequestInit): Promise<Response> => {
     const target = new URL(url);
     const literal = target.hostname.replace(/^\[|\]$/gu, "");
-    if (isIP(literal) && isPrivate(literal)) return Promise.reject(refused(target.host));
+    if (isIP(literal) && isPrivate(literal)) return Promise.reject(refused(target.host, surface));
     const client = target.protocol === "https:" ? https : http;
     return new Promise((resolveResponse, reject) => {
       const request = client.request(target, {
@@ -69,3 +79,6 @@ export function createPublicOnlyFetch(options: { resolve?: Resolve; isPrivate?: 
 
 /** The production fetch for watches Aiden proposed (system DNS). */
 export const publicOnlyFetch = createPublicOnlyFetch();
+
+/** The production fetch for watches a Bot proposed (system DNS). */
+export const botPublicOnlyFetch = createPublicOnlyFetch({ surface: "bot" });

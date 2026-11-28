@@ -60,3 +60,43 @@ test("a watch is created and edited through IPC; its view shows status but never
   await assert.rejects(h.invoke("bots:eventRoutines:create", { botId: "bot-a", name: "x", prompt: "y", trigger: { ...trigger, everyMinutes: 1 } }));
   await assert.rejects(h.invoke("bots:eventRoutines:update", { botId: "bot-a", id: created.routine.id, trigger: { kind: "webhook" } }), "the kind of a routine never changes");
 });
+
+test("IPC create and update strip renderer agentProposed flags while preserving store provenance rules", async () => {
+  const h = register();
+  const created = await h.invoke("bots:eventRoutines:create", {
+    botId: "bot-a",
+    name: "Local status",
+    prompt: "Report.",
+    trigger: { kind: "watch", source: { type: "url", url: "http://127.0.0.1:8080/health" }, everyMinutes: 15, agentProposed: true },
+  }) as { routine: { id: string } };
+  const [ownerRoutine] = await h.store.list("bot-a");
+  assert.equal(ownerRoutine?.id, created.routine.id);
+  assert.equal(ownerRoutine?.trigger.kind === "watch" && ownerRoutine.trigger.agentProposed, undefined, "renderer create cannot forge agentProposed");
+
+  const proposed = await h.store.create("bot-a", {
+    name: "Bot status",
+    prompt: "Report.",
+    trigger: { kind: "watch", source: { type: "url", url: "https://status.example.com/" }, everyMinutes: 15 },
+    sourceProposalId: "00000000-0000-4000-8000-000000000010",
+  });
+  assert.equal(proposed.routine.trigger.kind === "watch" && proposed.routine.trigger.agentProposed, true);
+
+  // Renderer passing `agentProposed: false` without changing `source` cannot clear `agentProposed: true`.
+  await h.invoke("bots:eventRoutines:update", {
+    botId: "bot-a",
+    id: proposed.routine.id,
+    trigger: { kind: "watch", source: { type: "url", url: "https://status.example.com/" }, everyMinutes: 30, agentProposed: false },
+  });
+  const unchangedSource = (await h.store.list("bot-a")).find((item) => item.id === proposed.routine.id);
+  assert.equal(unchangedSource?.trigger.kind === "watch" && unchangedSource.trigger.agentProposed, true);
+
+  // Changing `trigger.source` in the Bot profile clears `agentProposed` to `false` while keeping `sourceProposalId`.
+  await h.invoke("bots:eventRoutines:update", {
+    botId: "bot-a",
+    id: proposed.routine.id,
+    trigger: { kind: "watch", source: { type: "url", url: "http://127.0.0.1:8080/status" }, everyMinutes: 30 },
+  });
+  const replacedSource = (await h.store.list("bot-a")).find((item) => item.id === proposed.routine.id);
+  assert.equal(replacedSource?.trigger.kind === "watch" && replacedSource.trigger.agentProposed, false);
+  assert.equal(replacedSource?.sourceProposalId, "00000000-0000-4000-8000-000000000010");
+});

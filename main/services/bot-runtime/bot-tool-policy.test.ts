@@ -188,6 +188,56 @@ test("the skill tool is offered when any skill is granted, and a call runs only 
   assert.equal((await botToolVerdict("skill", facts(["skill_meal_notes"]), {}, { name: "Unknown" })).allowed, false);
 });
 
+test("routines is offered with schedules access, while proposing or revising a URL watch also needs Web search or Browser", async () => {
+  const withCapabilities = (...kinds: Array<"schedules" | "web" | "browser">): BotToolFacts => ({
+    ...bareFacts(),
+    authority: {
+      ...bareFacts().authority,
+      otherCapabilities: kinds.map((kind) => ({ kind })),
+    } as unknown as BotRuntimeEffectiveAuthority,
+  });
+
+  const schedulesOnly = withCapabilities("schedules");
+  const schedulesAndWeb = withCapabilities("schedules", "web");
+  const schedulesAndBrowser = withCapabilities("schedules", "browser");
+
+  const urlWatchTrigger = { kind: "watch", source: { type: "url", url: "https://status.example.com/api" }, everyMinutes: 15 };
+  const scriptWatchTrigger = { kind: "watch", source: { type: "script", script: "scripts/check.sh" }, everyMinutes: 15 };
+
+  // Offer time (`args === undefined`) and non-URL actions stay available with `schedules` alone.
+  assert.deepEqual(await botToolVerdict("routines", schedulesOnly, {}), { allowed: true });
+  for (const args of [
+    { action: "list" },
+    { action: "pause", id: "r-1" },
+    { action: "propose", name: "Morning brief", prompt: "Summarize.", schedule: { kind: "daily", time: "09:00" } },
+    { action: "revise", proposalId: "p-1", name: "Morning brief", prompt: "Summarize.", schedule: { kind: "daily", time: "09:30" } },
+    { action: "propose", name: "Webhook", prompt: "Handle.", trigger: { kind: "webhook" } },
+    { action: "propose", name: "Inbox folder", prompt: "Check.", trigger: { kind: "file_change", folder: "inbox" } },
+    { action: "propose", name: "CI check", prompt: "Check.", trigger: scriptWatchTrigger },
+    { action: "revise", proposalId: "p-1", name: "CI check", prompt: "Check.", trigger: scriptWatchTrigger },
+  ]) {
+    assert.deepEqual(await botToolVerdict("routines", schedulesOnly, {}, args), { allowed: true }, JSON.stringify(args));
+  }
+
+  // `propose` and `revise` with a URL watch are refused without `web` or `browser`, and allowed with either.
+  for (const args of [
+    { action: "propose", name: "Status watch", prompt: "Summarize.", trigger: urlWatchTrigger },
+    { action: "revise", proposalId: "p-1", name: "Status watch", prompt: "Summarize.", trigger: urlWatchTrigger },
+  ]) {
+    const denied = await botToolVerdict("routines", schedulesOnly, {}, args);
+    assert.equal(denied.allowed, false, JSON.stringify(args));
+    if (!denied.allowed) assert.match(denied.reason, /Web search|Browser/u);
+    assert.deepEqual(await botToolVerdict("routines", schedulesAndWeb, {}, args), { allowed: true });
+    assert.deepEqual(await botToolVerdict("routines", schedulesAndBrowser, {}, args), { allowed: true });
+  }
+
+  // Unattended turns and Bots without `schedules` remain refused even when `web` and `browser` are enabled.
+  assert.equal((await botToolVerdict("routines", withCapabilities("web", "browser"), {})).allowed, false);
+  for (const turn of [{ routine: true }, { telegram: true }]) {
+    assert.equal((await botToolVerdict("routines", schedulesAndWeb, turn, { action: "propose", name: "Status", prompt: "Check.", trigger: urlWatchTrigger })).allowed, false);
+  }
+});
+
 test("a Bot sets its own wake-ups only in turns a person started, and never from a routine, catch-up or wake-up run", async () => {
   const WAKE_UP = "wake_up";
   const cases: Array<[string, readonly (string | undefined)[], boolean]> = [

@@ -10,7 +10,16 @@ export type BotWatchSource = { type: "url"; url: string } | { type: "script"; sc
 export type BotRoutineTrigger =
   | { kind: "file_change"; folder: string; pattern?: string }
   | { kind: "webhook" }
-  | { kind: "watch"; source: BotWatchSource; everyMinutes: number };
+  | {
+      kind: "watch";
+      source: BotWatchSource;
+      everyMinutes: number;
+      /**
+       * True when a Bot proposed this URL watch (checked with publicOnlyFetch);
+       * false after the person replaces its source in the Bot's profile.
+       */
+      agentProposed?: boolean;
+    };
 
 export type BotRoutineTriggerKind = BotRoutineTrigger["kind"];
 
@@ -72,7 +81,8 @@ export function parseBotWatchUrl(value: unknown): string | undefined {
 }
 
 function parseWatch(record: Record<string, unknown>): BotRoutineTrigger | undefined {
-  if (!Object.keys(record).every((key) => key === "kind" || key === "source" || key === "everyMinutes")) return undefined;
+  if (!Object.keys(record).every((key) => key === "kind" || key === "source" || key === "everyMinutes" || key === "agentProposed")) return undefined;
+  if (record.agentProposed !== undefined && typeof record.agentProposed !== "boolean") return undefined;
   const every = record.everyMinutes;
   if (typeof every !== "number" || !Number.isInteger(every)) return undefined;
   if (every < BOT_WATCH_LIMITS.minMinutes || every > BOT_WATCH_LIMITS.maxMinutes) return undefined;
@@ -82,8 +92,16 @@ function parseWatch(record: Record<string, unknown>): BotRoutineTrigger | undefi
   if (fields.type === "url") {
     if (Object.keys(fields).length !== 2 || !("url" in fields)) return undefined;
     const url = parseBotWatchUrl(fields.url);
-    return url ? { kind: "watch", source: { type: "url", url }, everyMinutes: every } : undefined;
+    return url
+      ? {
+          kind: "watch",
+          source: { type: "url", url },
+          everyMinutes: every,
+          ...(typeof record.agentProposed === "boolean" ? { agentProposed: record.agentProposed } : {}),
+        }
+      : undefined;
   }
+  if (record.agentProposed !== undefined) return undefined;
   if (fields.type === "connector") {
     if (Object.keys(fields).length !== 2 || typeof fields.watchId !== "string" || !/^[a-f0-9-]{36}$/iu.test(fields.watchId) || ![15, 30, 60].includes(every)) return undefined;
     return { kind: "watch", source: { type: "connector", watchId: fields.watchId }, everyMinutes: every };
