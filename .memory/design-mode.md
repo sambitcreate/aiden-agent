@@ -523,4 +523,4 @@ Revision 2 after review-p3d-plan (Gemini 4 Neon high, 20 findings: 19 fixed, #4 
 - `createDesignAppRoots` keys only on the root manifests.
 - `design-system.test.ts` is mostly `style-scan.ts`'s tests. Move them, don't delete them.
 
-Open question 4 (deleting the tokens offer for flag-off turns now) needs the owner's confirmation before Task 8.
+Revision 3 after review-p3d-plan-2 (5 findings, all fixed): only `MOCK_FOLDERS` are exempt from workspace excludes (other fixed folders keep today's rule, `app-detect.test.ts`'s `!packages/legacy` case); with the flag on, `writtenPageInspector` needs its own `written(page)` call because `placeWrittenPage` was its only caller; `design_app status` carries `mock`. Open question 4 decided by the owner 2026-11-27: delete the tokens offer in 3d for everyone (spec S6).
