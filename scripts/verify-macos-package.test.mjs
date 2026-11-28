@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import {
   chmod,
+  cp,
   mkdir,
   mkdtemp,
   readFile,
@@ -17,6 +18,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { createPackage, createPackageWithOptions } from "@electron/asar";
 import { build } from "esbuild";
 import { electronBuildOptions } from "./build-electron.mjs";
@@ -53,6 +55,8 @@ import {
   verifyPackagedMetalSpeechEngine,
   PACKAGED_METAL_SPEECH_ENTRIES,
   verifyPackagedSpeechResources,
+  verifyPackagedDesignAppTemplate,
+  PACKAGED_DESIGN_APP_TEMPLATE_FILES,
   verifyPackagedVccWorker,
   verifyPackagedNodePtyResources,
   verifyPackagedGenerativeUiLibraries,
@@ -451,6 +455,36 @@ test("package verifier requires the bundled Silero VAD model", async () => {
     await assert.rejects(verifyPackagedSpeechResources(resources), /empty/u);
     await writeFile(path.join(resources, "speech", "silero_vad.onnx"), "onnx");
     await assert.doesNotReject(verifyPackagedSpeechResources(resources));
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+test("package verifier requires the design app template's files, its scripts-off .npmrc and its marker (3d)", async () => {
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-design-app-template-"));
+  const resources = await realpath(temporaryRoot);
+  const template = path.join(resources, "design-app-template");
+  const source = fileURLToPath(new URL("../resources/design-app-template/", import.meta.url));
+  try {
+    await assert.rejects(verifyPackagedDesignAppTemplate(resources), /template file must be a regular non-symlinked file: package\.json/u, "a missing template");
+    await cp(source, template, { recursive: true, filter: (from) => !from.includes(`${path.sep}node_modules`) });
+    await assert.doesNotReject(verifyPackagedDesignAppTemplate(resources), "the repo's own template passes");
+    for (const name of PACKAGED_DESIGN_APP_TEMPLATE_FILES) {
+      const file = path.join(template, ...name.split("/"));
+      const saved = await readFile(file);
+      await rm(file);
+      await assert.rejects(verifyPackagedDesignAppTemplate(resources), new RegExp(`regular non-symlinked file: ${name.replaceAll(".", "\\.")}$`, "u"), `without ${name}`);
+      await symlink(path.join(source, ...name.split("/")), file);
+      await assert.rejects(verifyPackagedDesignAppTemplate(resources), /template file must be a regular non-symlinked/u, `${name} as a link`);
+      await rm(file);
+      await writeFile(file, saved);
+    }
+    await writeFile(path.join(template, ".npmrc"), "# ignore-scripts=true\nfund=false\n");
+    await assert.rejects(verifyPackagedDesignAppTemplate(resources), /ignore-scripts=true/u);
+    await writeFile(path.join(template, ".npmrc"), "ignore-scripts=true\n");
+    const pkg = JSON.parse(await readFile(path.join(template, "package.json"), "utf8"));
+    await writeFile(path.join(template, "package.json"), JSON.stringify({ ...pkg, aiden: { designApp: true } }));
+    await assert.rejects(verifyPackagedDesignAppTemplate(resources), /designApp/u);
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }

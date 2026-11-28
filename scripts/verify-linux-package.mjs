@@ -12,6 +12,7 @@ import { verifyAidenFuses } from "./configure-electron-fuses.mjs";
 import { verifyPackagedRendererCsp } from "./verify-renderer-csp.mjs";
 import {
   DESIGN_MD_BUILD_FILE_RULES,
+  verifyPackagedDesignAppTemplate,
   verifyPackagedDesignMdLinter,
   verifyPackagedModelCatalogResources,
   verifyPackagedLocalSpeechWorker,
@@ -366,6 +367,7 @@ export async function verifyLinuxPackage(appDirectory) {
   await verifyPackagedLocalSpeechWorker(asar);
   await verifyPackagedDesignMdLinter(asar);
   await verifyPackagedSpeechResources(resources);
+  await verifyPackagedDesignAppTemplate(resources);
 
   const architecture = process.arch === "arm64" ? "arm64" : "x64";
   const unpackedModules = path.join(resources, "app.asar.unpacked", "node_modules");

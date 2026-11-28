@@ -201,6 +201,42 @@ export async function assertRegularFile(file) {
   return info;
 }
 
+/** The design app template's files that must ship as regular files (design mode v2 Phase 3d, S105). */
+export const PACKAGED_DESIGN_APP_TEMPLATE_FILES = Object.freeze([
+  "package.json",
+  "package-lock.json",
+  ".npmrc",
+  ".gitignore",
+  "vite.config.js",
+  "src/aiden/route-path.ts",
+]);
+
+/**
+ * Design mode copies `<resources>/design-app-template` into a workspace. Its
+ * dotfiles must ship (a template without `.npmrc` would run its dependencies'
+ * install scripts), its `.npmrc` must turn install scripts off, and its
+ * package.json must carry the design app marker.
+ */
+export async function verifyPackagedDesignAppTemplate(resourcesDirectory) {
+  const template = path.join(resourcesDirectory, "design-app-template");
+  for (const name of PACKAGED_DESIGN_APP_TEMPLATE_FILES) {
+    const info = await assertRegularFile(path.join(template, ...name.split("/"))).catch(() => null);
+    if (!info) throw new Error(`Packaged design app template file must be a regular non-symlinked file: ${name}`);
+    if (info.size === 0) throw new Error(`Packaged design app template file is empty: ${name}`);
+  }
+  const npmrc = await readFile(path.join(template, ".npmrc"), "utf8");
+  if (!npmrc.split(/\r?\n/u).some((line) => line.trim() === "ignore-scripts=true")) {
+    throw new Error("Packaged design app template .npmrc must set ignore-scripts=true.");
+  }
+  let marker;
+  try {
+    marker = JSON.parse(await readFile(path.join(template, "package.json"), "utf8"))?.aiden?.designApp;
+  } catch {
+    throw new Error("Packaged design app template package.json must be valid JSON.");
+  }
+  if (marker !== 1) throw new Error('Packaged design app template package.json must carry "aiden": {"designApp": 1}.');
+}
+
 /** The Silero VAD model ships as an extra resource beside app.asar. */
 export async function verifyPackagedSpeechResources(resourcesDirectory) {
   const file = path.join(resourcesDirectory, PACKAGED_SILERO_VAD_RESOURCE);
@@ -1153,6 +1189,7 @@ export async function verifyMacPackage(appPath) {
   await verifyPackagedNodePtyResources(appAsar);
   await verifyPackagedGenerativeUiLibraries(paths.app);
   await verifyPackagedSpeechResources(path.join(paths.app, "Contents", "Resources"));
+  await verifyPackagedDesignAppTemplate(path.join(paths.app, "Contents", "Resources"));
   await verifyExactComputerUseHelperTree(paths.helperApp);
   assertComputerUseExecutableMode((await lstat(paths.broker)).mode, paths.broker);
   assertComputerUseExecutableMode((await lstat(paths.driver)).mode, paths.driver);
