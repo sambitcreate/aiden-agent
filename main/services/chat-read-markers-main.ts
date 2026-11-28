@@ -11,5 +11,5 @@ export const chatReadMarkers = new ChatReadMarkerStore(() => app.getPath("userDa
  * chat or referenced message no longer exists, so a stale report is a no-op.
  */
 export async function markChatRead(chatId: string, throughMessageId?: string): Promise<boolean> {
-  return markChatReadThrough(chatReadMarkers, await chatStore.get(chatId), throughMessageId);
+  return markChatReadThrough(chatReadMarkers, await chatStore.getWithImageReferences(chatId), throughMessageId);
 }

@@ -18,7 +18,9 @@ import {
   type ChatApplicationOwner,
 } from "./chat-application-service.js";
 import { reconcilePendingChatDeletions } from "./chat-deletion-reconciliation.js";
+import { createChatImageStore } from "./chat-image-store.js";
 import { ChatReadMarkerStore } from "./chat-read-markers.js";
+import { createChatStore } from "./chat-store-core.js";
 import { ChatTriageStore } from "./chat-triage.js";
 import { WorkspaceMutationGate } from "./workspace-mutation-gate.js";
 import { WorkspaceOperationRegistry } from "./workspace-operation-registry.js";
@@ -925,4 +927,111 @@ test("promoteEphemeral reports floating_chat_promoted only when the chat was act
   // A duplicate call on an already-promoted (non-ephemeral) chat must not double-count.
   await application.service.promoteEphemeral("chat-ephem-1");
   assert.equal(sent.length, 1);
+});
+
+test("application metadata, model selection and workspace lifecycle methods read zero stored image files", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-app-images-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const chatsDir = path.join(root, "chats");
+  const scratchDir = path.join(root, "scratch-source");
+  const workspaceDir = path.join(root, "workspace-target");
+  await fs.mkdir(chatsDir, { recursive: true });
+  await fs.mkdir(scratchDir, { recursive: true });
+  await fs.mkdir(workspaceDir, { recursive: true });
+
+  const rawImages = createChatImageStore(async () => chatsDir);
+  let imageReads = 0;
+  const chatStore = createChatStore(async () => chatsDir, undefined, {
+    images: {
+      ...rawImages,
+      read: async (sha256, size) => {
+        imageReads += 1;
+        return rawImages.read(sha256, size);
+      },
+    },
+  });
+
+  const pngBase64 =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
+  const pngBytes = Buffer.from(pngBase64, "base64");
+
+  const emptyChat = await chatStore.create({ workspaceId: "nows-source", title: "Empty" });
+  const imageChat = await chatStore.createWithFirstMessage({
+    id: "image-chat-app-1",
+    workspaceId: "nows-source",
+    title: "Draft with screenshot",
+    turnId: "turn-app-1",
+    fingerprint: "fp-app-1",
+    assertCurrent: () => undefined,
+    message: {
+      id: "msg-app-1",
+      content: "Move this project chat into the workspace",
+      attachments: [
+        {
+          id: "shot-1",
+          name: "shot-1.png",
+          mimeType: "image/png",
+          kind: "image",
+          size: pngBytes.length,
+          data: pngBase64,
+        },
+      ],
+    },
+  });
+
+  const targetWorkspace: Workspace = {
+    id: "workspace-target",
+    name: "Target",
+    folderPath: workspaceDir,
+    permission: "ask",
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  const noWorkspaceSource: Workspace = {
+    id: "nows-source",
+    name: "No workspace",
+    folderPath: scratchDir,
+    noWorkspace: true,
+    permission: "ask",
+    createdAt: 1,
+    updatedAt: 1,
+  };
+
+  const application = fixture({
+    chatStore,
+    configStore: {
+      getWorkspace: async (id: string) =>
+        id === targetWorkspace.id
+          ? targetWorkspace
+          : id === noWorkspaceSource.id
+            ? noWorkspaceSource
+            : null,
+    } as ChatApplicationDependencies["configStore"],
+    workspaceMutationGate: new WorkspaceMutationGate(),
+  });
+
+  await application.service.moveEmptyToWorkspace(emptyChat.id, targetWorkspace.id);
+  const loaded = await application.service.get(imageChat.id);
+  assert.ok(loaded.chat?.messages[0]?.attachments?.[0]?.url);
+  assert.equal(loaded.chat?.messages[0]?.attachments?.[0]?.data, undefined);
+
+  const modelUpdated = await application.service.setModelSelection(
+    imageChat.id,
+    "anthropic",
+    "claude-sonnet-4-5",
+    {},
+    "high",
+  );
+  assert.ok(modelUpdated?.messages[0]?.attachments?.[0]?.url);
+  assert.equal(modelUpdated?.messages[0]?.attachments?.[0]?.data, undefined);
+
+  const inspection = await application.service.inspectAttachFiles(imageChat.id);
+  assert.deepEqual(inspection, { hasFiles: false, totalBytes: 0, truncated: false, entries: [] });
+
+  const attached = await application.service.attachToWorkspace(imageChat.id, targetWorkspace.id);
+  assert.equal(attached.chat.workspaceId, targetWorkspace.id);
+  assert.equal(attached.chat.messages[0]?.attachments?.[0]?.data, undefined);
+
+  await application.service.remove(imageChat.id);
+  assert.equal(imageReads, 0, "no application metadata or workspace lifecycle call reads stored image bytes");
 });

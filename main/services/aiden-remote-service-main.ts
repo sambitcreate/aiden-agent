@@ -637,7 +637,11 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               },
             },
             application: chatApplicationService,
-            chatStore,
+            chatStore: {
+              get: (id) => chatStore.getWithImageReferences(id),
+              readImage: (sha256, size) => chatStore.readImage(sha256, size),
+              appendMessage: (id, message, meta) => chatStore.appendMessage(id, message, meta),
+            },
             generation: {
               beginChatTurn: (chatId, turnId, ownerId) =>
                 llmClient.beginChatTurn(chatId, turnId, ownerId),
@@ -853,13 +857,13 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 ),
               chatMetadata: () => chatStore.listSummaryMetadata(),
               readChat: async (chatId) =>
-                (await chatStore.get(chatId)) ?? undefined,
+                (await chatStore.getWithImageReferences(chatId)) ?? undefined,
               authorizeRetainedBotChat: (input) =>
                 chats.authorizeRetainedBotChat(input),
               events: chatProgressEvents,
             }),
             readTodo: async (chatId) => {
-              const chat = await chatStore.get(chatId);
+              const chat = await chatStore.getWithImageReferences(chatId);
               if (!chat) throw new AidenRemoteServiceError("not_found", "This chat is unavailable.", 404);
               const opened = await piCompactionSessionStore.openChatIfEligible(chatId, chat);
               return (await loadDurableTodoSnapshot(chatId, opened.session)).snapshot;
@@ -868,7 +872,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             // Reuses the desktop Subagents panel stop path. The chat's
             // persisted workspace, not the run snapshot, scopes the binding.
             stopAgent: async ({ chatId, runId }) => {
-              const chat = await chatStore.get(chatId);
+              const chat = await chatStore.getWithImageReferences(chatId);
               if (!chat || chat.id !== chatId) return false;
               const result = await subagentControlMainV2.stopForChat(
                 { chatId, workspaceId: persistedChatWorkspaceId(chat.workspaceId) },

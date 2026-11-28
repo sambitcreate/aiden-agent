@@ -211,6 +211,10 @@ function chatDeletionSettlement(
 }
 
 export function createChatApplicationService(deps: ChatApplicationDependencies) {
+  const getChatWithReferences = (chatId: string) =>
+    deps.chatStore.getWithImageReferences
+      ? deps.chatStore.getWithImageReferences(chatId)
+      : deps.chatStore.get(chatId);
   const markReconciliationRequired = (owner: ChatApplicationOwner): never => {
     deps.llmClient.markAppendReconciliationRequired(owner.documentId);
     owner.onInvalidated(() => {
@@ -246,9 +250,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         !imageArtifactAvailability.available || !htmlArtifactAvailability.available;
       const [chat, stagedImageArtifact, stagedHtmlArtifact] = await Promise.all([
         // The window loads stored images itself, so their bytes are not read here.
-        deps.chatStore.getWithImageReferences
-          ? deps.chatStore.getWithImageReferences(chatId)
-          : deps.chatStore.get(chatId),
+        getChatWithReferences(chatId),
         !imageArtifactAvailability.available
           ? Promise.resolve(false)
           : deps.displayImageArtifactStore.hasPending(chatId),
@@ -422,7 +424,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
       let finishFollowThroughMove: (() => void) | undefined;
       try {
         finishFollowThroughMove = await deps.followThrough?.beginMove?.(chatId);
-        const current = await deps.chatStore.get(chatId);
+        const current = await getChatWithReferences(chatId);
         if (!current) throw new Error(`Chat ${chatId} not found`);
         if (current.botId) {
           throw new Error("Bot conversations stay in their Aiden-managed folder.");
@@ -472,7 +474,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
 
     /** Inspect files inside a No workspace / ephemeral chat's private scratch folder. */
     async inspectAttachFiles(chatId: string): Promise<InspectAttachFilesResult> {
-      const chat = await deps.chatStore.get(chatId);
+      const chat = await getChatWithReferences(chatId);
       if (!chat) throw new Error(`Chat ${chatId} not found`);
       const surface = chatSurface(chat);
       if (surface !== "regular" && surface !== "ephemeral") {
@@ -535,7 +537,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
       let rollbackCopiedFiles: (() => Promise<void>) | undefined;
       try {
         finishFollowThroughMove = await deps.followThrough?.beginMove?.(chatId);
-        const current = await deps.chatStore.get(chatId);
+        const current = await getChatWithReferences(chatId);
         if (!current) throw new Error(`Chat ${chatId} not found`);
         const surface = chatSurface(current);
         if (surface !== "regular" && surface !== "ephemeral") {
@@ -715,7 +717,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         // Refuse before the deletion window opens, so a live design run never sees
         // its chat as deleting. A chat's owner never changes, so this cannot race
         // the check below.
-        const target = await deps.chatStore.get(chatId);
+        const target = await getChatWithReferences(chatId);
         if (target) assertRenameAllowedFromChat(target, options);
       }
       const finishDeletion = deps.llmClient.beginChatDeletion(chatId);
@@ -731,7 +733,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
       };
       try {
         finishAttachmentDeletion = deps.attachments?.beginChatDeletion(chatId);
-        const current = await deps.chatStore.get(chatId);
+        const current = await getChatWithReferences(chatId);
         if (!current) throw new Error(`Chat ${chatId} not found`);
         assertRenameAllowedFromChat(current, options);
         await options.assertCurrent?.(current);

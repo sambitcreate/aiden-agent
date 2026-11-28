@@ -14,11 +14,17 @@ export type ChatTitleFirstMessage = Parameters<typeof buildChatTitlePrompt>[0] &
   attachments?: Attachment[];
 };
 
+export interface RequestChatTitleOptions {
+  /** Read one stored image's bytes on demand when the title model supports vision. */
+  readImage?: (sha256: string, size: number) => Promise<Uint8Array | undefined>;
+}
+
 /** Sends the title request: tool-free, at most one image, and never cached. */
-export function requestChatTitle(
+export async function requestChatTitle(
   runtime: Pick<ResolvedModelRuntime, "model" | "apiKey" | "headers" | "streams">,
   firstMessage: ChatTitleFirstMessage,
   signal: AbortSignal,
+  options: RequestChatTitleOptions = {},
 ): Promise<AssistantMessage> {
   const promptContent: Array<TextContent | ImageContent> = [
     {
@@ -27,14 +33,23 @@ export function requestChatTitle(
     },
   ];
   const firstImage = firstMessage.attachments?.find(
-    (attachment) => attachment.kind === "image" && attachment.data,
+    (attachment) => attachment.kind === "image" && Boolean(attachment.data || attachment.sha256),
   );
-  if (runtimeSupportsImages(runtime.model) && firstImage?.data) {
-    promptContent.push({
-      type: "image",
-      data: firstImage.data,
-      mimeType: firstImage.mimeType,
-    });
+  if (runtimeSupportsImages(runtime.model) && firstImage) {
+    let imageData = firstImage.data;
+    if (!imageData && firstImage.sha256 && options.readImage) {
+      const bytes = await options.readImage(firstImage.sha256, firstImage.size).catch(() => undefined);
+      if (bytes && bytes.byteLength > 0) {
+        imageData = Buffer.from(bytes).toString("base64");
+      }
+    }
+    if (imageData) {
+      promptContent.push({
+        type: "image",
+        data: imageData,
+        mimeType: firstImage.mimeType,
+      });
+    }
   }
   return runtime.streams
     .streamSimple(

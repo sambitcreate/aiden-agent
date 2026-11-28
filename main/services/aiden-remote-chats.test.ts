@@ -32,6 +32,7 @@ import { SkillInvocationError, type SkillCatalogEntry } from "../../renderer/sha
 import type { PreparedSkillInvocation } from "./skill-invocation-turn.js";
 import { ChatForkError, ForkSummaryStateError } from "./chat-fork-error.js";
 import { createChatForkService, type ChatForkRequest } from "./chat-fork-service.js";
+import { createChatImageStore, imageSha256 } from "./chat-image-store.js";
 import { createChatStore } from "./chat-store-core.js";
 import type { RegisteredSkill } from "./skill-registry.js";
 import type { VisualViewerAppearance, VisualViewerSource } from "./visual-viewer-document.js";
@@ -3794,4 +3795,152 @@ test("a phone's message to a Bot counts as a Bot message, outside any workspace"
   await app.service.startTurn("device-1", "chat-1", "counted-turn-00000005", { text: "hello" });
   await analyticsSettled();
   assert.deepEqual(sent.map(({ props }) => [props?.origin, props?.in_workspace]), [["bot", false]]);
+});
+
+test("remote chat reads and turns read zero historical image files while attachmentContent reads only the requested hash", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "aiden-remote-image-refs-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const rawImages = createChatImageStore(async () => root);
+  const readHashes: string[] = [];
+  const store = createChatStore(async () => root, undefined, {
+    images: {
+      ...rawImages,
+      read: async (sha256, size) => {
+        readHashes.push(sha256);
+        return rawImages.read(sha256, size);
+      },
+    },
+  });
+
+  // Two valid PNGs (distinct hashes) stored in chat history.
+  const png1Bytes = Buffer.from(ONE_PIXEL_PNG, "base64");
+  const png2Bytes = Buffer.concat([
+    png1Bytes.subarray(0, png1Bytes.length - 12),
+    // Valid zero-length ancillary comment chunk ("tEXt" with CRC 0x9e4449b6) before IEND:
+    Buffer.from([0x00, 0x00, 0x00, 0x00, 0x74, 0x45, 0x58, 0x74, 0x9e, 0x44, 0x49, 0xb6]),
+    png1Bytes.subarray(png1Bytes.length - 12),
+  ]);
+  const sha1 = imageSha256(png1Bytes);
+  const sha2 = imageSha256(png2Bytes);
+  assert.notEqual(sha1, sha2);
+
+  const seeded = await store.createWithFirstMessage({
+    id: "remote-seeded-chat-1",
+    workspaceId: "workspace-1",
+    providerId: "provider-1",
+    model: "model-1",
+    title: "Screenshots",
+    turnId: "turn-remote-seed-1",
+    fingerprint: "fp-remote-seed-1",
+    assertCurrent: () => undefined,
+    message: {
+      id: "msg-remote-seed-1",
+      content: "Check these two screenshots",
+      attachments: [
+        {
+          id: "att-remote-1",
+          name: "first.png",
+          mimeType: "image/png",
+          kind: "image",
+          size: png1Bytes.length,
+          data: png1Bytes.toString("base64"),
+        },
+        {
+          id: "att-remote-2",
+          name: "second.png",
+          mimeType: "image/png",
+          kind: "image",
+          size: png2Bytes.length,
+          data: png2Bytes.toString("base64"),
+        },
+      ],
+    },
+  });
+
+  const streams = new AidenRemoteStreamService({
+    now: () => 10_000,
+    cancel: () => true,
+    approve: () => true,
+  });
+  const remote = new AidenRemoteChatService({
+    application: {
+      list: async () => store.list(),
+      listRegular: async (workspaceId) => store.listRegular(workspaceId),
+      listSummaryMetadata: async () => store.listSummaryMetadata(),
+      get: async (id) => ({
+        chat: await store.getWithImageReferences(id),
+        imageArtifactRecoveryPending: false,
+        imageArtifactRecoveryUnavailable: false,
+        reconciliation: null,
+      }),
+      create: async (input) => store.create(input),
+      rename: async (id, title) => store.rename(id, title),
+      moveEmptyToWorkspace: async (id, workspaceId) => store.moveEmptyChatToWorkspace(id, workspaceId),
+      remove: async (id) => store.remove(id),
+    },
+    chatStore: {
+      get: (id) => store.getWithImageReferences(id),
+      readImage: (sha256, size) => store.readImage(sha256, size),
+      appendMessage: (id, message, meta) => store.appendMessage(id, message, meta),
+    },
+    generation: {
+      beginChatTurn: () => {
+        let active = true;
+        return {
+          isActive: () => active,
+          reserveAppendPayload: () => undefined,
+          reserveSkillPreparation: () => undefined,
+          prepareSkillInvocation: () => undefined,
+          settleAsyncWork: () => undefined,
+          onReleased: () => undefined,
+          release: () => {
+            active = false;
+          },
+        };
+      },
+      start: async (_streamId, _params, _owner, options) => {
+        options.onTurnAccepted();
+        return true;
+      },
+    },
+    streams,
+    models: {
+      resolve: async (providerId, modelId) => ({
+        providerId: providerId ?? "provider-1",
+        modelId: modelId ?? "model-1",
+        thinkingLevels: ["low", "high"],
+        supportsImages: true,
+      }),
+    },
+    bots: { get: async () => null },
+    botMutations: new BotMutationGate(),
+    botTurnAuthorityPreflight: async () => undefined,
+    deviceSupportsAgentSlider: async () => true,
+    hostHasAgentSlider: async () => true,
+    notifyChanged: () => undefined,
+  });
+
+  const projected = await remote.get(seeded.id);
+  const windowed = await remote.messagesWindow(seeded.id, { limit: 20 });
+  const turn = await remote.startTurn("device-1", seeded.id, "remote-turn-key-0001", {
+    text: "Send follow-up from phone slider",
+    providerId: "provider-1",
+    modelId: "model-1",
+    thinkingLevel: "high",
+    saveSelection: true,
+  });
+  await analyticsSettled();
+
+  assert.deepEqual(readHashes, [], "get, messagesWindow and startTurn read zero historical image files");
+  assert.equal((await store.getWithImageReferences(seeded.id))?.thinkingLevel, "high");
+  assert.equal(turn.message.text, "Send follow-up from phone slider");
+  assert.equal(windowed.messages.length, 1);
+
+  const firstProjectedId = projected.messages[0]!.attachments![0]!.id;
+  const content = await remote.attachmentContent(seeded.id, firstProjectedId);
+  assert.deepEqual(readHashes, [sha1], "attachmentContent reads only the requested attachment hash");
+  assert.equal(content.mimeType, "image/png");
+  assert.equal(content.sha256, sha1);
+  assert.deepEqual(Buffer.from(content.bytes), png1Bytes);
 });

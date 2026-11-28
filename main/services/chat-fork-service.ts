@@ -68,7 +68,8 @@ export interface ChatForkHtmlArtifacts {
 }
 
 export interface ChatForkServiceDependencies {
-  chatStore: Pick<ChatStore, "get" | "copyVisibleHistory">;
+  chatStore: Pick<ChatStore, "get" | "copyVisibleHistory"> &
+    Partial<Pick<ChatStore, "getWithImageReferences">>;
   /** Hold the source still for the copy; null while it is busy. */
   beginChatCopy(chatId: string): (() => void) | null;
   workspaceExists(workspaceId: string): Promise<boolean>;
@@ -152,7 +153,9 @@ export function createChatForkService(deps: ChatForkServiceDependencies) {
             "Finish the current response or approval before copying this chat.",
           );
         }
-        const source = await deps.chatStore.get(request.chatId);
+        const source = await (deps.chatStore.getWithImageReferences
+          ? deps.chatStore.getWithImageReferences(request.chatId)
+          : deps.chatStore.get(request.chatId));
         if (!source) throw new ChatForkError("not_found", "The chat is no longer available.");
         caller.assertSource?.(source);
         // Surface refusal precedes the artifact check so an owned chat reports

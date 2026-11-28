@@ -232,6 +232,9 @@ test("an append whose durability is indeterminate fences the document until it i
       get: async () => {
         throw new Error("disk unavailable");
       },
+      getWithImageReferences: async () => {
+        throw new Error("disk unavailable");
+      },
       appendMessage: async () => {
         throw new Error("directory sync failed");
       },

@@ -3,6 +3,11 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import {
+  createChatApplicationService,
+  type ChatApplicationDependencies,
+} from "../chat-application-service.js";
+import { WorkspaceOperationRegistry } from "../workspace-operation-registry.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -337,36 +342,138 @@ test("main announces normalized settlement only after generation ownership exits
 });
 
 test("replacement chat reads mark bounded wait timeouts for retained renderer reconciliation", async () => {
-  const [handler, applicationService, llm] = await Promise.all([
+  const [handler, llm] = await Promise.all([
     source("main/handlers/chats.ts"),
-    source("main/services/chat-application-service.ts"),
     source("main/services/llm-client.ts"),
   ]);
   const getHandler = ipcHandlerStart(handler, "chats:get");
-  assert.match(handler.slice(getHandler), /chatApplicationService\.get\((?:asString\(id, "id"\)|chatId)\)/u);
-  const inactiveCheck = applicationService.indexOf(
-    "deps.llmClient.isChatOwnedByInactiveRenderer(chatId)",
-  );
-  const idleWait = applicationService.indexOf(
-    "await deps.llmClient.waitForChatIdle(chatId)",
-    inactiveCheck,
-  );
-  const read = applicationService.indexOf("deps.chatStore.get(chatId)", idleWait);
-  const response = applicationService.indexOf("reconciliation: reconciliationRequired", read);
-
   assert.ok(getHandler >= 0);
-  assert.ok(inactiveCheck >= 0);
-  assert.ok(idleWait > inactiveCheck);
-  assert.ok(read > idleWait);
-  assert.ok(response > read);
-  assert.match(
-    applicationService,
-    /reconciliationRequired = !\(await deps\.llmClient\.waitForChatIdle\(chatId\)\)/u,
-  );
-  assert.match(
-    applicationService,
-    /reconciliationRequired \|\|= deps\.llmClient\.isChatOwnedByInactiveRenderer\(chatId\)/u,
-  );
+  assert.match(handler.slice(getHandler), /chatApplicationService\.get\((?:asString\(id, "id"\)|chatId)\)/u);
+
+  const runReadScenario = async (scenario: {
+    inactiveChecks: boolean[];
+    waitResult: boolean;
+  }) => {
+    const events: string[] = [];
+    let checkIndex = 0;
+    const service = createChatApplicationService({
+      chatStore: {
+        listRegular: async () => [],
+        list: async () => [],
+        get: async () => {
+          throw new Error("replacement chat reads should use getWithImageReferences");
+        },
+        getWithImageReferences: async (id: string) => {
+          events.push(`read-refs:${id}`);
+          return {
+            id,
+            title: "Chat",
+            workspaceId: "workspace-1",
+            createdAt: 1,
+            updatedAt: 1,
+            messages: [],
+          };
+        },
+        create: async () => {
+          throw new Error("unused");
+        },
+        rename: async () => null,
+        setChatModelSelection: async () => null,
+        setDesignMode: async () => null,
+        moveEmptyChatToWorkspace: async () => null,
+        remove: async () => undefined,
+      },
+      configStore: { getWorkspace: async () => null },
+      llmClient: {
+        isChatOwnedByInactiveRenderer: (id: string) => {
+          const owned = scenario.inactiveChecks[checkIndex] ?? false;
+          checkIndex += 1;
+          events.push(`inactive-check:${id}:${owned}`);
+          return owned;
+        },
+        isChatBusy: () => false,
+        waitForChatIdle: async (id: string) => {
+          events.push(`idle-wait:${id}:${scenario.waitResult}`);
+          return scenario.waitResult;
+        },
+        requiresAppendReconciliation: () => false,
+        markAppendReconciliationRequired: () => undefined,
+        clearAppendReconciliationRequired: () => undefined,
+        beginChatWorkspaceChange: () => () => undefined,
+        beginChatDeletion: () => () => undefined,
+        cancelChat: async () => undefined,
+      },
+      displayImageArtifactStore: {
+        availability: () => ({ available: true }),
+        hasPending: async () => false,
+        deleteChat: async () => undefined,
+      },
+      generativeUiArtifactStore: {
+        availability: () => ({ available: true }),
+        hasPending: async () => false,
+        deleteChat: async () => undefined,
+      },
+      workspaceMutationGate: {
+        admit: () => ({ signal: new AbortController().signal, release: () => undefined }),
+      },
+      workspaceOperationRegistry: new WorkspaceOperationRegistry(),
+      subagentRunStore: {
+        deleteChat: async () => undefined,
+        completeChatDeletion: async () => undefined,
+        pendingChatDeletions: async () => [],
+      },
+      piRuntimeEffectStore: { deleteChat: async () => undefined },
+      piCompactionSessionStore: { deleteChat: async () => undefined },
+      logError: () => undefined,
+    } as unknown as ChatApplicationDependencies);
+
+    const response = await service.get("chat-1");
+    return { events, response };
+  };
+
+  // Bounded wait timeout before reading still marks reconciliation without needing a second owner check.
+  const timedOut = await runReadScenario({
+    inactiveChecks: [true, false],
+    waitResult: false,
+  });
+  assert.deepEqual(timedOut.events, [
+    "inactive-check:chat-1:true",
+    "idle-wait:chat-1:false",
+    "read-refs:chat-1",
+  ]);
+  assert.deepEqual(timedOut.response.reconciliation, {
+    chatId: "chat-1",
+    workspaceId: "workspace-1",
+  });
+
+  // Settling within the bounded wait before reading clears reconciliation when no inactive owner remains.
+  const settled = await runReadScenario({
+    inactiveChecks: [true, false],
+    waitResult: true,
+  });
+  assert.deepEqual(settled.events, [
+    "inactive-check:chat-1:true",
+    "idle-wait:chat-1:true",
+    "read-refs:chat-1",
+    "inactive-check:chat-1:false",
+  ]);
+  assert.equal(settled.response.reconciliation, null);
+
+  // Inactive-renderer ownership observed after the read still requires reconciliation.
+  const lateInactive = await runReadScenario({
+    inactiveChecks: [false, true],
+    waitResult: true,
+  });
+  assert.deepEqual(lateInactive.events, [
+    "inactive-check:chat-1:false",
+    "read-refs:chat-1",
+    "inactive-check:chat-1:true",
+  ]);
+  assert.deepEqual(lateInactive.response.reconciliation, {
+    chatId: "chat-1",
+    workspaceId: "workspace-1",
+  });
+
   const inactiveOwnerStart = llm.indexOf("isChatOwnedByInactiveRenderer(chatId: string)");
   const inactiveOwnerEnd = llm.indexOf("async waitForChatIdle", inactiveOwnerStart);
   assert.ok(inactiveOwnerStart >= 0);

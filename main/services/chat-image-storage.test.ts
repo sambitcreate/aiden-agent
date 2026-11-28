@@ -154,7 +154,12 @@ test("a copied chat shares its source's image file", async (t) => {
   const copy = await store.copyVisibleHistory({ sourceChatId: chatId });
 
   assert.deepEqual(await imageFiles(directory), [imageSha256(PNG_BYTES)]);
-  assert.equal(copy.messages[0]!.attachments![0]!.data, PNG);
+  assert.equal(copy.messages[0]!.attachments![0]!.data, undefined);
+  assert.equal(copy.messages[0]!.attachments![0]!.sha256, imageSha256(PNG_BYTES));
+  assert.deepEqual(
+    [copy.messages[0]!.attachments![0]!.width, copy.messages[0]!.attachments![0]!.height],
+    [1, 1],
+  );
   assert.equal((await store.get(copy.id))!.messages[0]!.attachments![0]!.data, PNG);
 });
 
@@ -451,4 +456,123 @@ test("an image link only works for an image the chat still lists", async (t) => 
   );
   assert.deepEqual(statuses, [404, 404, 404, 404, 404, 404]);
   assert.equal((await handler(new Request(`${base}/${chatId}/${sha}`, { method: "POST" }))).status, 405);
+});
+
+test("writes, metadata mutations and reference reads read zero stored image files while get and export still inline bytes", async (t) => {
+  const directory = await tempDir(t);
+  const rawImages = createChatImageStore(async () => directory);
+  let imageReads = 0;
+  const store = createChatStore(async () => directory, undefined, {
+    images: {
+      ...rawImages,
+      read: async (sha256, size) => {
+        imageReads += 1;
+        return rawImages.read(sha256, size);
+      },
+    },
+  });
+
+  const firstSha = imageSha256(PNG_BYTES);
+  const secondBytes = Buffer.from(PNG_BYTES);
+  secondBytes[secondBytes.length - 1] ^= 1;
+  const secondBase64 = secondBytes.toString("base64");
+  const secondSha = imageSha256(secondBytes);
+
+  const created = await store.createWithFirstMessage({
+    id: "chat-img-ref-1",
+    workspaceId: "workspace-1",
+    title: "New agent",
+    turnId: "turn-1",
+    fingerprint: "fp-1",
+    assertCurrent: () => undefined,
+    message: {
+      id: "msg-first-1",
+      content: "Inspect this screenshot",
+      attachments: [image("first")],
+    },
+  });
+  assert.equal(imageReads, 0);
+  const createdAttachment = created.messages[0]!.attachments![0]!;
+  assert.equal(createdAttachment.data, undefined);
+  assert.equal(createdAttachment.sha256, firstSha);
+  assert.deepEqual([createdAttachment.width, createdAttachment.height], [1, 1]);
+
+  const appended = await store.appendMessage(created.id, {
+    role: "user",
+    content: "Here is another screenshot",
+    attachments: [image("grab-thumb_1", secondBase64)],
+  });
+  assert.equal(imageReads, 0);
+  assert.deepEqual(
+    appended.messages.map((m) => m.attachments?.[0]?.sha256),
+    [firstSha, secondSha],
+  );
+  assert.ok(appended.messages.every((m) => m.attachments?.[0]?.data === undefined));
+
+  const replied = await store.appendMessage(created.id, {
+    role: "assistant",
+    content: "Checked both screenshots.",
+  });
+  const modelUpdated = await store.setChatModelSelection(
+    created.id,
+    "anthropic",
+    "claude-sonnet-4-5",
+    () => undefined,
+    "high",
+  );
+  const autoTitled = await store.replaceAutoTitle(created.id, "New agent", "Screenshot check");
+  const renamedIfUnchanged = await store.replaceTitleIfUnchanged(
+    created.id,
+    "Screenshot check",
+    "Updated screenshot check",
+  );
+  const renamed = await store.rename(created.id, "Final title");
+  const cuAllowed = await store.setComputerUseAllowed(created.id, true);
+  const cuPending = await store.setComputerUsePendingContinue(created.id, true);
+  const copied = await store.copyVisibleHistory({ sourceChatId: created.id });
+  const referenced = await store.getWithImageReferences(created.id);
+
+  assert.equal(imageReads, 0, "no write, mutation or reference read touches stored image files");
+
+  for (const snapshot of [
+    replied,
+    modelUpdated,
+    autoTitled,
+    renamedIfUnchanged,
+    renamed,
+    cuAllowed,
+    cuPending,
+    copied,
+    referenced,
+  ]) {
+    assert.ok(snapshot);
+    const first = snapshot.messages[0]!.attachments![0]!;
+    assert.equal(first.data, undefined);
+    assert.equal(first.sha256, firstSha);
+    assert.deepEqual([first.width, first.height], [1, 1]);
+    const projected = chatForRenderer(snapshot)!.messages[0]!.attachments![0]!;
+    assert.equal(projected.data, undefined);
+    assert.equal(projected.url, `aiden-attachment://image/${encodeURIComponent(snapshot.id)}/${firstSha}`);
+    assert.deepEqual([projected.width, projected.height], [1, 1]);
+  }
+
+  // Legacy unsaved inline attachments keep their inline bytes, while hydrated and reference reads project identical renderer links and dimensions.
+  const legacyProjected = chatForRenderer({
+    ...created,
+    messages: [{ id: "m-legacy", role: "user", content: "Legacy", createdAt: 1, attachments: [image("first")] }],
+  })!.messages[0]!.attachments![0]!;
+  assert.equal(legacyProjected.data, PNG);
+  assert.equal(legacyProjected.url, undefined);
+
+  // Hydrated reads for exports and model turns still load inline base64 bytes.
+  const hydrated = await store.get(created.id);
+  assert.equal(imageReads, 2);
+  assert.equal(hydrated!.messages[0]!.attachments![0]!.data, PNG);
+  assert.equal(hydrated!.messages[1]!.attachments![0]!.data, secondBase64);
+  assert.deepEqual(
+    chatForRenderer(hydrated!)!.messages[0]!.attachments![0],
+    chatForRenderer(referenced!)!.messages[0]!.attachments![0],
+  );
+  const exported = projectAidenChatExport(hydrated!);
+  assert.equal(exported.chat.messages[0]!.attachments![0]!.data, PNG);
 });

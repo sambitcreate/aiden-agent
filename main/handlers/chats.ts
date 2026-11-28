@@ -276,7 +276,7 @@ export function registerChatHistoryHandlers(): void {
       () => new Error("Todo state requires the active application document."),
     );
     const chatId = asString(id, "id");
-    const chat = await chatStore.get(chatId);
+    const chat = await chatStore.getWithImageReferences(chatId);
     if (!chat || persistedChatWorkspaceId(chat.workspaceId) === ASSISTANT_WORKSPACE_ID) {
       return null;
     }

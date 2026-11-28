@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import test from "node:test";
+import { CHAT_IMAGES_DIRECTORY, createChatImageStore, imageSha256 } from "./chat-image-store.js";
+import { createChatStore } from "./chat-store-core.js";
+import { createChatTitleService } from "./chat-title-core.js";
 import {
   MAX_CHAT_TITLE_LENGTH,
   assertRenameAllowedFromChat,
@@ -156,4 +162,200 @@ test("the title request is a tool-free one-off that writes no prompt cache", asy
   assert.equal(user.length, 1);
   const content = user[0]!.content as Array<{ type: string }>;
   assert.deepEqual(content.map((part) => part.type), ["text", "image"]);
+});
+
+const ONE_PIXEL_PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
+const ONE_PIXEL_BYTES = Buffer.from(ONE_PIXEL_PNG, "base64");
+
+function storedPngAttachment(id: string, variantByte: number): Attachment {
+  const bytes = Buffer.from(ONE_PIXEL_BYTES);
+  bytes[bytes.length - 1] ^= variantByte;
+  return {
+    id,
+    name: `${id}.png`,
+    mimeType: "image/png",
+    kind: "image",
+    size: bytes.length,
+    data: bytes.toString("base64"),
+  };
+}
+
+test("chatTitleService reads zero images for Foundation Models and text models, and hydrates only the first image for vision models", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-title-images-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+
+  const rawImages = createChatImageStore(async () => root);
+  const readHashes: string[] = [];
+  const chatStore = createChatStore(async () => root, undefined, {
+    images: {
+      ...rawImages,
+      read: async (sha256, size) => {
+        readHashes.push(sha256);
+        return rawImages.read(sha256, size);
+      },
+    },
+  });
+
+  let routeSetting: "apple-foundation-models" | "chat-model" = "apple-foundation-models";
+  let modelInputs: Array<"text" | "image"> = ["text", "image"];
+  const modelSentContent: Array<Array<{ type: string; data?: string }>> = [];
+  const broadcasts: Array<{ chatId: string; title: string }> = [];
+
+  const titleService = createChatTitleService({
+    chatStore,
+    configStore: {
+      getSettings: async () => ({ chatTitleProviderId: routeSetting }),
+    },
+    foundationModelsConnection: {
+      status: async () => ({
+        id: "apple-foundation-models",
+        label: "Apple Foundation Models",
+        state: "ready",
+        detail: "Ready",
+        local: true,
+        titleOnly: true,
+        retryable: false,
+      }),
+      generateTitle: async () => "On-device summary title",
+    },
+    hostPlatformCapabilities: () => ({ appleFoundationModels: true }),
+    resolveModelRuntime: async () =>
+      ({
+        provider: { id: "anthropic", label: "Anthropic", kind: "apiKey" },
+        model: {
+          id: "model-title",
+          name: "Model Title",
+          api: "anthropic-messages",
+          provider: "anthropic",
+          baseUrl: "https://example.invalid",
+          reasoning: false,
+          input: modelInputs,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200_000,
+          maxTokens: 8_192,
+        },
+        apiKey: "secret",
+        headers: undefined,
+        streams: {
+          streamSimple: (_model: unknown, context: { messages: Array<{ role: string; content: unknown }> }) => {
+            const user = context.messages.find((m) => m.role === "user");
+            modelSentContent.push((user?.content ?? []) as Array<{ type: string; data?: string }>);
+            return {
+              result: async () => ({
+                role: "assistant",
+                content: [{ type: "text", text: "Vision model title" }],
+                api: "anthropic-messages",
+                provider: "anthropic",
+                model: "model-title",
+                usage: {
+                  input: 10,
+                  output: 4,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  totalTokens: 14,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                },
+                stopReason: "stop",
+                timestamp: Date.now(),
+              }),
+            };
+          },
+        },
+      }) as never,
+    usageStore: { record: async () => undefined },
+    broadcastMetadataUpdated: (update) => broadcasts.push({ chatId: update.chatId, title: update.title }),
+    logWarn: () => undefined,
+  });
+
+  const firstImg = storedPngAttachment("img-1", 0);
+  const secondImg = storedPngAttachment("img-2", 1);
+  const thirdImg = storedPngAttachment("img-3", 2);
+  const firstSha = imageSha256(Buffer.from(firstImg.data!, "base64"));
+
+  const makeChatWithAttachments = (id: string, content: string, attachments: Attachment[]) =>
+    chatStore.createWithFirstMessage({
+      id,
+      workspaceId: "workspace-1",
+      title: "New agent",
+      turnId: `turn-${id}`,
+      fingerprint: `fp-${id}`,
+      assertCurrent: () => undefined,
+      message: { id: `msg-${id}`, content, attachments },
+    });
+
+  // 1. Apple Foundation Models first-turn title and manual rename read 0 stored images.
+  const fmChat = await makeChatWithAttachments("fm-chat", "Review these three screenshots", [
+    firstImg,
+    secondImg,
+    thirdImg,
+  ]);
+  assert.deepEqual(readHashes, []);
+
+  titleService.startForFirstTurn({
+    chatId: fmChat.id,
+    providerId: "anthropic",
+    model: "model-title",
+  });
+  await titleService.waitForFirstTurn(fmChat.id);
+  assert.equal((await chatStore.getWithImageReferences(fmChat.id))?.title, "On-device summary title");
+  // Manually rename again after seeding a distinct title to exercise generateFoundationModelsRename.
+  await chatStore.rename(fmChat.id, "Temporary manual title");
+  const renameResult = await titleService.renameWithFoundationModels(fmChat.id);
+  assert.equal(renameResult.title, "On-device summary title");
+  assert.equal(renameResult.changed, true);
+  assert.deepEqual(readHashes, [], "Foundation Models first-turn and rename read zero image files");
+
+  // 2. Chat-model route with a text-only model reads 0 stored images.
+  routeSetting = "chat-model";
+  modelInputs = ["text"];
+  const textModelChat = await makeChatWithAttachments("text-model-chat", "Summarize layout issue", [
+    firstImg,
+    secondImg,
+    thirdImg,
+  ]);
+  titleService.startForFirstTurn({
+    chatId: textModelChat.id,
+    providerId: "anthropic",
+    model: "model-title",
+  });
+  await titleService.waitForFirstTurn(textModelChat.id);
+  assert.deepEqual(readHashes, [], "text-only chat model reads zero image files");
+  assert.deepEqual(modelSentContent[0]?.map((part) => part.type), ["text"]);
+
+  // 3. Chat-model route with a vision model hydrates only the first image out of three.
+  modelInputs = ["text", "image"];
+  modelSentContent.length = 0;
+  const visionChat = await makeChatWithAttachments("vision-chat", "Explain the modal alignment bug", [
+    firstImg,
+    secondImg,
+    thirdImg,
+  ]);
+  titleService.startForFirstTurn({
+    chatId: visionChat.id,
+    providerId: "anthropic",
+    model: "model-title",
+  });
+  await titleService.waitForFirstTurn(visionChat.id);
+  assert.deepEqual(readHashes, [firstSha], "vision title reads only the first image hash");
+  assert.deepEqual(modelSentContent[0]?.map((part) => part.type), ["text", "image"]);
+  assert.equal(modelSentContent[0]?.[1]?.data, firstImg.data);
+
+  // 4. Missing first-image file degrades cleanly to text-only prompt after 1 read attempt.
+  readHashes.length = 0;
+  modelSentContent.length = 0;
+  const missingImgChat = await makeChatWithAttachments("missing-img-chat", "Describe missing screenshot", [
+    firstImg,
+    secondImg,
+  ]);
+  await fs.rm(path.join(root, CHAT_IMAGES_DIRECTORY, firstSha.slice(0, 2), firstSha));
+  titleService.startForFirstTurn({
+    chatId: missingImgChat.id,
+    providerId: "anthropic",
+    model: "model-title",
+  });
+  await titleService.waitForFirstTurn(missingImgChat.id);
+  assert.deepEqual(readHashes, [firstSha]);
+  assert.deepEqual(modelSentContent[0]?.map((part) => part.type), ["text"]);
+  assert.ok(broadcasts.some((entry) => entry.chatId === missingImgChat.id));
 });
