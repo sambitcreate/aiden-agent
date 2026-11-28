@@ -547,67 +547,224 @@ function collectReachableDesktopIpcMethods(
 
   interface CallableTarget {
     file: ts.SourceFile;
+    scopeNode: ts.Node;
     params: readonly ts.ParameterDeclaration[];
+  }
+
+  interface ScopeBindings {
+    parent: ScopeBindings | undefined;
+    initialized: boolean;
+    /**
+     * Local/parameter declarations in this lexical scope.
+     * `null` marks a non-IPC local binding that shadows outer scopes and top-level IPC names.
+     */
+    values: Map<string, string[] | null>;
+    /** Property chains on variables declared in this scope, keyed by root identifier then dot-path. */
+    memberChains: Map<string, Map<string, string[]>>;
+    /** Return shapes of functions/arrows declared in this scope. */
+    returnShapes: Map<string, Map<string, string[]>>;
+    /** Functions, classes, and arrow/function variables declared in this scope. */
+    callables: Map<string, CallableTarget>;
   }
 
   const fileMap = new Map<string, ts.SourceFile>();
   for (const sf of callerFiles) fileMap.set(sf.fileName, sf);
 
-  const resolveModulePath = (fromFile: string, specifier: string): ts.SourceFile | undefined => {
-    if (!specifier.startsWith(".")) return undefined;
+  const ipcModulePaths = new Set([
+    PRELOAD_PATH,
+    PRELOAD_ATTACHMENTS_PATH,
+    RENDERER_IPC_PATH,
+    RENDERER_IPC_VOICE_PATH,
+    RENDERER_BOT_PEERS_API_PATH,
+  ]);
+
+  const resolveRelativeCandidates = (fromFile: string, specifier: string): string[] => {
+    if (!specifier.startsWith(".")) return [];
     const stripped = specifier.replace(/\.(?:js|jsx|ts|tsx)$/u, "");
     const base = path.resolve(path.dirname(fromFile), stripped);
-    for (const candidate of [`${base}.ts`, `${base}.tsx`, path.join(base, "index.ts"), path.join(base, "index.tsx")]) {
+    return [`${base}.ts`, `${base}.tsx`, path.join(base, "index.ts"), path.join(base, "index.tsx")];
+  };
+
+  const resolveModulePath = (fromFile: string, specifier: string): ts.SourceFile | undefined => {
+    for (const candidate of resolveRelativeCandidates(fromFile, specifier)) {
       const match = fileMap.get(candidate);
       if (match) return match;
     }
     return undefined;
   };
 
+  const resolvesToIpcModule = (fromFile: string, specifier: string): boolean =>
+    resolveRelativeCandidates(fromFile, specifier).some((candidate) => ipcModulePaths.has(candidate));
+
+  const scopesByNode = new Map<ts.Node, ScopeBindings>();
+  const getOrCreateScope = (node: ts.Node, parent?: ScopeBindings): ScopeBindings => {
+    let existing = scopesByNode.get(node);
+    if (!existing) {
+      existing = {
+        parent,
+        initialized: false,
+        values: new Map(),
+        memberChains: new Map(),
+        returnShapes: new Map(),
+        callables: new Map(),
+      };
+      scopesByNode.set(node, existing);
+    } else if (parent && parent !== existing && !existing.parent) {
+      existing.parent = parent;
+    }
+    return existing;
+  };
+
+  const isLexicalScopeNode = (node: ts.Node): boolean =>
+    ts.isSourceFile(node) ||
+    ts.isFunctionLike(node) ||
+    ts.isClassLike(node) ||
+    ts.isBlock(node) ||
+    ts.isModuleBlock(node) ||
+    ts.isCaseBlock(node) ||
+    ts.isForStatement(node) ||
+    ts.isForInStatement(node) ||
+    ts.isForOfStatement(node) ||
+    ts.isCatchClause(node);
+
+  const ensureDeclared = (scope: ScopeBindings, name: string): void => {
+    if (!scope.values.has(name)) scope.values.set(name, null);
+  };
+
+  const setBinding = (scope: ScopeBindings, name: string, chain: string[]): void => {
+    scope.values.set(name, chain);
+  };
+
+  const setMemberBinding = (
+    scope: ScopeBindings,
+    rootName: string,
+    memberPath: string,
+    chain: string[],
+  ): void => {
+    ensureDeclared(scope, rootName);
+    let members = scope.memberChains.get(rootName);
+    if (!members) {
+      members = new Map();
+      scope.memberChains.set(rootName, members);
+    }
+    members.set(memberPath, chain);
+  };
+
+  const collectBindingNames = (binding: ts.BindingName, out: string[] = []): string[] => {
+    if (ts.isIdentifier(binding)) {
+      out.push(binding.text);
+    } else if (ts.isObjectBindingPattern(binding)) {
+      for (const element of binding.elements) {
+        collectBindingNames(element.name, out);
+      }
+    } else if (ts.isArrayBindingPattern(binding)) {
+      for (const element of binding.elements) {
+        if (ts.isBindingElement(element)) collectBindingNames(element.name, out);
+      }
+    }
+    return out;
+  };
+
+  const declarationScopeForVar = (decl: ts.VariableDeclaration, currentScope: ScopeBindings): ScopeBindings => {
+    const list = decl.parent;
+    if (ts.isVariableDeclarationList(list) && (list.flags & (ts.NodeFlags.Let | ts.NodeFlags.Const)) !== 0) {
+      return currentScope;
+    }
+    let ancestor: ts.Node | undefined = decl.parent;
+    while (ancestor && !ts.isFunctionLike(ancestor) && !ts.isSourceFile(ancestor)) {
+      ancestor = ancestor.parent;
+    }
+    return (ancestor && scopesByNode.get(ancestor)) ?? currentScope;
+  };
+
+  const lookupOwner = (scope: ScopeBindings, name: string): ScopeBindings | undefined => {
+    let cursor: ScopeBindings | undefined = scope;
+    while (cursor) {
+      if (cursor.values.has(name)) return cursor;
+      cursor = cursor.parent;
+    }
+    return undefined;
+  };
+
+  const lookupReturnShape = (scope: ScopeBindings, fnName: string): Map<string, string[]> | undefined => {
+    let cursor: ScopeBindings | undefined = scope;
+    while (cursor) {
+      const shape = cursor.returnShapes.get(fnName);
+      if (shape) return shape;
+      cursor = cursor.parent;
+    }
+    return undefined;
+  };
+
+  const lookupCallable = (scope: ScopeBindings, name: string): CallableTarget | undefined => {
+    let cursor: ScopeBindings | undefined = scope;
+    while (cursor) {
+      const target = cursor.callables.get(name);
+      if (target) return target;
+      // Stop if shadowed by a non-callable local/parameter binding in this scope.
+      if (cursor.values.has(name) && !cursor.callables.has(name)) return undefined;
+      cursor = cursor.parent;
+    }
+    return undefined;
+  };
+
   const exportedCallables = new Map<string, Map<string, CallableTarget>>();
-  const localCallables = new Map<ts.SourceFile, Map<string, CallableTarget>>();
   const importedCallables = new Map<ts.SourceFile, Map<string, { targetFile: ts.SourceFile; exportName: string }>>();
-  const aliasesByFile = new Map<ts.SourceFile, Map<string, string[]>>();
-  const returnShapesByFile = new Map<ts.SourceFile, Map<string, Map<string, string[]>>>();
 
   for (const sf of callerFiles) {
+    const fileScope = getOrCreateScope(sf, undefined);
     const exports = new Map<string, CallableTarget>();
-    const locals = new Map<string, CallableTarget>();
     const imports = new Map<string, { targetFile: ts.SourceFile; exportName: string }>();
-    aliasesByFile.set(sf, new Map());
-    returnShapesByFile.set(sf, new Map());
 
     for (const statement of sf.statements) {
       if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
-        const targetFile = resolveModulePath(sf.fileName, statement.moduleSpecifier.text);
-        const namedBindings = statement.importClause?.namedBindings;
-        if (targetFile && namedBindings && ts.isNamedImports(namedBindings)) {
+        const spec = statement.moduleSpecifier.text;
+        const clause = statement.importClause;
+        if (!clause || clause.isTypeOnly) continue;
+        const isIpcImport = resolvesToIpcModule(sf.fileName, spec);
+        if (clause.name) {
+          ensureDeclared(fileScope, clause.name.text);
+        }
+        const namedBindings = clause.namedBindings;
+        if (namedBindings && ts.isNamespaceImport(namedBindings)) {
+          ensureDeclared(fileScope, namedBindings.name.text);
+        } else if (namedBindings && ts.isNamedImports(namedBindings)) {
+          const targetFile = isIpcImport ? undefined : resolveModulePath(sf.fileName, spec);
           for (const element of namedBindings.elements) {
+            if (element.isTypeOnly) continue;
             const exportName = element.propertyName ? element.propertyName.text : element.name.text;
-            imports.set(element.name.text, { targetFile, exportName });
+            if (isIpcImport && (namespacePrefixes.has(exportName) || definedMethods.has(exportName))) {
+              setBinding(fileScope, element.name.text, [exportName]);
+            } else {
+              ensureDeclared(fileScope, element.name.text);
+              if (targetFile) imports.set(element.name.text, { targetFile, exportName });
+            }
           }
         }
         continue;
       }
       if (ts.isFunctionDeclaration(statement) && statement.name) {
-        const target: CallableTarget = { file: sf, params: statement.parameters };
-        locals.set(statement.name.text, target);
+        const target: CallableTarget = { file: sf, scopeNode: statement, params: statement.parameters };
+        ensureDeclared(fileScope, statement.name.text);
+        fileScope.callables.set(statement.name.text, target);
         if (hasExportModifier(statement)) exports.set(statement.name.text, target);
       } else if (ts.isClassDeclaration(statement) && statement.name) {
+        ensureDeclared(fileScope, statement.name.text);
         const ctor = statement.members.find(ts.isConstructorDeclaration);
         if (ctor) {
-          const target: CallableTarget = { file: sf, params: ctor.parameters };
-          locals.set(statement.name.text, target);
+          const target: CallableTarget = { file: sf, scopeNode: ctor, params: ctor.parameters };
+          fileScope.callables.set(statement.name.text, target);
           if (hasExportModifier(statement)) exports.set(statement.name.text, target);
         }
       } else if (ts.isVariableStatement(statement)) {
         const exported = hasExportModifier(statement);
         for (const declaration of statement.declarationList.declarations) {
+          for (const id of collectBindingNames(declaration.name)) ensureDeclared(fileScope, id);
           if (!ts.isIdentifier(declaration.name) || !declaration.initializer) continue;
           const init = unwrapValueExpression(declaration.initializer);
           if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) {
-            const target: CallableTarget = { file: sf, params: init.parameters };
-            locals.set(declaration.name.text, target);
+            const target: CallableTarget = { file: sf, scopeNode: init, params: init.parameters };
+            fileScope.callables.set(declaration.name.text, target);
             if (exported) exports.set(declaration.name.text, target);
           }
         }
@@ -615,39 +772,77 @@ function collectReachableDesktopIpcMethods(
     }
 
     exportedCallables.set(sf.fileName, exports);
-    localCallables.set(sf, locals);
     importedCallables.set(sf, imports);
   }
 
+  const normalizeWindowAidenApi = (parts: string[]): string[] =>
+    (parts[0] === "window" || parts[0] === "globalThis") && parts[1] === "aidenAPI"
+      ? parts.slice(1)
+      : parts;
+
+  const extractRootedPath = (
+    node: ts.Node,
+  ): { rootName: string; segments: string[] } | undefined => {
+    const segments: string[] = [];
+    let cursor: ts.Node = ts.isExpression(node) ? unwrapValueExpression(node) : node;
+    while (ts.isPropertyAccessExpression(cursor)) {
+      segments.unshift(cursor.name.text);
+      cursor = unwrapValueExpression(cursor.expression);
+    }
+    if (ts.isIdentifier(cursor)) {
+      return { rootName: cursor.text, segments };
+    }
+    if (cursor.kind === ts.SyntaxKind.ThisKeyword) {
+      return { rootName: "this", segments };
+    }
+    return undefined;
+  };
+
   const resolveChain = (
     node: ts.Node,
-    aliases: ReadonlyMap<string, string[]>,
-    returnShapes: ReadonlyMap<string, Map<string, string[]>>,
+    scope: ScopeBindings,
   ): string[] | undefined => {
     const current = ts.isExpression(node) ? unwrapValueExpression(node) : node;
-    if (ts.isIdentifier(current)) {
-      return aliases.get(current.text) ?? [current.text];
-    }
-    if (current.kind === ts.SyntaxKind.ThisKeyword) {
-      return ["this"];
+    const rooted = extractRootedPath(current);
+    if (rooted) {
+      const { rootName, segments } = rooted;
+      const owner = lookupOwner(scope, rootName);
+      if (owner) {
+        const members = owner.memberChains.get(rootName);
+        if (members && segments.length > 0) {
+          for (let i = segments.length; i >= 1; i -= 1) {
+            const prefix = segments.slice(0, i).join(".");
+            const hit = members.get(prefix);
+            if (hit) return normalizeWindowAidenApi([...hit, ...segments.slice(i)]);
+          }
+        }
+        const bound = owner.values.get(rootName);
+        if (!bound) return undefined;
+        return normalizeWindowAidenApi([...bound, ...segments]);
+      }
+      return normalizeWindowAidenApi([rootName, ...segments]);
     }
     if (
       ts.isCallExpression(current) &&
       current.arguments.length === 0 &&
       ts.isIdentifier(current.expression)
     ) {
-      const direct = returnShapes.get(current.expression.text)?.get("");
+      const direct = lookupReturnShape(scope, current.expression.text)?.get("");
       if (direct) return direct;
     }
     if (ts.isPropertyAccessExpression(current)) {
-      const left = resolveChain(current.expression, aliases, returnShapes);
+      const baseExpr = unwrapValueExpression(current.expression);
+      if (
+        ts.isCallExpression(baseExpr) &&
+        baseExpr.arguments.length === 0 &&
+        ts.isIdentifier(baseExpr.expression)
+      ) {
+        const propHit = lookupReturnShape(scope, baseExpr.expression.text)?.get(current.name.text);
+        if (propHit) return propHit;
+      }
+      const left = resolveChain(current.expression, scope);
       if (!left) return undefined;
-      const combined =
-        (left[0] === "window" || left[0] === "globalThis") && left[1] === "aidenAPI"
-          ? [...left.slice(1), current.name.text]
-          : [...left, current.name.text];
-      const aliased = aliases.get(combined.join("."));
-      return aliased ?? combined;
+      return normalizeWindowAidenApi([...left, current.name.text]);
     }
     return undefined;
   };
@@ -666,11 +861,10 @@ function collectReachableDesktopIpcMethods(
 
   const resolveKnownChain = (
     expr: ts.Expression,
-    aliases: ReadonlyMap<string, string[]>,
-    returnShapes: ReadonlyMap<string, Map<string, string[]>>,
+    scope: ScopeBindings,
   ): string[] | undefined => {
     for (const candidate of candidateExpressions(expr)) {
-      const chain = resolveChain(candidate, aliases, returnShapes);
+      const chain = resolveChain(candidate, scope);
       if (!chain) continue;
       const key = chain.join(".");
       if (namespacePrefixes.has(key) || definedMethods.has(key)) return chain;
@@ -680,8 +874,7 @@ function collectReachableDesktopIpcMethods(
 
   const resolveCallShape = (
     expr: ts.Expression,
-    aliases: ReadonlyMap<string, string[]>,
-    returnShapes: ReadonlyMap<string, Map<string, string[]>>,
+    scope: ScopeBindings,
   ): Map<string, string[]> | undefined => {
     for (const candidate of candidateExpressions(expr)) {
       if (ts.isObjectLiteralExpression(candidate)) {
@@ -691,15 +884,19 @@ function collectReachableDesktopIpcMethods(
             ts.isPropertyAssignment(prop) &&
             (ts.isIdentifier(prop.name) || ts.isStringLiteralLike(prop.name))
           ) {
-            const propChain = resolveKnownChain(prop.initializer, aliases, returnShapes);
+            const propChain = resolveKnownChain(prop.initializer, scope);
+            if (propChain) shape.set(prop.name.text, propChain);
+          } else if (ts.isShorthandPropertyAssignment(prop)) {
+            const propChain = resolveKnownChain(prop.name, scope);
             if (propChain) shape.set(prop.name.text, propChain);
           } else if (ts.isSpreadAssignment(prop)) {
             const spreadExpr = unwrapValueExpression(prop.expression);
             if (ts.isIdentifier(spreadExpr)) {
-              const prefix = `${spreadExpr.text}.`;
-              for (const [aliasKey, chain] of aliases) {
-                if (aliasKey.startsWith(prefix)) {
-                  shape.set(aliasKey.slice(prefix.length), chain);
+              const owner = lookupOwner(scope, spreadExpr.text);
+              const members = owner?.memberChains.get(spreadExpr.text);
+              if (members) {
+                for (const [memberKey, chain] of members) {
+                  shape.set(memberKey, chain);
                 }
               }
             }
@@ -709,12 +906,16 @@ function collectReachableDesktopIpcMethods(
       }
       if (!ts.isCallExpression(candidate)) continue;
       if (ts.isIdentifier(candidate.expression)) {
-        const direct = returnShapes.get(candidate.expression.text);
+        const direct = lookupReturnShape(scope, candidate.expression.text);
         if (direct) return direct;
       }
       const firstArg = candidate.arguments[0];
       if (firstArg && ts.isArrowFunction(firstArg) && !ts.isBlock(firstArg.body)) {
-        const nested = resolveCallShape(firstArg.body, aliases, returnShapes);
+        const arrowScope = getOrCreateScope(firstArg, scope);
+        for (const param of firstArg.parameters) {
+          for (const id of collectBindingNames(param.name)) ensureDeclared(arrowScope, id);
+        }
+        const nested = resolveCallShape(firstArg.body, arrowScope);
         if (nested) return nested;
       }
     }
@@ -724,10 +925,10 @@ function collectReachableDesktopIpcMethods(
   const bindParameter = (
     param: ts.ParameterDeclaration,
     chain: string[],
-    targetAliases: Map<string, string[]>,
+    targetScope: ScopeBindings,
   ): void => {
     if (ts.isIdentifier(param.name)) {
-      targetAliases.set(param.name.text, chain);
+      setBinding(targetScope, param.name.text, chain);
     } else if (ts.isObjectBindingPattern(param.name)) {
       for (const element of param.name.elements) {
         if (!ts.isIdentifier(element.name)) continue;
@@ -738,29 +939,76 @@ function collectReachableDesktopIpcMethods(
         const member = [...chain, prop];
         const key = member.join(".");
         if (namespacePrefixes.has(key) || definedMethods.has(key)) {
-          targetAliases.set(element.name.text, member);
+          setBinding(targetScope, element.name.text, member);
         }
       }
     }
   };
 
-  const resolveCallable = (sf: ts.SourceFile, expr: ts.Expression): CallableTarget | undefined => {
+  const resolveCallable = (
+    sf: ts.SourceFile,
+    scope: ScopeBindings,
+    expr: ts.Expression,
+  ): CallableTarget | undefined => {
     const unwrapped = unwrapValueExpression(expr);
     if (!ts.isIdentifier(unwrapped)) return undefined;
-    const local = localCallables.get(sf)?.get(unwrapped.text);
+    const local = lookupCallable(scope, unwrapped.text);
     if (local) return local;
+    // If shadowed by a local non-callable variable/parameter, do not fall back to file imports.
+    const owner = lookupOwner(scope, unwrapped.text);
+    const fileScope = getOrCreateScope(sf);
+    if (owner && owner !== fileScope) return undefined;
     const imported = importedCallables.get(sf)?.get(unwrapped.text);
     if (!imported) return undefined;
     return exportedCallables.get(imported.targetFile.fileName)?.get(imported.exportName);
   };
 
+  const initializeScopeDeclarations = (
+    sf: ts.SourceFile,
+    node: ts.Node,
+    scope: ScopeBindings,
+  ): void => {
+    if (ts.isClassLike(node)) {
+      ensureDeclared(scope, "this");
+    }
+    if (ts.isFunctionLike(node)) {
+      if (ts.isFunctionExpression(node) && node.name) {
+        ensureDeclared(scope, node.name.text);
+      }
+      for (const param of node.parameters) {
+        for (const id of collectBindingNames(param.name)) ensureDeclared(scope, id);
+      }
+    }
+    if (ts.isCatchClause(node) && node.variableDeclaration) {
+      for (const id of collectBindingNames(node.variableDeclaration.name)) ensureDeclared(scope, id);
+    }
+    if (ts.isBlock(node) || ts.isModuleBlock(node)) {
+      for (const stmt of node.statements) {
+        if (ts.isFunctionDeclaration(stmt) && stmt.name) {
+          ensureDeclared(scope, stmt.name.text);
+          scope.callables.set(stmt.name.text, { file: sf, scopeNode: stmt, params: stmt.parameters });
+        } else if (ts.isClassDeclaration(stmt) && stmt.name) {
+          ensureDeclared(scope, stmt.name.text);
+          const ctor = stmt.members.find(ts.isConstructorDeclaration);
+          if (ctor) {
+            scope.callables.set(stmt.name.text, { file: sf, scopeNode: ctor, params: ctor.parameters });
+          }
+        }
+      }
+    }
+  };
+
   for (let pass = 0; pass < 3; pass += 1) {
     for (const sf of callerFiles) {
-      const aliases = aliasesByFile.get(sf)!;
-      const returnShapes = returnShapesByFile.get(sf)!;
-
-      const recordFunctionReturns = (name: string, body: ts.ConciseBody | undefined): void => {
+      const recordFunctionReturns = (
+        ownerScope: ScopeBindings,
+        name: string,
+        fnNode: ts.FunctionLikeDeclarationBase,
+      ): void => {
+        const body = fnNode.body;
         if (!body) return;
+        const fnScope = getOrCreateScope(fnNode, ownerScope);
+        const evalScope = ts.isBlock(body) ? getOrCreateScope(body, fnScope) : fnScope;
         const returnedExprs: ts.Expression[] = [];
         if (!ts.isBlock(body)) {
           returnedExprs.push(body);
@@ -770,101 +1018,154 @@ function collectReachableDesktopIpcMethods(
           }
         }
         for (const ret of returnedExprs) {
-          const direct = resolveKnownChain(ret, aliases, returnShapes);
+          const direct = resolveKnownChain(ret, evalScope);
           if (direct) {
-            const shape = returnShapes.get(name) ?? new Map<string, string[]>();
+            const shape = ownerScope.returnShapes.get(name) ?? new Map<string, string[]>();
             shape.set("", direct);
-            returnShapes.set(name, shape);
+            ownerScope.returnShapes.set(name, shape);
           }
-          const unwrapped = unwrapValueExpression(ret);
-          if (ts.isObjectLiteralExpression(unwrapped)) {
-            for (const prop of unwrapped.properties) {
-              if (
-                ts.isPropertyAssignment(prop) &&
-                (ts.isIdentifier(prop.name) || ts.isStringLiteralLike(prop.name))
-              ) {
-                const propChain = resolveKnownChain(prop.initializer, aliases, returnShapes);
-                if (propChain) {
-                  const shape = returnShapes.get(name) ?? new Map<string, string[]>();
-                  shape.set(prop.name.text, propChain);
-                  returnShapes.set(name, shape);
-                }
-              }
+          const resolvedShape = resolveCallShape(ret, evalScope);
+          if (resolvedShape) {
+            const shape = ownerScope.returnShapes.get(name) ?? new Map<string, string[]>();
+            for (const [propKey, propChain] of resolvedShape) {
+              shape.set(propKey, propChain);
             }
+            ownerScope.returnShapes.set(name, shape);
           }
         }
       };
 
-      const visit = (node: ts.Node): void => {
+      const visit = (node: ts.Node, parentScope: ScopeBindings | undefined): void => {
         if (ts.isTypeNode(node)) return;
-        if (ts.isFunctionDeclaration(node) && node.name) {
-          recordFunctionReturns(node.name.text, node.body);
-        } else if (ts.isVariableDeclaration(node) && node.initializer) {
-          if (ts.isIdentifier(node.name)) {
+        const scope = isLexicalScopeNode(node) ? getOrCreateScope(node, parentScope) : parentScope!;
+        if (scope !== parentScope && !scope.initialized) {
+          scope.initialized = true;
+          initializeScopeDeclarations(sf, node, scope);
+        }
+
+        if (ts.isVariableDeclaration(node)) {
+          const declScope = declarationScopeForVar(node, scope);
+          for (const id of collectBindingNames(node.name)) ensureDeclared(declScope, id);
+          if (node.initializer && ts.isIdentifier(node.name)) {
             const init = unwrapValueExpression(node.initializer);
             if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) {
-              recordFunctionReturns(node.name.text, init.body);
+              declScope.callables.set(node.name.text, { file: sf, scopeNode: init, params: init.parameters });
             }
-            const known = resolveKnownChain(node.initializer, aliases, returnShapes);
-            if (known) aliases.set(node.name.text, known);
-            const shape = resolveCallShape(node.initializer, aliases, returnShapes);
+          }
+        }
+
+        if (ts.isVariableDeclaration(node) && node.initializer) {
+          const declScope = declarationScopeForVar(node, scope);
+          if (ts.isIdentifier(node.name)) {
+            const known = resolveKnownChain(node.initializer, scope);
+            if (known) setBinding(declScope, node.name.text, known);
+            const shape = resolveCallShape(node.initializer, scope);
             if (shape) {
               for (const [prop, chain] of shape) {
-                aliases.set(prop ? `${node.name.text}.${prop}` : node.name.text, chain);
+                if (prop) {
+                  setMemberBinding(declScope, node.name.text, prop, chain);
+                } else {
+                  setBinding(declScope, node.name.text, chain);
+                }
               }
             }
           } else if (ts.isArrayBindingPattern(node.name)) {
             const first = node.name.elements[0];
             if (first && ts.isBindingElement(first) && ts.isIdentifier(first.name)) {
-              const shape = resolveCallShape(node.initializer, aliases, returnShapes);
+              const shape = resolveCallShape(node.initializer, scope);
               if (shape) {
                 for (const [prop, chain] of shape) {
-                  aliases.set(prop ? `${first.name.text}.${prop}` : first.name.text, chain);
+                  if (prop) {
+                    setMemberBinding(declScope, first.name.text, prop, chain);
+                  } else {
+                    setBinding(declScope, first.name.text, chain);
+                  }
                 }
               }
             }
           } else if (ts.isObjectBindingPattern(node.name)) {
-            const known = resolveKnownChain(node.initializer, aliases, returnShapes);
-            if (known) {
-              for (const element of node.name.elements) {
-                if (!ts.isIdentifier(element.name)) continue;
-                const prop =
-                  element.propertyName && ts.isIdentifier(element.propertyName)
-                    ? element.propertyName.text
-                    : element.name.text;
+            const known = resolveKnownChain(node.initializer, scope);
+            const shape = resolveCallShape(node.initializer, scope);
+            const initExpr = unwrapValueExpression(node.initializer);
+            const initMembers = ts.isIdentifier(initExpr)
+              ? lookupOwner(scope, initExpr.text)?.memberChains.get(initExpr.text)
+              : undefined;
+            for (const element of node.name.elements) {
+              if (!ts.isIdentifier(element.name)) continue;
+              const prop =
+                element.propertyName && ts.isIdentifier(element.propertyName)
+                  ? element.propertyName.text
+                  : element.name.text;
+              if (known) {
                 const member = [...known, prop];
                 const key = member.join(".");
                 if (namespacePrefixes.has(key) || definedMethods.has(key)) {
-                  aliases.set(element.name.text, member);
+                  setBinding(declScope, element.name.text, member);
+                  continue;
                 }
+              }
+              const memberHit = shape?.get(prop) ?? initMembers?.get(prop);
+              if (memberHit) {
+                setBinding(declScope, element.name.text, memberHit);
               }
             }
           }
-        } else if ((ts.isParameter(node) || ts.isBindingElement(node)) && ts.isIdentifier(node.name) && node.initializer) {
-          const known = resolveKnownChain(node.initializer, aliases, returnShapes);
-          if (known) aliases.set(node.name.text, known);
+        } else if (
+          (ts.isParameter(node) || ts.isBindingElement(node)) &&
+          ts.isIdentifier(node.name) &&
+          node.initializer
+        ) {
+          const known = resolveKnownChain(node.initializer, scope);
+          if (known) setBinding(scope, node.name.text, known);
         } else if (
           ts.isBinaryExpression(node) &&
           node.operatorToken.kind === ts.SyntaxKind.EqualsToken
         ) {
-          const lhs = resolveChain(node.left, aliases, returnShapes);
-          const rhs = resolveKnownChain(node.right, aliases, returnShapes);
-          if (lhs && rhs) aliases.set(lhs.join("."), rhs);
+          const lhsRooted = extractRootedPath(node.left);
+          const rhs = resolveKnownChain(node.right, scope);
+          if (lhsRooted && rhs) {
+            const owner = lookupOwner(scope, lhsRooted.rootName) ?? scope;
+            if (lhsRooted.segments.length === 0) {
+              setBinding(owner, lhsRooted.rootName, rhs);
+            } else {
+              setMemberBinding(owner, lhsRooted.rootName, lhsRooted.segments.join("."), rhs);
+            }
+          }
         } else if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
-          const target = resolveCallable(sf, node.expression);
+          const target = resolveCallable(sf, scope, node.expression);
           if (target && node.arguments) {
-            const targetAliases = aliasesByFile.get(target.file)!;
+            const targetScope = getOrCreateScope(target.scopeNode);
             node.arguments.forEach((arg, index) => {
               const param = target.params[index];
               if (!param) return;
-              const known = resolveKnownChain(arg, aliases, returnShapes);
-              if (known) bindParameter(param, known, targetAliases);
+              const known = resolveKnownChain(arg, scope);
+              if (known) bindParameter(param, known, targetScope);
+              const argShape = resolveCallShape(arg, scope);
               const unwrappedArg = unwrapValueExpression(arg);
-              if (ts.isIdentifier(unwrappedArg) && ts.isIdentifier(param.name)) {
-                const prefix = `${unwrappedArg.text}.`;
-                for (const [aliasKey, chain] of aliases) {
-                  if (aliasKey.startsWith(prefix)) {
-                    targetAliases.set(`${param.name.text}.${aliasKey.slice(prefix.length)}`, chain);
+              const argMembers = ts.isIdentifier(unwrappedArg)
+                ? lookupOwner(scope, unwrappedArg.text)?.memberChains.get(unwrappedArg.text)
+                : undefined;
+              const combinedMembers = new Map<string, string[]>();
+              if (argMembers) {
+                for (const [k, v] of argMembers) combinedMembers.set(k, v);
+              }
+              if (argShape) {
+                for (const [k, v] of argShape) {
+                  if (k) combinedMembers.set(k, v);
+                }
+              }
+              if (combinedMembers.size > 0) {
+                if (ts.isIdentifier(param.name)) {
+                  for (const [memberKey, chain] of combinedMembers) {
+                    setMemberBinding(targetScope, param.name.text, memberKey, chain);
+                  }
+                } else if (ts.isObjectBindingPattern(param.name)) {
+                  for (const el of param.name.elements) {
+                    if (!ts.isIdentifier(el.name)) continue;
+                    const propKey =
+                      el.propertyName && ts.isIdentifier(el.propertyName) ? el.propertyName.text : el.name.text;
+                    const hit = combinedMembers.get(propKey);
+                    if (hit) setBinding(targetScope, el.name.text, hit);
                   }
                 }
               }
@@ -872,10 +1173,10 @@ function collectReachableDesktopIpcMethods(
           }
         } else if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
           if (ts.isIdentifier(node.tagName)) {
-            const target = resolveCallable(sf, node.tagName);
+            const target = resolveCallable(sf, scope, node.tagName);
             const firstParam = target?.params[0];
             if (target && firstParam) {
-              const targetAliases = aliasesByFile.get(target.file)!;
+              const targetScope = getOrCreateScope(target.scopeNode);
               for (const prop of node.attributes.properties) {
                 if (
                   !ts.isJsxAttribute(prop) ||
@@ -886,53 +1187,67 @@ function collectReachableDesktopIpcMethods(
                 ) {
                   continue;
                 }
-                const known = resolveKnownChain(prop.initializer.expression, aliases, returnShapes);
+                const known = resolveKnownChain(prop.initializer.expression, scope);
                 if (!known) continue;
                 const attrName = prop.name.text;
                 if (ts.isIdentifier(firstParam.name)) {
-                  targetAliases.set(`${firstParam.name.text}.${attrName}`, known);
+                  setMemberBinding(targetScope, firstParam.name.text, attrName, known);
                 } else if (ts.isObjectBindingPattern(firstParam.name)) {
                   for (const el of firstParam.name.elements) {
                     if (!ts.isIdentifier(el.name)) continue;
                     const propKey =
                       el.propertyName && ts.isIdentifier(el.propertyName) ? el.propertyName.text : el.name.text;
-                    if (propKey === attrName) targetAliases.set(el.name.text, known);
+                    if (propKey === attrName) setBinding(targetScope, el.name.text, known);
                   }
                 }
               }
             }
           }
         }
-        ts.forEachChild(node, visit);
+
+        ts.forEachChild(node, (child) => visit(child, scope));
+
+        if (ts.isFunctionDeclaration(node) && node.name && parentScope) {
+          recordFunctionReturns(parentScope, node.name.text, node);
+        } else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+          const init = unwrapValueExpression(node.initializer);
+          if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) {
+            const declScope = declarationScopeForVar(node, scope);
+            recordFunctionReturns(declScope, node.name.text, init);
+          }
+        }
       };
-      visit(sf);
+
+      visit(sf, undefined);
     }
   }
 
   const reachable = new Set<string>();
   for (const sf of callerFiles) {
-    const aliases = aliasesByFile.get(sf)!;
-    const returnShapes = returnShapesByFile.get(sf)!;
-    const visit = (node: ts.Node): void => {
+    const visit = (node: ts.Node, parentScope: ScopeBindings | undefined): void => {
       if (ts.isTypeNode(node)) return;
+      const scope = isLexicalScopeNode(node) ? getOrCreateScope(node, parentScope) : parentScope!;
       if (ts.isPropertyAccessExpression(node) && !hasTypeNodeAncestor(node)) {
-        const chain = resolveChain(node, aliases, returnShapes);
+        const chain = resolveChain(node, scope);
         if (chain) {
           const candidate = chain.join(".");
           if (definedMethods.has(candidate)) reachable.add(candidate);
         }
       } else if (ts.isIdentifier(node) && isValueReferenceIdentifier(node)) {
-        const aliased = aliases.get(node.text);
-        if (aliased) {
-          const candidate = aliased.join(".");
-          if (definedMethods.has(candidate)) reachable.add(candidate);
+        const owner = lookupOwner(scope, node.text);
+        if (owner) {
+          const bound = owner.values.get(node.text);
+          if (bound) {
+            const candidate = bound.join(".");
+            if (definedMethods.has(candidate)) reachable.add(candidate);
+          }
         } else if (topLevelFunctions.has(node.text)) {
           reachable.add(node.text);
         }
       }
-      ts.forEachChild(node, visit);
+      ts.forEachChild(node, (child) => visit(child, scope));
     };
-    visit(sf);
+    visit(sf, undefined);
   }
 
   const queue = [...reachable];
@@ -1387,4 +1702,59 @@ test("caller reachability fails on uncalled ipc.ts, bot-peers-api.ts, or preload
     { ...DESKTOP_IPC_CALLER_ALLOWLIST, "chatsApi.nonExistentRetiredMethod": "stale exemption" },
   );
   assert.deepEqual(staleAllowlistReport.staleAllowlist, ["chatsApi.nonExistentRetiredMethod"]);
+
+  // Lexical scope isolation: an alias in one function must not leak to a sibling
+  // function or a nested shadowed parameter sharing the same identifier name.
+  const sameNameDifferentScopeCaller = ts.createSourceFile(
+    path.join(RENDERER_ROOT, "components", "lexical-scope-mutation.ts"),
+    `
+      import { mutatedTestApi } from "../lib/ipc";
+      export function setupAliasOnly() {
+        const api = mutatedTestApi;
+        const shadowed = (api: { orphanAction(): void }) => api.orphanAction();
+        return { api, shadowed };
+      }
+      export function callUnrelatedParameter(api: { orphanAction(): void }) {
+        api.orphanAction();
+      }
+    `,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const isolatedScopeReport = evaluateDesktopIpcReachability(
+    { ...desktopIpcSources, ipc: mutatedIpc },
+    [...rendererCallerSources, sameNameDifferentScopeCaller],
+    DESKTOP_IPC_CALLER_ALLOWLIST,
+  );
+  assert.deepEqual(
+    isolatedScopeReport.uncalled,
+    ["mutatedTestApi.orphanAction"],
+    "aliases must stay lexically scoped and respect parameter shadowing",
+  );
+
+  // Calling the method in the same lexical scope (or passing the alias to a helper)
+  // marks it reachable.
+  const lexicalCaller = ts.createSourceFile(
+    path.join(RENDERER_ROOT, "components", "lexical-caller-mutation.ts"),
+    `
+      import { mutatedTestApi } from "../lib/ipc";
+      function invokeHelper(api: typeof mutatedTestApi) {
+        api.orphanAction();
+      }
+      export function runRealCall() {
+        const api = mutatedTestApi;
+        invokeHelper(api);
+      }
+    `,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const reachableScopeReport = evaluateDesktopIpcReachability(
+    { ...desktopIpcSources, ipc: mutatedIpc },
+    [...rendererCallerSources, lexicalCaller],
+    DESKTOP_IPC_CALLER_ALLOWLIST,
+  );
+  assert.deepEqual(reachableScopeReport.uncalled, []);
 });

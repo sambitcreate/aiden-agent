@@ -1,5 +1,7 @@
 // Adapted from t3code packages/client-runtime/src/device/stream.test.ts @ 1c127066 (MIT)
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import type { Duplex } from "node:stream";
 import test from "node:test";
 
 import {
@@ -19,6 +21,7 @@ import {
   IOS_TAG_SCREEN_CONFIG,
   androidKeyMessage,
   avcCodecString,
+  browserDeviceStreamRuntime,
   createDeviceStreamClient,
   deviceHubUrl,
   hidUsageForCode,
@@ -996,4 +999,168 @@ test("an undecodable Android profile stops with a reason instead of falling back
   await settle();
   assert.ok(h.log.includes("status:error:This Mac cannot decode the emulator's avc1.640028 video."));
   assert.ok(!h.log.some((line) => line.startsWith("mjpeg:")));
+});
+
+test("socket errors during CONNECTING do not recurse when close() re-dispatches onerror, and stop() detaches onerror", async () => {
+  for (const android of [false, true]) {
+    const clock = fakeClock();
+    const sockets: FakeSocket[] = [];
+    const log: string[] = [];
+    class SpecConnectingSocket extends FakeSocket {
+      closeCalls = 0;
+      override close() {
+        this.closeCalls += 1;
+        // WHATWG / Node Undici closeWebSocketConnection fails a CONNECTING socket
+        // (dispatching "error") before transitioning readyState to CLOSING.
+        if (this.readyState === 0) {
+          this.onerror?.();
+          this.readyState = 2;
+          return;
+        }
+        super.close();
+      }
+    }
+    const client = createDeviceStreamClient(
+      {
+        ...target,
+        grant: { ...target.grant, expiresAt: 60_000 },
+        ...(android ? { platform: "android" as const, deviceId: "emulator-5554" } : {}),
+      },
+      { present: () => true },
+      {
+        onStatus: (status, detail) => log.push(detail ? `status:${status}:${detail}` : `status:${status}`),
+        onScreen: () => undefined,
+        onUnauthorized: () => log.push("unauthorized"),
+        onMjpegFallback: () => undefined,
+        onInputConnected: (connected) => log.push(`input:${connected}`),
+      },
+      {
+        fetch: async () => new Response(new Uint8Array([1]), { status: 200 }),
+        createSocket: (url) => {
+          const socket = new SpecConnectingSocket(url);
+          sockets.push(socket);
+          return socket;
+        },
+        VideoDecoder: class {
+          static isConfigSupported = async () => ({ supported: true });
+          state = "unconfigured";
+          decodeQueueSize = 0;
+          configure() {
+            this.state = "configured";
+          }
+          decode() {}
+          close() {
+            this.state = "closed";
+          }
+        } as unknown as NonNullable<DeviceStreamRuntime["VideoDecoder"]>,
+        EncodedVideoChunk: class {} as unknown as NonNullable<DeviceStreamRuntime["EncodedVideoChunk"]>,
+        setTimeout: clock.setTimeout,
+        clearTimeout: clock.clearTimeout,
+        now: clock.now,
+      },
+    );
+
+    client.start();
+    await settle();
+    assert.equal(sockets.length, 1);
+    const first = sockets[0]! as SpecConnectingSocket;
+
+    // Handshake rejection while still CONNECTING: must not recurse, and must schedule retry
+    // even when the runtime (like Node 22 Undici) never fires CloseEvent for failed upgrades.
+    first.onerror?.();
+    assert.equal(first.closeCalls, 1);
+    assert.equal(log.filter((entry) => entry === "input:false").length, 1);
+    // If a browser runtime subsequently dispatches onclose, it is ignored as duplicate.
+    first.drop(1006);
+    assert.equal(log.filter((entry) => entry === "input:false").length, 1);
+
+    clock.advance(DEVICE_STREAM_RETRY_DELAY_MS);
+    await settle();
+    assert.equal(sockets.length, 2);
+
+    // Stopping while the retry socket is still CONNECTING detaches onerror before close().
+    const second = sockets[1]! as SpecConnectingSocket;
+    let reenteredError = false;
+    const assignedOnError = second.onerror;
+    second.onerror = () => {
+      reenteredError = true;
+      assignedOnError?.();
+    };
+    client.stop();
+    assert.equal(second.closeCalls, 1);
+    assert.equal(reenteredError, false);
+    clock.advance(DEVICE_STREAM_RETRY_DELAY_MS * 3);
+    await settle();
+    assert.equal(sockets.length, 2);
+  }
+});
+
+test("browserDeviceStreamRuntime survives refused WebSocket upgrades and stop() during handshake on Node WebSocket", async () => {
+  let refuseUpgrades = true;
+  const allSockets = new Set<Duplex>();
+  const heldUpgrades = new Set<Duplex>();
+  const server = createServer((_req, res) => {
+    res.writeHead(503, { "Content-Type": "text/plain", Connection: "close" });
+    res.end("unavailable");
+  });
+  server.on("connection", (socket) => {
+    allSockets.add(socket);
+    socket.once("close", () => allSockets.delete(socket));
+  });
+  server.on("upgrade", (_req, socket) => {
+    socket.on("error", () => socket.destroy());
+    if (refuseUpgrades) {
+      socket.write("HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+      socket.end();
+      return;
+    }
+    heldUpgrades.add(socket);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+
+  let disconnects = 0;
+  const client = createDeviceStreamClient(
+    {
+      hostId: "local",
+      deviceId: "ABCD-1234",
+      preferMjpeg: true,
+      grant: { origin: `http://127.0.0.1:${port}`, token: "tok", expiresAt: Date.now() + 60_000 },
+    },
+    { present: () => true },
+    {
+      onStatus: () => undefined,
+      onScreen: () => undefined,
+      onUnauthorized: () => undefined,
+      onMjpegFallback: () => undefined,
+      onInputConnected: (connected) => {
+        if (!connected) disconnects += 1;
+      },
+    },
+    browserDeviceStreamRuntime(),
+  );
+
+  try {
+    client.start();
+    const deadline = Date.now() + 3_000;
+    while (disconnects < 1 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.ok(disconnects >= 1, "refused WebSocket upgrade should report input disconnected cleanly");
+
+    // Next reconnect hangs in CONNECTING while stop() tears down the client.
+    refuseUpgrades = false;
+    const hangDeadline = Date.now() + 3_000;
+    while (heldUpgrades.size === 0 && Date.now() < hangDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    client.stop();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  } finally {
+    client.stop();
+    for (const socket of heldUpgrades) socket.destroy();
+    for (const socket of allSockets) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
