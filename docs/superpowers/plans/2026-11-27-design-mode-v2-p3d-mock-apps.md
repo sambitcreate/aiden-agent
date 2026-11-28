@@ -1101,4 +1101,29 @@ Open question 4 was decided by the owner on 2026-11-27: the tokens offer is dele
 
 ## As built
 
-Not built yet.
+Built 2026-11-27 on `t3/design-mode-v2-p3d`, Tasks 0–12 in order, test first, with `origin/t3/design-mode-v2-p3c` (PR #968) merged in at the start and again before the final push.
+
+### Probes (Task 0)
+
+- **Probe 2 (JSX source).** Done Node-side with Vite's `transformRequest` rather than a page in the Space: `@vitejs/plugin-react` 6.0.3 with Oxc passes `{fileName, lineNumber}` to `jsxDEV` in development, so S111 goes ahead with the dev-runtime shim.
+- **Probe 3 (PostCSS isolation).** `css.postcss: {}` loads no `postcss.config.js` from above the folder.
+- **Probe 4 (the lockfile).** The Mac half was checked at watcher level (`fsevents` ships its prebuilt binary under `ignore-scripts`, and an edit to `src/routes/index.tsx` reaches the page). The Linux half (`npm ci` from the Mac lockfile in the Space) wasn't run: E2E never installs (the `node_modules` knob below), and a networked install in the Space was out of scope for this build. It stays open.
+
+### Deviations
+
+- **Tests.** The config fixture was replaced by temp workspaces built in each test. The `design-mock-routes` fixture is minimal. The flag-off skill test checks anchors, not a hand-written copy of the whole text (AGENTS.md's change-detector rule).
+- **Routes.** `RouteApp` parameters also accept a bare `FrameworkId`. Mock route discovery lists concrete routes only. The template's `routePath` mirrors main's rule for pathless and group tokens, spaces and `%`, and `App` matches encoded paths. The template walks at most 6 folder levels.
+- **Config.** `mockConfig` takes no `folder` input. `firstMockConfig` is main's disk-side first pass. `readMockInputs` maps an unreadable `.aiden/canvas.json` to `{status: "invalid"}`. The snapshot's `mock` comes from the `mockInputs` dependency.
+- **Writes.** `writeMockApp` requires every folder it creates to be new, and saves the `.aiden/canvas.json` entry inside the same step. `CachedDesignAppRoots` is its own type. `exportContent` returns a state, not a string. A draft reason was added for a style source that can't be confined.
+- **The service.** The scaffold page is `{pageId} | {pages}`. Scaffolds are joined per workspace. `closeAll` answers `consent-unavailable`. A pending home placement gets two attempts in the run. `placeMockHome` reuses `placeWrittenPagesOnCanvas` instead of copying `placeAppRoute`'s steps. `install-timeout`'s mock hint is the network one.
+- **IPC.** `designApp:scaffold` resolves the service's problems; only guard refusals throw (not attended, not in design mode, the page isn't on the canvas, bad arguments).
+- **The tool.** It doesn't pass the turn's signal to the service: stopping the reply ends only the wait, which answers an error saying the scaffold goes on. Not now answers `{status: "declined", next}` ("…don't ask again…"), not a `consent-declined` problem.
+- **The chip.** A refusal row is a `DropdownMenuLabel`. The chip reads "Adding design app…" while a scaffold runs. A design app's `frameworkLabel` is "Design app" (`appLabel`). The chip's status line and the problem toast pass `{mock}`, so a design app's failed install shows its hint there too (found by the E2E; `designAppStatusLine` had dropped it).
+- **Prompt and writes.** A `routeWrittenFile` helper routes both the tool loop and ACP's `onFileWrite`. The flag-on inspect bullet is shared by the live and limited sections. The live skill says to export with `design_system` and write the result to `src/theme.css`.
+- **Retired offers.** `cleanUpRetiredDesignSystemOffers` takes an options argument (`removeFile`, `onFailure`) and returns the names it couldn't remove.
+- **Stamps.** Beyond the plan, the renderer's bridge parser (`app-bridge-messages.ts`) keeps `base: "workspace"`, and a `ws:` stamp that is empty, absolute or climbs out gives no path.
+- **E2E.** The node_modules knob is `AIDEN_E2E_DESIGN_APP_NODE_MODULES`, a symlink to the repo's `node_modules` (whose versions equal the template's pins). The install-failure case points npm at a closed loopback port through the test HOME's `.npmrc`, because the launch environment scrubs `npm_config_*`. The Node-missing case runs on Linux only (`PATH=/usr/bin:/bin`, `SHELL=""`): on a Mac the resolver also looks in `/opt/homebrew/bin` and `/usr/local/bin`. The card's file list is relative to the folder its first line names. Case F checks that `design_app` isn't offered with the flag off through the fake model's "did not advertise" error.
+
+### Results
+
+Filled in below by Task 11 and the final verification.
