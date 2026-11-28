@@ -5,11 +5,14 @@ import { syncBuiltinESMExports } from "node:module";
 import { link, mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   AidenOpaqueHandleError,
   AidenOpaqueHandleStore,
   inspectAidenFilesystemIdentity,
+  mapAidenOpaqueHandleError,
   type AidenOpaqueHandleClaims,
+  type AidenOpaqueHandleErrorCode,
 } from "./aiden-remote-opaque-handles.js";
 
 const claims = (overrides: Partial<AidenOpaqueHandleClaims> = {}): AidenOpaqueHandleClaims => ({
@@ -47,6 +50,91 @@ test("opaque handles store only a digest and bind identity, root policy, path id
   rejectsCode(() => store.resolve(token, "file", claims({ canonicalPath: "/outside/file.swift" }), { now: 1_000 }), "path_outside_root");
   rejectsCode(() => store.resolve(token, "file", claims(), { now: 2_000 }), "handle_expired");
   rejectsCode(() => store.issue("file", claims({ workspaceId: undefined, expiresAt: 3_000 })), "handle_invalid");
+});
+
+test("mapAidenOpaqueHandleError maps all seven handle codes for file and folder-browser resources and rethrows other errors", () => {
+  const passthrough = new TypeError("unexpected failure");
+  assert.throws(() => mapAidenOpaqueHandleError(passthrough, "file"), (caught) => caught === passthrough);
+  assert.throws(() => mapAidenOpaqueHandleError(passthrough, "folder-browser"), (caught) => caught === passthrough);
+
+  const expectedByCode: ReadonlyArray<{
+    code: AidenOpaqueHandleErrorCode;
+    status: number;
+    retryable: boolean;
+    fileMessage: string;
+    browserMessage: string;
+  }> = [
+    {
+      code: "handle_wrong_device",
+      status: 403,
+      retryable: false,
+      fileMessage: "This file link is no longer valid. Refresh Files and try again.",
+      browserMessage: "This folder-browser link is no longer valid.",
+    },
+    {
+      code: "handle_expired",
+      status: 410,
+      retryable: false,
+      fileMessage: "This file link expired. Refresh Files and try again.",
+      browserMessage: "This folder-browser link expired. Refresh the approved roots and try again.",
+    },
+    {
+      code: "handle_capacity",
+      status: 429,
+      retryable: true,
+      fileMessage: "Aiden's file-handle capacity is temporarily full.",
+      browserMessage: "Aiden's folder-browser handle capacity is temporarily full.",
+    },
+    {
+      code: "root_policy_changed",
+      status: 409,
+      retryable: false,
+      fileMessage: "This file link is no longer valid. Refresh Files and try again.",
+      browserMessage: "This folder-browser link is no longer valid.",
+    },
+    {
+      code: "filesystem_identity_changed",
+      status: 409,
+      retryable: false,
+      fileMessage: "This file link is no longer valid. Refresh Files and try again.",
+      browserMessage: "This folder-browser link is no longer valid.",
+    },
+    {
+      code: "path_outside_root",
+      status: 409,
+      retryable: false,
+      fileMessage: "This file link is no longer valid. Refresh Files and try again.",
+      browserMessage: "This folder-browser link is no longer valid.",
+    },
+    {
+      code: "handle_invalid",
+      status: 400,
+      retryable: false,
+      fileMessage: "This file link is no longer valid. Refresh Files and try again.",
+      browserMessage: "This folder-browser link is no longer valid.",
+    },
+  ];
+
+  for (const entry of expectedByCode) {
+    assert.throws(
+      () => mapAidenOpaqueHandleError(new AidenOpaqueHandleError(entry.code), "file"),
+      (caught: unknown) =>
+        caught instanceof AidenRemoteServiceError &&
+        caught.code === entry.code &&
+        caught.status === entry.status &&
+        caught.retryable === entry.retryable &&
+        caught.message === entry.fileMessage,
+    );
+    assert.throws(
+      () => mapAidenOpaqueHandleError(new AidenOpaqueHandleError(entry.code), "folder-browser"),
+      (caught: unknown) =>
+        caught instanceof AidenRemoteServiceError &&
+        caught.code === entry.code &&
+        caught.status === entry.status &&
+        caught.retryable === entry.retryable &&
+        caught.message === entry.browserMessage,
+    );
+  }
 });
 
 test("filesystem inspection canonicalizes roots and rejects symlink escapes", async () => {

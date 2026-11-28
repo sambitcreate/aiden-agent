@@ -7,6 +7,7 @@ import {
   AidenOpaqueHandleError,
   AidenOpaqueHandleStore,
   inspectAidenFilesystemIdentity,
+  mapAidenOpaqueHandleError,
   type AidenOpaqueHandleClaims,
 } from "./aiden-remote-opaque-handles.js";
 import type {
@@ -81,31 +82,6 @@ function safeLabel(value: string, fallback: string): string {
   return [...candidate].slice(0, 255).join("") || fallback;
 }
 
-function mapHandleError(error: unknown): never {
-  if (!(error instanceof AidenOpaqueHandleError)) throw error;
-  const status = error.code === "handle_wrong_device"
-    ? 403
-    : error.code === "handle_expired"
-      ? 410
-      : error.code === "handle_capacity"
-        ? 429
-        : error.code === "root_policy_changed" ||
-            error.code === "filesystem_identity_changed" ||
-            error.code === "path_outside_root"
-          ? 409
-          : 400;
-  throw new AidenRemoteServiceError(
-    error.code,
-    error.code === "handle_expired"
-      ? "This folder-browser link expired. Refresh the approved roots and try again."
-      : error.code === "handle_capacity"
-        ? "Aiden's folder-browser handle capacity is temporarily full."
-        : "This folder-browser link is no longer valid.",
-    status,
-    error.code === "handle_capacity",
-  );
-}
-
 export class AidenRemoteWorkspaceBrowserService {
   constructor(
     private readonly options: {
@@ -167,7 +143,7 @@ export class AidenRemoteWorkspaceBrowserService {
       };
     } catch (error) {
       if (error instanceof AidenRemoteServiceError) throw error;
-      if (error instanceof AidenOpaqueHandleError) mapHandleError(error);
+      if (error instanceof AidenOpaqueHandleError) mapAidenOpaqueHandleError(error, "folder-browser");
       throw new AidenRemoteServiceError(
         "workspace_unavailable",
         "This approved folder is not currently available on your computer.",
@@ -192,7 +168,7 @@ export class AidenRemoteWorkspaceBrowserService {
       });
       return { claims: this.handles.resolve(token, "loc", current), root };
     } catch (error) {
-      mapHandleError(error);
+      mapAidenOpaqueHandleError(error, "folder-browser");
     }
   }
 
@@ -335,7 +311,7 @@ export class AidenRemoteWorkspaceBrowserService {
           throw new AidenOpaqueHandleError("handle_invalid");
         }
       } catch (error) {
-        mapHandleError(error);
+        mapAidenOpaqueHandleError(error, "folder-browser");
       }
     }
     const pageEntries = entries.slice(offset, offset + PAGE_SIZE);
@@ -412,7 +388,7 @@ export class AidenRemoteWorkspaceBrowserService {
         this.now(),
       );
     } catch (error) {
-      mapHandleError(error);
+      mapAidenOpaqueHandleError(error, "folder-browser");
     }
   }
 
@@ -421,10 +397,10 @@ export class AidenRemoteWorkspaceBrowserService {
     claims: AidenOpaqueHandleClaims,
   ): Promise<AidenOpaqueHandleClaims> {
     if (this.now() >= claims.expiresAt) {
-      mapHandleError(new AidenOpaqueHandleError("handle_expired"));
+      mapAidenOpaqueHandleError(new AidenOpaqueHandleError("handle_expired"), "folder-browser");
     }
     if (claims.deviceId !== deviceId || claims.instanceId !== this.options.instanceId) {
-      mapHandleError(new AidenOpaqueHandleError("handle_wrong_device"));
+      mapAidenOpaqueHandleError(new AidenOpaqueHandleError("handle_wrong_device"), "folder-browser");
     }
     const root = await this.approvedRoot(claims.rootId);
     const current = await this.claimsForPath(deviceId, root, claims.canonicalPath, {
@@ -441,7 +417,7 @@ export class AidenRemoteWorkspaceBrowserService {
       current.filesystemDevice !== claims.filesystemDevice ||
       current.filesystemInode !== claims.filesystemInode
     ) {
-      mapHandleError(new AidenOpaqueHandleError("filesystem_identity_changed"));
+      mapAidenOpaqueHandleError(new AidenOpaqueHandleError("filesystem_identity_changed"), "folder-browser");
     }
     return current;
   }

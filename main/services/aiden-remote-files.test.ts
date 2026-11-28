@@ -6,7 +6,18 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
-import { listWorkspaceFiles } from "./workspace-files.js";
+import {
+  languageFor,
+  mapSnapshotWriteError,
+  MAX_DISPLAY_PATH_LENGTH,
+  MAX_WIRE_FILE_SIZE,
+  parseWrite,
+  projectedDocument,
+  projectedFileEntry,
+  projectedFileIndex,
+  safeDisplayPath,
+} from "./aiden-remote-file-helpers.js";
+import { listWorkspaceFiles, WorkspaceFileError } from "./workspace-files.js";
 import { AidenRemoteFileService } from "./aiden-remote-files.js";
 import { AidenOpaqueHandleStore } from "./aiden-remote-opaque-handles.js";
 import { AidenRemoteWorkspaceOwnerRegistry } from "./aiden-remote-workspace-owners.js";
@@ -708,4 +719,113 @@ test("re-listing reclaims a superseded listing's unopened handles instead of loc
   }
   await assert.rejects(service.read("device-1", "workspace", first.entries[1]!.id), (error: unknown) =>
     error instanceof AidenRemoteServiceError && error.code === "handle_invalid");
+});
+
+test("shared remote file helpers preserve display-path scope messages, wire bounds, write validation, and conflict mapping", () => {
+  assert.equal(safeDisplayPath("Sources/App.swift", "workspace"), "Sources/App.swift");
+  assert.equal(safeDisplayPath("Notes/plan.md", "bot"), "Notes/plan.md");
+  for (const invalidPath of ["", "/abs/file.ts", "up/../escape.ts", "bad\u0000name.ts", "bad\u007fname.ts", "a".repeat(MAX_DISPLAY_PATH_LENGTH + 1)]) {
+    assert.throws(
+      () => safeDisplayPath(invalidPath, "bot"),
+      (caught: unknown) =>
+        caught instanceof AidenRemoteServiceError &&
+        caught.code === "workspace_unavailable" &&
+        caught.status === 409 &&
+        caught.message === "A Bot file could not be projected safely.",
+    );
+    assert.throws(
+      () => safeDisplayPath(invalidPath, "workspace"),
+      (caught: unknown) =>
+        caught instanceof AidenRemoteServiceError &&
+        caught.code === "workspace_unavailable" &&
+        caught.status === 409 &&
+        caught.message === "A workspace file could not be projected safely.",
+    );
+  }
+
+  assert.equal(languageFor({ path: "a.SWIFT", name: "a.SWIFT", parentPath: "", depth: 0, kind: "file" }), "Swift");
+  assert.equal(languageFor({ path: "dir.ts", name: "dir.ts", parentPath: "", depth: 0, kind: "directory" }), undefined);
+  assert.equal(languageFor({ path: "x.toString", name: "x.toString", parentPath: "", depth: 0, kind: "file" }), undefined);
+
+  const validVersion = "a".repeat(64);
+  assert.deepEqual(parseWrite({ content: "ok", expectedVersion: validVersion }), {
+    content: "ok",
+    expectedVersion: validVersion,
+  });
+  for (const badBody of [
+    null,
+    [],
+    { content: "ok" },
+    { content: "ok", expectedVersion: validVersion, extra: true },
+    { content: "x".repeat(1_500_001), expectedVersion: validVersion },
+    { content: "ok", expectedVersion: "A".repeat(64) },
+  ]) {
+    assert.throws(
+      () => parseWrite(badBody),
+      (caught: unknown) =>
+        caught instanceof AidenRemoteServiceError &&
+        caught.code === "invalid_request" &&
+        caught.status === 400,
+    );
+  }
+
+  const longName = "n".repeat(300);
+  const projected = projectedFileEntry("file_1", "sub/file.ts", {
+    path: "sub/file.ts",
+    name: `${longName}.ts`,
+    parentPath: "sub",
+    depth: 1,
+    kind: "file",
+    size: MAX_WIRE_FILE_SIZE,
+  });
+  assert.equal(projected.name.length, 255);
+  assert.equal(projected.size, MAX_WIRE_FILE_SIZE);
+  assert.equal(projected.language, "TypeScript");
+
+  const oversized = projectedFileEntry("file_2", "sub/huge.bin", {
+    path: "sub/huge.bin",
+    name: "huge.bin",
+    parentPath: "sub",
+    depth: 1,
+    kind: "file",
+    size: MAX_WIRE_FILE_SIZE + 1,
+  });
+  assert.equal("size" in oversized, false);
+  assert.equal("language" in oversized, false);
+
+  assert.deepEqual(projectedFileIndex("snap_1", [projected], true), {
+    snapshotId: "snap_1",
+    entries: [projected],
+    truncated: true,
+    maxEntries: 4_000,
+    maxDepth: 20,
+  });
+
+  const doc = projectedDocument("file_1", "sub/file.ts", {
+    path: "sub/file.ts",
+    content: "hello",
+    size: 5,
+    modifiedAt: 1,
+    version: validVersion,
+    warning: "w".repeat(600),
+  });
+  assert.equal(doc.truncated, false);
+  assert.equal(doc.warning?.length, 500);
+
+  assert.throws(
+    () => mapSnapshotWriteError(new WorkspaceFileError("changed_on_disk", "stale")),
+    (caught: unknown) =>
+      caught instanceof AidenRemoteServiceError &&
+      caught.code === "revision_conflict" &&
+      caught.status === 409 &&
+      caught.message === "This file changed on your computer. Reload it before saving.",
+  );
+  assert.throws(
+    () => mapSnapshotWriteError(new WorkspaceFileError("io_error", "disk")),
+    (caught: unknown) =>
+      caught instanceof AidenRemoteServiceError &&
+      caught.code === "workspace_unavailable" &&
+      caught.status === 409 &&
+      caught.message === "Aiden could not safely save this file on your computer.",
+  );
 });
