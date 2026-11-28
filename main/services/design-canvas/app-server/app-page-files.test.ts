@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { ownerOf } from "./app-page-files-core.js";
-import { confinedTarget, createPageFile, readRegularFileBytes, routeFiles, writeConfinedFile } from "./app-page-files.js";
+import { confinedTarget, createPageFile, readRegularFileBytes, removeCreatedFile, routeFiles, writeConfinedFile } from "./app-page-files.js";
 import { readRouteFile, routeFs, type RouteFs } from "./app-routes.js";
 
 async function workspace(t: TestContext, files: Record<string, string | Buffer>): Promise<string> {
@@ -239,7 +239,13 @@ test("confinedTarget refuses a link anywhere on the path and creates one folder 
 test("writeConfinedFile writes wx, never over a file, and removes a folder it made when the write fails", async (t) => {
   const root = await workspace(t, { "app/pricing/page.tsx": "pricing" });
   const written = await writeConfinedFile(root, "app/pricing-v2/page.tsx", Buffer.from([0xff, 0x01]), 0o600, { create: true });
-  assert.deepEqual(written, { ok: true, absolute: path.resolve(root, "app/pricing-v2/page.tsx"), createdFolder: path.resolve(root, "app/pricing-v2") });
+  const made = await lstat(path.join(root, "app/pricing-v2/page.tsx"));
+  assert.deepEqual(written, {
+    ok: true,
+    absolute: path.resolve(root, "app/pricing-v2/page.tsx"),
+    createdFolder: path.resolve(root, "app/pricing-v2"),
+    created: { dev: made.dev, ino: made.ino },
+  });
   assert.ok((await readFile(path.join(root, "app/pricing-v2/page.tsx"))).equals(Buffer.from([0xff, 0x01])));
   assert.equal((await lstat(path.join(root, "app/pricing-v2/page.tsx"))).mode & 0o777, 0o600);
 
@@ -323,30 +329,69 @@ test("confinement: a folder above a new page linked out while the page is create
   assert.equal(await exists(path.join(root, "app/routes/pricing-v2.tsx")), false);
 });
 
-test("confinement: a folder above a new page linked out between the folder's check and the create gets none of its bytes", async (t) => {
-  const outside = await workspace(t, { "routes/keep.tsx": "" });
+/** Every entry under `dir`, recursively: what a create sent outside would leave, an empty file included. */
+const entriesUnder = async (dir: string) => (await readdir(dir, { recursive: true })).sort();
+
+for (const putBack of ["after the create", "at the end"] as const) {
+  test(`confinement: a folder above a new page linked out from the folder's check until ${putBack} leaves nothing outside`, async (t) => {
+    // Pullfrog r4724600691: the path names the outside for the create (and any check by path right after it), then is put back.
+    const outside = await workspace(t, { "routes/keep.tsx": "" });
+    const root = await workspace(t, { "app/routes/home.tsx": "" });
+    let linked = false;
+    const restore = async () => {
+      if (!linked) return;
+      linked = false;
+      await rm(path.join(root, "app"));
+      await rename(path.join(root, "app-aside"), path.join(root, "app"));
+    };
+    const racing = {
+      writeFile: (file: string, bytes: Buffer, mode: number) =>
+        createPageFile(file, bytes, mode, {
+          beforeCreate: async () => {
+            await rename(path.join(root, "app"), path.join(root, "app-aside"));
+            await symlink(outside, path.join(root, "app"));
+            linked = true;
+          },
+          ...(putBack === "after the create" ? { afterCreate: restore } : {}),
+        }),
+    };
+    const written = await writeConfinedFile(root, "app/routes/pricing-v2.tsx", Buffer.from("the copy"), 0o644, { create: false, fs: racing }).finally(restore);
+    assert.deepEqual(await entriesUnder(outside), ["routes", "routes/keep.tsx"], "nothing made outside the workspace, not even an empty file");
+    if (written.ok) {
+      // Linux creates through the folder's own handle: put back before the checks, the copy is in the workspace.
+      assert.equal(putBack, "after the create");
+      // check-aiden-rules: allow no-source-grep-test reads a page file in a temp workspace, not Aiden source
+      assert.equal(await readFile(path.join(root, "app/routes/pricing-v2.tsx"), "utf8"), "the copy");
+    } else {
+      assert.deepEqual(written, { ok: false, reason: "link" });
+      assert.equal(await exists(path.join(root, "app/routes/pricing-v2.tsx")), false);
+    }
+  });
+}
+
+test("removeCreatedFile takes back only the file it made, with its bytes, through the folder's handle on Linux", async (t) => {
   const root = await workspace(t, { "app/routes/home.tsx": "" });
-  const racing = {
-    writeFile: (file: string, bytes: Buffer, mode: number) =>
-      createPageFile(file, bytes, mode, async () => {
-        // Linked out from here until the create is done, then put back.
-        await rename(path.join(root, "app"), path.join(root, "app-aside"));
-        await symlink(outside, path.join(root, "app"));
-        restore = async () => {
-          await rm(path.join(root, "app"));
-          await rename(path.join(root, "app-aside"), path.join(root, "app"));
-        };
-      }),
-  };
-  let restore = async () => undefined;
-  const written = await writeConfinedFile(root, "app/routes/pricing-v2.tsx", Buffer.from("the copy"), 0o644, { create: false, fs: racing }).finally(() => restore());
-  assert.equal(await outsideBytes(path.join(outside, "routes/pricing-v2.tsx")), 0, "no byte outside the workspace");
-  if (written.ok) {
-    // Linux creates through the folder's own handle, so the copy lands in the workspace whatever the path names meanwhile.
-    // check-aiden-rules: allow no-source-grep-test reads a page file in a temp workspace, not Aiden source
-    assert.equal(await readFile(path.join(root, "app/routes/pricing-v2.tsx"), "utf8"), "the copy");
-  } else {
-    assert.deepEqual(written, { ok: false, reason: "link" });
-    assert.equal(await exists(path.join(root, "app/routes/pricing-v2.tsx")), false);
+  const file = path.join(root, "app/routes/pricing-v2.tsx");
+  const bytes = Buffer.from("the copy");
+  const created = await createPageFile(file, bytes, 0o644);
+  if (process.platform !== "linux") {
+    // No handle-bound unlink: the caller moves the file to the Trash instead, and nothing is removed here.
+    assert.equal(await removeCreatedFile(file, created, bytes), "unbound");
+    assert.equal(await exists(file), true);
+    return;
   }
+  // Edited since: kept.
+  await writeFile(file, "edited");
+  assert.equal(await removeCreatedFile(file, created, bytes), "changed");
+  assert.equal(await exists(file), true);
+  // Another file of that name, with the same bytes (made while the first still holds its inode, so not a reused one): kept.
+  await writeFile(`${file}.other`, bytes);
+  await rename(`${file}.other`, file);
+  assert.equal(await removeCreatedFile(file, created, bytes), "changed");
+  await rm(file);
+  // The file it made, unchanged: removed.
+  const again = await createPageFile(file, bytes, 0o644);
+  assert.equal(await removeCreatedFile(file, again, bytes), "removed");
+  assert.equal(await exists(file), false);
+  assert.equal(await removeCreatedFile(file, again, bytes), "missing");
 });

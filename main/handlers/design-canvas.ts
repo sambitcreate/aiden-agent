@@ -93,8 +93,10 @@ import {
 import {
   confinedTarget,
   readRegularFileBytes,
+  removeCreatedFile,
   routeFiles,
   writeConfinedFile,
+  type FileIdentity,
   type PageFileFs,
   type RouteFileWalk,
 } from "../services/design-canvas/app-server/app-page-files.js";
@@ -1115,8 +1117,13 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     const siblings = await walk.siblings(owner.appRelPath);
     const base = variantBase(page.path);
 
-    let written: { n: number; route: string; file: string; absolute: string; bytes: Buffer; createdFolder?: string } | undefined;
-    for (let n = 2; n <= 9 && !written; n += 1) {
+    // The copy is written inside the canvas update, once its mutator has seen the frame as it is now (Pullfrog
+    // r4724600701): a frame another save retargeted or locked meanwhile gets nothing written. Only a canvas write that
+    // fails after the copy leaves a file to take back.
+    const state: { copy?: { n: number; route: string; file: string; absolute: string; bytes: Buffer; createdFolder?: string; created?: FileIdentity } } = {};
+    let outcome: DesignCanvasAppPageVariantResult = { error: "too-many" };
+    let saved: DesignCanvas | undefined;
+    for (let n = 2; n <= 9; n += 1) {
       const wanted = `${base}-v${n}`;
       if (walk.files.has(wanted) || walk.layouts.has(wanted)) continue;
       const candidate = variantPathCandidates(owner, n).find((entry) => routeFromFile(owner.convention, entry.appRelPath) === wanted);
@@ -1136,64 +1143,84 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       }
       const file = workspaceRelPath(appRoot, candidate.appRelPath);
       const absolute = path.resolve(real, file);
-      // Every gate again under the file's lock, as the Trash does: the walk and read above took time.
-      const result = await withFileLock(absolute, async () => {
-        if (!(await stillFraming(chat.id, workspaceId))) return { ok: false as const, refused: "unavailable" as const };
-        const folder = await writableWorkspace(chat);
-        if (folder === "read-only") return { ok: false as const, refused: "read-only" as const };
-        if (folder === null || folder.real !== real) return { ok: false as const, refused: "unavailable" as const };
-        return writeConfinedFile(real, file, bytes, read.mode, { create: candidate.newFolder !== undefined, ...(deps.pageFs ? { fs: deps.pageFs } : {}) });
-      });
-      if ("refused" in result) return { error: result.refused };
-      if (!result.ok) {
-        // Taken on disk (a case-insensitive clash, or a concurrent copy): the next number.
-        if (result.reason === "exists") continue;
-        return { error: result.reason === "io" ? "io" : "not-regular" };
-      }
-      written = { n, route: `${wanted}${page.query}`, file, absolute, bytes, ...(result.createdFolder ? { createdFolder: result.createdFolder } : {}) };
-    }
-    if (!written) return { error: "too-many" };
-    const copy = written;
-
-    let outcome: DesignCanvasAppPageVariantResult = { error: "io" };
-    let saved: DesignCanvas | undefined;
-    try {
-      const update = await deps.store.update(
-        chat.id,
-        (latest) => {
-          const current = latest.frames.find((entry) => entry.id === frame.id);
-          // Another save may have pointed the frame at another page since the file was chosen.
-          if (!current || !showsSamePage(current, appRoot, page)) {
-            outcome = { error: "not-found" };
-            throw UNCHANGED;
-          }
-          const placed = placeAppVariant(latest, variantRootOf(latest, current), variantInput(copy.route, copy.n));
-          if ("error" in placed) {
-            outcome = { error: placeVariantRefusal(placed.error) };
-            throw UNCHANGED;
-          }
-          outcome = { placed: placed.frameId, pageId: current.pageId, route: copy.route, file: copy.file };
-          return placed.doc;
-        },
-        {
-          workspaceId,
-          beforeWrite: async () => {
-            if (!(await stillFraming(chat.id, workspaceId))) {
-              outcome = { error: "unavailable" };
+      const route = `${wanted}${page.query}`;
+      let taken = false;
+      try {
+        const update = await deps.store.update(
+          chat.id,
+          (latest) => {
+            const current = latest.frames.find((entry) => entry.id === frame.id);
+            // Another save may have pointed the frame at another page since the file was chosen.
+            if (!current || !showsSamePage(current, appRoot, page)) {
+              outcome = { error: "not-found" };
               throw UNCHANGED;
             }
+            const placed = placeAppVariant(latest, variantRootOf(latest, current), variantInput(route, n));
+            if ("error" in placed) {
+              outcome = { error: placeVariantRefusal(placed.error) };
+              throw UNCHANGED;
+            }
+            outcome = { placed: placed.frameId, pageId: current.pageId, route, file };
+            return placed.doc;
           },
-        },
-      );
-      saved = update.doc;
-    } catch (error) {
-      if (error !== UNCHANGED) outcome = { error: "io" };
+          {
+            workspaceId,
+            // Every gate again under the file's lock, as the Trash does: the walk and read above took time.
+            beforeWrite: () =>
+              withFileLock(absolute, async () => {
+                if (!(await stillFraming(chat.id, workspaceId))) {
+                  outcome = { error: "unavailable" };
+                  throw UNCHANGED;
+                }
+                const folder = await writableWorkspace(chat);
+                if (folder === "read-only" || folder === null || folder.real !== real) {
+                  outcome = { error: folder === "read-only" ? "read-only" : "unavailable" };
+                  throw UNCHANGED;
+                }
+                const written = await writeConfinedFile(real, file, bytes, read.mode, { create: candidate.newFolder !== undefined, ...(deps.pageFs ? { fs: deps.pageFs } : {}) });
+                if (!written.ok) {
+                  // Taken on disk (a case-insensitive clash, or a concurrent copy): the next number.
+                  taken = written.reason === "exists";
+                  outcome = { error: written.reason === "io" ? "io" : "not-regular" };
+                  throw UNCHANGED;
+                }
+                state.copy = {
+                  n,
+                  route,
+                  file,
+                  absolute,
+                  bytes,
+                  ...(written.createdFolder ? { createdFolder: written.createdFolder } : {}),
+                  ...(written.created ? { created: written.created } : {}),
+                };
+              }),
+          },
+        );
+        saved = update.doc;
+      } catch (error) {
+        if (error !== UNCHANGED) outcome = { error: "io" };
+      }
+      if (!taken) break;
+      outcome = { error: "too-many" };
     }
     const result = outcome as DesignCanvasAppPageVariantResult;
+    const copy = state.copy;
+    if (!copy) return result;
     if (!saved || !("placed" in result)) {
-      // Rolled back: the copy goes to the Trash only while it is exactly what was written.
+      // The canvas write failed after the copy landed: take back Aiden's own new file while it is exactly what was written.
       const refusal = "error" in result ? result.error : "io";
       const kept = await withFileLock(copy.absolute, async () => {
+        const created = copy.created;
+        if (created) {
+          // Linux: removed through its verified folder, by identity and bytes; no Trash needed (Linux may have none).
+          const back = await removeCreatedFile(copy.absolute, created, copy.bytes).catch(() => "unbound" as const);
+          if (back === "changed") return true;
+          if (back !== "unbound") {
+            if (copy.createdFolder) await (deps.pageFs?.rmdir ?? rmdir)(copy.createdFolder).catch(() => undefined);
+            return false;
+          }
+        }
+        // Elsewhere only a path reaches it: the Trash, which can be undone, while it is exactly what was written.
         const now = await readRegularFileBytes(copy.absolute, DESIGN_SOURCE_MAX_BYTES);
         if (!now.ok) return now.reason !== "missing";
         if (pageDigest(now.bytes) !== pageDigest(copy.bytes)) return true;
