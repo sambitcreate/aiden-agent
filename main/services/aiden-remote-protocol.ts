@@ -78,6 +78,7 @@ import type {
   AidenRemoteChatSummaryPage,
   AidenRemoteChatSummaryProjection,
 } from "./aiden-remote-chats.js";
+import { isValidJsonString, scanStrictJson } from "../shared/strict-json.js";
 
 export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
 /**
@@ -3076,24 +3077,6 @@ function assertNoPrivateSummaryProjectionFields(value: unknown, label: string): 
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function isValidJsonString(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const codeUnit = value.charCodeAt(index);
-    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
-      const nextCodeUnit = value.charCodeAt(index + 1);
-      if (
-        Number.isNaN(nextCodeUnit) ||
-        nextCodeUnit < 0xdc00 ||
-        nextCodeUnit > 0xdfff
-      ) return false;
-      index += 1;
-    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
-      return false;
-    }
-  }
-  return true;
 }
 
 function assertAidenRemoteJsonValue(value: unknown, location: string): void {
@@ -10403,176 +10386,15 @@ export function parseAidenRemoteJson(
   serialized: string,
   label = "JSON data",
 ): unknown {
-  let offset = 0;
-  let objectKeys = 0;
-
-  function fail(): never {
-    throw new Error(`Malformed Aiden ${label}.`);
-  }
-
-  function skipWhitespace(): void {
-    while (serialized[offset] === " " || serialized[offset] === "\t" || serialized[offset] === "\n" || serialized[offset] === "\r") {
-      offset += 1;
-    }
-  }
-
-  function readString(decode: boolean): string | undefined {
-    if (serialized[offset] !== '"') fail();
-    offset += 1;
-    let segmentStart = offset;
-    let decoded = "";
-    while (offset < serialized.length) {
-      const character = serialized[offset]!;
-      if (character === '"') {
-        decoded += serialized.slice(segmentStart, offset);
-        if (!isValidJsonString(decoded)) fail();
-        offset += 1;
-        return decode ? decoded : undefined;
-      }
-      if (character === "\\") {
-        decoded += serialized.slice(segmentStart, offset);
-        offset += 1;
-        const escaped = serialized[offset];
-        if (escaped === undefined) fail();
-        if (escaped === "u") {
-          const hexadecimal = serialized.slice(offset + 1, offset + 5);
-          if (!/^[0-9a-fA-F]{4}$/u.test(hexadecimal)) fail();
-          decoded += String.fromCharCode(Number.parseInt(hexadecimal, 16));
-          offset += 5;
-          segmentStart = offset;
-          continue;
-        }
-        const replacement = escaped === '"'
-          ? '"'
-          : escaped === "\\"
-            ? "\\"
-            : escaped === "/"
-              ? "/"
-              : escaped === "b"
-                ? "\b"
-                : escaped === "f"
-                  ? "\f"
-                  : escaped === "n"
-                    ? "\n"
-                    : escaped === "r"
-                      ? "\r"
-                      : escaped === "t"
-                        ? "\t"
-                        : undefined;
-        if (replacement === undefined) fail();
-        decoded += replacement;
-        offset += 1;
-        segmentStart = offset;
-        continue;
-      }
-      if (character.charCodeAt(0) < 0x20) fail();
-      offset += 1;
-    }
-    fail();
-  }
-
-  function readNumber(): void {
-    const numberStart = offset;
-    if (serialized[offset] === "-") offset += 1;
-    if (serialized[offset] === "0") {
-      offset += 1;
-    } else {
-      const first = serialized.charCodeAt(offset);
-      if (first < 0x31 || first > 0x39) fail();
-      do {
-        offset += 1;
-      } while (serialized.charCodeAt(offset) >= 0x30 && serialized.charCodeAt(offset) <= 0x39);
-    }
-    if (serialized[offset] === ".") {
-      offset += 1;
-      const firstFraction = serialized.charCodeAt(offset);
-      if (firstFraction < 0x30 || firstFraction > 0x39) fail();
-      do {
-        offset += 1;
-      } while (serialized.charCodeAt(offset) >= 0x30 && serialized.charCodeAt(offset) <= 0x39);
-    }
-    if (serialized[offset] === "e" || serialized[offset] === "E") {
-      offset += 1;
-      if (serialized[offset] === "+" || serialized[offset] === "-") offset += 1;
-      const firstExponent = serialized.charCodeAt(offset);
-      if (firstExponent < 0x30 || firstExponent > 0x39) fail();
-      do {
-        offset += 1;
-      } while (serialized.charCodeAt(offset) >= 0x30 && serialized.charCodeAt(offset) <= 0x39);
-    }
-    if (!Number.isFinite(Number(serialized.slice(numberStart, offset)))) fail();
-  }
-
-  function readValue(depth: number): void {
-    if (depth > AIDEN_REMOTE_MAX_JSON_NESTING_DEPTH) fail();
-    skipWhitespace();
-    const character = serialized[offset];
-    if (character === "{") {
-      offset += 1;
-      skipWhitespace();
-      const keys = new Set<string>();
-      if (serialized[offset] === "}") {
-        offset += 1;
-        return;
-      }
-      for (;;) {
-        const key = readString(true);
-        objectKeys += 1;
-        if (objectKeys > AIDEN_REMOTE_MAX_JSON_OBJECT_KEYS || key === undefined || keys.has(key)) fail();
-        keys.add(key);
-        skipWhitespace();
-        if (serialized[offset] !== ":") fail();
-        offset += 1;
-        readValue(depth + 1);
-        skipWhitespace();
-        if (serialized[offset] === "}") {
-          offset += 1;
-          return;
-        }
-        if (serialized[offset] !== ",") fail();
-        offset += 1;
-        skipWhitespace();
-      }
-    }
-    if (character === "[") {
-      offset += 1;
-      skipWhitespace();
-      if (serialized[offset] === "]") {
-        offset += 1;
-        return;
-      }
-      for (;;) {
-        readValue(depth + 1);
-        skipWhitespace();
-        if (serialized[offset] === "]") {
-          offset += 1;
-          return;
-        }
-        if (serialized[offset] !== ",") fail();
-        offset += 1;
-        skipWhitespace();
-      }
-    }
-    if (character === '"') {
-      readString(false);
-      return;
-    }
-    if (character === "-" || (character !== undefined && character >= "0" && character <= "9")) {
-      readNumber();
-      return;
-    }
-    for (const literal of ["true", "false", "null"]) {
-      if (serialized.startsWith(literal, offset)) {
-        offset += literal.length;
-        return;
-      }
-    }
-    fail();
-  }
-
-  readValue(0);
-  skipWhitespace();
-  if (offset !== serialized.length) fail();
+  scanStrictJson(serialized, {
+    maxDepth: AIDEN_REMOTE_MAX_JSON_NESTING_DEPTH,
+    maxObjectKeys: AIDEN_REMOTE_MAX_JSON_OBJECT_KEYS,
+    rejectLoneSurrogates: true,
+    rejectNonFiniteNumbers: true,
+    onInvalid: () => {
+      throw new Error(`Malformed Aiden ${label}.`);
+    },
+  });
   let parsed: unknown;
   try {
     parsed = JSON.parse(serialized) as unknown;

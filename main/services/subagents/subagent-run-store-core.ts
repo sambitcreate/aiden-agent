@@ -10,6 +10,7 @@ import {
   type SubagentRunSnapshotV1,
 } from "../../../renderer/shared/subagent-runs.js";
 import { sanitizeSubagentSnapshotText } from "../../../renderer/shared/subagent-safe-text.js";
+import { scanStrictJson } from "../../shared/strict-json.js";
 import {
   createNativeSubagentRunStoreStorage,
   SubagentRunStoreStorageError,
@@ -212,178 +213,15 @@ function normalizedPendingChatDeletions(value: unknown): string[] {
  * hide recovery authority before normalization sees it.
  */
 export function assertUniqueJsonObjectKeys(serialized: string): void {
-  let offset = 0;
-  let objectKeys = 0;
-
-  function fail(): never {
-    throw new SubagentRunStoreJsonStructureError();
-  }
-
-  function skipWhitespace(): void {
-    while (
-      serialized[offset] === " " ||
-      serialized[offset] === "\t" ||
-      serialized[offset] === "\n" ||
-      serialized[offset] === "\r"
-    ) {
-      offset += 1;
-    }
-  }
-
-  function readString(decode: boolean): string | undefined {
-    if (serialized[offset] !== '"') fail();
-    offset += 1;
-    let segmentStart = offset;
-    let decoded = "";
-    while (offset < serialized.length) {
-      const character = serialized[offset]!;
-      if (character === '"') {
-        if (decode) decoded += serialized.slice(segmentStart, offset);
-        offset += 1;
-        return decode ? decoded : undefined;
-      }
-      if (character === "\\") {
-        if (decode) decoded += serialized.slice(segmentStart, offset);
-        offset += 1;
-        const escaped = serialized[offset];
-        if (escaped === undefined) fail();
-        if (escaped === "u") {
-          const hexadecimal = serialized.slice(offset + 1, offset + 5);
-          if (!/^[0-9a-fA-F]{4}$/u.test(hexadecimal)) fail();
-          if (decode) decoded += String.fromCharCode(Number.parseInt(hexadecimal, 16));
-          offset += 5;
-          segmentStart = offset;
-          continue;
-        }
-        const replacement =
-          escaped === '"'
-            ? '"'
-            : escaped === "\\"
-              ? "\\"
-              : escaped === "/"
-                ? "/"
-                : escaped === "b"
-                  ? "\b"
-                  : escaped === "f"
-                    ? "\f"
-                    : escaped === "n"
-                      ? "\n"
-                      : escaped === "r"
-                        ? "\r"
-                        : escaped === "t"
-                          ? "\t"
-                          : undefined;
-        if (replacement === undefined) fail();
-        if (decode) decoded += replacement;
-        offset += 1;
-        segmentStart = offset;
-        continue;
-      }
-      if (character.charCodeAt(0) < 0x20) fail();
-      offset += 1;
-    }
-    fail();
-  }
-
-  function readNumber(): void {
-    if (serialized[offset] === "-") offset += 1;
-    if (serialized[offset] === "0") {
-      offset += 1;
-    } else {
-      const first = serialized.charCodeAt(offset);
-      if (first < 0x31 || first > 0x39) fail();
-      do {
-        offset += 1;
-      } while (serialized.charCodeAt(offset) >= 0x30 && serialized.charCodeAt(offset) <= 0x39);
-    }
-    if (serialized[offset] === ".") {
-      offset += 1;
-      const firstFraction = serialized.charCodeAt(offset);
-      if (firstFraction < 0x30 || firstFraction > 0x39) fail();
-      do {
-        offset += 1;
-      } while (serialized.charCodeAt(offset) >= 0x30 && serialized.charCodeAt(offset) <= 0x39);
-    }
-    if (serialized[offset] === "e" || serialized[offset] === "E") {
-      offset += 1;
-      if (serialized[offset] === "+" || serialized[offset] === "-") offset += 1;
-      const firstExponent = serialized.charCodeAt(offset);
-      if (firstExponent < 0x30 || firstExponent > 0x39) fail();
-      do {
-        offset += 1;
-      } while (serialized.charCodeAt(offset) >= 0x30 && serialized.charCodeAt(offset) <= 0x39);
-    }
-  }
-
-  function readValue(depth: number): void {
-    if (depth > MAX_JSON_NESTING_DEPTH) fail();
-    skipWhitespace();
-    const character = serialized[offset];
-    if (character === "{") {
-      offset += 1;
-      skipWhitespace();
-      const keys = new Set<string>();
-      if (serialized[offset] === "}") {
-        offset += 1;
-        return;
-      }
-      for (;;) {
-        const key = readString(true);
-        objectKeys += 1;
-        if (objectKeys > MAX_JSON_OBJECT_KEYS || key === undefined || keys.has(key)) fail();
-        keys.add(key);
-        skipWhitespace();
-        if (serialized[offset] !== ":") fail();
-        offset += 1;
-        readValue(depth + 1);
-        skipWhitespace();
-        if (serialized[offset] === "}") {
-          offset += 1;
-          return;
-        }
-        if (serialized[offset] !== ",") fail();
-        offset += 1;
-        skipWhitespace();
-      }
-    }
-    if (character === "[") {
-      offset += 1;
-      skipWhitespace();
-      if (serialized[offset] === "]") {
-        offset += 1;
-        return;
-      }
-      for (;;) {
-        readValue(depth + 1);
-        skipWhitespace();
-        if (serialized[offset] === "]") {
-          offset += 1;
-          return;
-        }
-        if (serialized[offset] !== ",") fail();
-        offset += 1;
-      }
-    }
-    if (character === '"') {
-      readString(false);
-      return;
-    }
-    if (character === "-" || (character !== undefined && character >= "0" && character <= "9")) {
-      readNumber();
-      return;
-    }
-    for (const literal of ["true", "false", "null"]) {
-      if (serialized.startsWith(literal, offset)) {
-        offset += literal.length;
-        return;
-      }
-    }
-    fail();
-  }
-
-  readValue(0);
-  skipWhitespace();
-  if (offset !== serialized.length) fail();
+  scanStrictJson(serialized, {
+    maxDepth: MAX_JSON_NESTING_DEPTH,
+    maxObjectKeys: MAX_JSON_OBJECT_KEYS,
+    rejectLoneSurrogates: false,
+    rejectNonFiniteNumbers: false,
+    onInvalid: () => {
+      throw new SubagentRunStoreJsonStructureError();
+    },
+  });
 }
 
 function parseDatabase(value: unknown, maxRuns: number): SubagentRunDatabaseV1 {
