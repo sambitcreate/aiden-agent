@@ -14,7 +14,6 @@ import { isSafeSubagentIdentifier } from "../../renderer/shared/subagent-runs.js
 import { parseChatRunInput } from "../../renderer/shared/chat-run-input.js";
 import type { AskUserQuestionAnswerStatus } from "../../renderer/shared/ask-user-question.js";
 import { parseParams } from "./chat-params.js";
-import { geminiLiveService } from "../services/gemini-live/service-main.js";
 import { parseToolApprovalScope } from "../../renderer/shared/tool-approval-scope.js";
 import { toolApprovalRules } from "../services/tool-approval-rules-main.js";
 import {
@@ -173,8 +172,7 @@ export function registerChatGenerationHandlers(): void {
         !llmClient.approve(approvalId, allowed ? "allow" : "deny", owner.documentId, {
           formFillExcludedOrders,
           ...(scope ? { scope } : {}),
-        }) &&
-        !geminiLiveService.approveComputerUse(owner, approvalId, allowed)
+        })
       ) {
         throw new Error("This renderer document does not own that approval.");
       }

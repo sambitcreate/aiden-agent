@@ -49,11 +49,9 @@ export function assistantLiveTranscriptFollowsLatest(
 
 export function assistantLiveMarkState(
   live: AssistantLiveController,
-  approvalPending = false,
 ): AidenLiveMarkState {
   if (!live.available && !live.setupComplete) return "unavailable";
   if (live.error || ["failed", "disconnected"].includes(live.state)) return "error";
-  if (approvalPending) return "approval";
   if (live.state === "closing") return "ready";
   if (live.busy || ["connecting", "resuming", "closing"].includes(live.state)) return "connecting";
   if (!live.active) return "ready";
@@ -390,11 +388,9 @@ function Transcript({ captions }: { captions: readonly AssistantLiveCaption[] })
 export function AssistantLiveHud({
   live,
   markState,
-  children,
 }: {
   live: AssistantLiveController;
   markState: AidenLiveMarkState;
-  children?: React.ReactNode;
 }): React.ReactElement {
   return (
     <section className="gemini-live-hud" aria-label="Aiden Live conversation">
@@ -405,7 +401,6 @@ export function AssistantLiveHud({
             <p role="status" aria-live="polite" className="text-sm font-medium text-primary">
               {STATE_LABEL[live.state]}
             </p>
-            {markState === "approval" ? <Badge color="blue">Approval needed</Badge> : null}
             {live.screenActive ? (
               <Badge color="blue">
                 <Monitor className="size-3" aria-hidden="true" />
@@ -431,7 +426,6 @@ export function AssistantLiveHud({
         </Button>
       </div>
       <Transcript captions={live.captions} />
-      {children}
       {live.error ? (
         <p role="alert" className="gemini-live-hud-error">
           {live.error}

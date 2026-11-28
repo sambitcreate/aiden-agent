@@ -18,18 +18,6 @@ function between(value: string, start: string, end: string): string {
   return value.slice(startIndex, endIndex);
 }
 
-test("automation approvals reuse the app surface entrance motion", () => {
-  const styles = source("../styles.css");
-  assert.match(
-    styles,
-    /:root\[data-reduce-motion="false"\] \.assistant-automation-approval\[data-state="open"\][\s\S]*aiden-app-update-banner-in 150ms /u,
-  );
-  assert.match(
-    source("../components/assistant/assistant-computer-use-approval.tsx"),
-    /data-state="open"[\s\S]*className="assistant-automation-approval/u,
-  );
-});
-
 test("scheduled task details reuse the reduced-motion-gated surface entrance", () => {
   const styles = source("../styles.css");
   const scheduledTasks = source("../components/scheduled-tasks-view.tsx");

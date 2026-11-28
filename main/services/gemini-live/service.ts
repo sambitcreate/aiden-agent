@@ -144,11 +144,6 @@ export interface GeminiLiveServiceOptions {
   }): Promise<{
     bridge: GeminiLiveComputerUseBridge;
     tools: NonNullable<GeminiLiveProtocolOptions["tools"]>;
-    approve(
-      approvalId: string,
-      allowed: boolean,
-      ownerDocumentId: string,
-    ): boolean;
     bindSendResult(
       send: (
         result: Parameters<GeminiLiveProtocol["sendToolResult"]>[0],
@@ -181,13 +176,6 @@ interface OwnedLiveSession {
   /** Queue entry ids, parallel to noteQueue. */
   noteIds: number[];
   noteTimer: ReturnType<typeof setTimeout> | null;
-  approveComputerUse:
-    | ((
-        approvalId: string,
-        allowed: boolean,
-        ownerDocumentId: string,
-      ) => boolean)
-    | null;
   threadRecorded: boolean;
   threadBegin: Promise<void> | null;
   threadFinish: Promise<void> | null;
@@ -428,7 +416,6 @@ export class GeminiLiveService {
       noteDeliveries: new Map(),
       noteIds: [],
       noteTimer: null,
-      approveComputerUse: null,
       threadRecorded: false,
       threadBegin: null,
       threadFinish: null,
@@ -471,7 +458,6 @@ export class GeminiLiveService {
         throw new Error("The Assistant Live start was superseded.");
       }
       session.computerUse = computerUse?.bridge ?? null;
-      session.approveComputerUse = computerUse?.approve ?? null;
 
       const rendererTools = new LiveRendererToolBroker(session.sessionId, (request) =>
         this.send(session, request),
@@ -579,18 +565,6 @@ export class GeminiLiveService {
       await this.finishThread(session, "stopped");
     }
     return this.idleSnapshot("live_model_unverified");
-  }
-
-  approveComputerUse(
-    owner: RendererDocumentOwner,
-    approvalId: string,
-    allowed: boolean,
-  ): boolean {
-    const session = this.sessions.get(owner);
-    return (
-      session?.approveComputerUse?.(approvalId, allowed, owner.documentId) ??
-      false
-    );
   }
 
   revokeComputerUse(): void {
@@ -908,7 +882,6 @@ export class GeminiLiveService {
     session.disposeOwner();
     session.computerUse?.close();
     session.computerUse = null;
-    session.approveComputerUse = null;
     session.tools?.close();
     session.tools = null;
     session.rendererTools?.close();

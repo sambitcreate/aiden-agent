@@ -310,7 +310,6 @@ test("only a prepared gated session declares and executes Aiden custom computer_
         sessionId,
         controller,
         isAuthorized: () => true,
-        requestApproval: async () => true,
         sendResult: (value) => sendResult?.(value),
       });
       return {
@@ -322,7 +321,6 @@ test("only a prepared gated session declares and executes Aiden custom computer_
             ],
           },
         ],
-        approve: () => false,
         bindSendResult: (send) => {
           sendResult = send;
         },
@@ -398,7 +396,6 @@ test("a Computer Use result produced during transport rotation fails the session
         sessionId,
         controller,
         isAuthorized: () => true,
-        requestApproval: async () => true,
         sendResult: (value) => sendResult?.(value),
       });
       return {
@@ -410,7 +407,6 @@ test("a Computer Use result produced during transport rotation fails the session
             ],
           },
         ],
-        approve: () => false,
         bindSendResult: (send) => {
           sendResult = send;
         },
@@ -460,14 +456,23 @@ test("gate revocation aborts issued approval and queued calls before controller 
   const executed: string[] = [];
   let bridge!: GeminiLiveComputerUseBridge;
   const controller: GeminiLiveComputerUseController = {
-    approvalFor: async (args) =>
+    approvalFor: async (args, signal) =>
       args.action === "type"
-        ? {
-            toolName: "computer_use",
-            summary: "type into exact target",
-            target: { pid: 7, windowId: 11 },
-            grant: {} as never,
-          }
+        ? new Promise((resolve) => {
+            signal?.addEventListener(
+              "abort",
+              () => {
+                order.push("approval-abort");
+                resolve({
+                  toolName: "computer_use",
+                  summary: "type into exact target",
+                  target: { pid: 7, windowId: 11 },
+                  grant: {} as never,
+                });
+              },
+              { once: true },
+            );
+          })
         : null,
     authorize: () => undefined,
     execute: async (id, args) => {
@@ -503,17 +508,6 @@ test("gate revocation aborts issued approval and queued calls before controller 
         sessionId,
         controller,
         isAuthorized: () => true,
-        requestApproval: ({ signal }) =>
-          new Promise<boolean>((resolve) => {
-            signal.addEventListener(
-              "abort",
-              () => {
-                order.push("approval-abort");
-                resolve(false);
-              },
-              { once: true },
-            );
-          }),
         sendResult: (value) => sendResult?.(value),
       });
       return {
@@ -525,7 +519,6 @@ test("gate revocation aborts issued approval and queued calls before controller 
             ],
           },
         ],
-        approve: () => false,
         bindSendResult: (send) => {
           sendResult = send;
         },
@@ -922,7 +915,6 @@ test("the model gate is explicit-experimental and media has no persistence or lo
   ]);
   assert.match(mainSource, /resolveModel: \(\) => experimentalGeminiLiveModel\(\)/u);
   assert.match(mainSource, /behavior: Behavior\.NON_BLOCKING/u);
-  assert.match(mainSource, /actionPolicy: "session"/u);
   assert.doesNotMatch(mainSource, /ToolApprovalCoordinator|say Allow once or Deny/u);
   assert.doesNotMatch(serviceSource, /DataStore|writeFile|appendFile|logger|writeDevLog/u);
   // Bounded screen frames and bounded renderer tool results cross dedicated

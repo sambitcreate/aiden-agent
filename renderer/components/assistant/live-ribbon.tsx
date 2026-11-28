@@ -38,8 +38,6 @@ export type LiveRibbonState = "listening" | "thinking" | "speaking" | "acting" |
 export function liveRibbonState(markState: AidenLiveMarkState, activity: LiveActivity | null): LiveRibbonState {
   if (activity?.kind === "approval") return "approval";
   if (activity?.kind === "confirm") return "confirm";
-  // The legacy Computer Use prompt shows above the pill.
-  if (markState === "approval") return "approval";
   if (activity?.kind === "acting" || markState === "acting") return "acting";
   if (markState === "speaking") return "speaking";
   if (markState === "thinking" || markState === "connecting") return "thinking";
@@ -161,15 +159,12 @@ export function LiveRibbon({
   activity,
   preferences,
   onPreferencesChange,
-  children,
 }: {
   live: AssistantLiveController;
   markState: AidenLiveMarkState;
   activity: LiveActivity | null;
   preferences: Pick<AidenLivePreferences, "voice" | "speed" | "ribbonColors">;
   onPreferencesChange(patch: AidenLivePreferencesPatch): void;
-  /** Extra prompts shown above the pill (the legacy Computer Use approval). */
-  children?: React.ReactNode;
 }): React.ReactElement {
   const pillRef = React.useRef<HTMLDivElement>(null);
   const sectionRef = React.useRef<HTMLElement>(null);
@@ -240,7 +235,6 @@ export function LiveRibbon({
           Sharing {live.screenSourceLabel ?? "screen"}
         </p>
       ) : null}
-      {children}
       <div
         ref={pillRef}
         className="live-ribbon-pill"

@@ -37,6 +37,10 @@ class FakeController implements GeminiLiveComputerUseController {
   authorizations: string[] = [];
   executions: string[] = [];
   closed = false;
+  approvalCall?: (
+    args: ComputerUseArgs,
+    signal?: AbortSignal,
+  ) => Promise<ComputerUseApprovalDescriptor | null>;
   executeCall: (
     id: string,
     args: ComputerUseArgs,
@@ -44,7 +48,11 @@ class FakeController implements GeminiLiveComputerUseController {
   ) => Promise<AgentToolResult<ComputerUseResultDetails>> = async (_id, args) =>
     result(args.action);
 
-  async approvalFor(args: ComputerUseArgs): Promise<ComputerUseApprovalDescriptor | null> {
+  async approvalFor(
+    args: ComputerUseArgs,
+    signal?: AbortSignal,
+  ): Promise<ComputerUseApprovalDescriptor | null> {
+    if (this.approvalCall) return this.approvalCall(args, signal);
     if (["capture", "wait", "list_apps", "list_windows"].includes(args.action)) return null;
     this.approvals.push(args);
     return {
@@ -74,33 +82,24 @@ class FakeController implements GeminiLiveComputerUseController {
 }
 
 function harness(overrides: {
-  actionPolicy?: "session" | "per-action";
   controller?: FakeController;
   authorized?: () => boolean | Promise<boolean>;
-  approve?: (signal: AbortSignal, summary: string) => Promise<boolean>;
 } = {}) {
   const controller = overrides.controller ?? new FakeController();
   const responses: Array<{ id: string; response: Record<string, unknown> }> = [];
-  const approvalSummaries: string[] = [];
   const bridge = new GeminiLiveComputerUseBridge({
     sessionId: "session-1",
-    actionPolicy: overrides.actionPolicy,
     controller,
     isAuthorized: overrides.authorized ?? (() => true),
-    requestApproval: ({ signal, summary }) => {
-      approvalSummaries.push(summary);
-      return overrides.approve?.(signal, summary) ?? Promise.resolve(true);
-    },
     sendResult: ({ id, response }) => responses.push({ id, response }),
   });
-  return { bridge, controller, responses, approvalSummaries };
+  return { bridge, controller, responses };
 }
 
 test("session actions execute without prompts and still bind a fresh target grant", async () => {
-  const h = harness({ actionPolicy: "session", approve: async () => { throw new Error("must not prompt"); } });
+  const h = harness();
   h.bridge.enqueue({ id: "type", name: "computer_use", args: { action: "type", text: "hello" } });
   await tick();
-  assert.deepEqual(h.approvalSummaries, []);
   assert.deepEqual(h.controller.authorizations, ["type"]);
   assert.deepEqual(h.controller.executions, ["type"]);
   await h.bridge.close();
@@ -108,7 +107,7 @@ test("session actions execute without prompts and still bind a fresh target gran
 
 test("session actions recheck revoked authority after resolving the target", async () => {
   let checks = 0;
-  const h = harness({ actionPolicy: "session", authorized: () => ++checks === 1 });
+  const h = harness({ authorized: () => ++checks === 1 });
   h.bridge.enqueue({ id: "type", name: "computer_use", args: { action: "type", text: "hello" } });
   await tick();
   assert.deepEqual(h.controller.authorizations, []);
@@ -161,8 +160,8 @@ test("capture is read-only while every mutation gets a fresh approval", async ()
   });
   await tick();
   assert.deepEqual(h.controller.authorizations, ["click", "foreground"]);
-  assert.equal(h.approvalSummaries.length, 2);
-  assert.match(h.approvalSummaries[1]!, /foreground/u);
+  assert.equal(h.controller.approvals.length, 2);
+  assert.equal(h.controller.approvals[1]?.delivery_mode, "foreground");
 });
 
 test("coordinate mutations require a current capture and post-capture is target-specific", async () => {
@@ -238,19 +237,26 @@ test("compound calls stay sequential and the session queue is bounded", async ()
 
 test("server cancellation and interruption abort pending approval before execution", async () => {
   let approvalAborted = 0;
-  const h = harness({
-    approve: (signal) =>
-      new Promise<boolean>((resolve) => {
-        signal.addEventListener(
-          "abort",
-          () => {
-            approvalAborted += 1;
-            resolve(false);
-          },
-          { once: true },
-        );
-      }),
-  });
+  const controller = new FakeController();
+  controller.approvalCall = (args, signal) => {
+    if (args.action === "capture") return Promise.resolve(null);
+    return new Promise<ComputerUseApprovalDescriptor>((resolve) => {
+      signal?.addEventListener(
+        "abort",
+        () => {
+          approvalAborted += 1;
+          resolve({
+            toolName: "computer_use",
+            summary: `${args.action} exact target`,
+            target: { pid: 7, windowId: 11 },
+            grant: {} as ComputerUseApprovalDescriptor["grant"],
+          });
+        },
+        { once: true },
+      );
+    });
+  };
+  const h = harness({ controller });
   h.bridge.enqueue({
     id: "capture",
     name: "computer_use",

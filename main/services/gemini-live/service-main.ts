@@ -200,10 +200,8 @@ export const geminiLiveService = new GeminiLiveService({
     };
     const bridge = new GeminiLiveComputerUseBridge({
       sessionId,
-      actionPolicy: "session",
       controller,
       isAuthorized,
-      requestApproval: async () => false,
       onActivity: (active) =>
         owner.send("assistant-live:event", {
           type: "computer_use_state",
@@ -226,7 +224,6 @@ export const geminiLiveService = new GeminiLiveService({
           ],
         },
       ],
-      approve: () => false,
       bindSendResult: (send) => {
         sendToolResult = send;
       },

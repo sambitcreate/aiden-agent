@@ -1814,9 +1814,6 @@ textarea {
 :root[data-reduce-motion="false"] .app-update-banner[data-state="closed"] {
   animation: aiden-app-update-banner-out 120ms ease-in both;
 }
-:root[data-reduce-motion="false"] .assistant-automation-approval[data-state="open"] {
-  animation: aiden-app-update-banner-in 150ms var(--motion-easing) both;
-}
 :root[data-reduce-motion="false"] .scheduled-task-detail[data-state="open"] {
   animation: aiden-app-update-banner-in 150ms var(--motion-easing) both;
 }
@@ -2776,16 +2773,6 @@ textarea {
 }
 .aiden-live-trigger[data-state="error"] .aiden-live-trigger-glyph {
   color: var(--color-support-red);
-}
-.aiden-live-trigger-badge {
-  position: absolute;
-  top: -2px;
-  right: -2px;
-  width: 10px;
-  height: 10px;
-  border: 2px solid var(--color-background);
-  border-radius: 9999px;
-  background: var(--color-support-warning);
 }
 .aiden-live-stop-symbol {
   width: 10px;

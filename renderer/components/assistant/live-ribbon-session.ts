@@ -100,8 +100,6 @@ export interface LiveVoiceEndingTarget extends LivePlaybackProbe {
 export interface LiveVoiceEndingOptions extends Omit<LivePlaybackWaitOptions, "replyStartMs"> {
   bus?: LiveSessionBus;
   activity?: Pick<LiveActivityStore, "get">;
-  /** Another request waiting on the user, such as the dock's Computer Use approval. */
-  answerPending?: () => boolean;
   /** After an end phrase, how long the goodbye may take to start. */
   goodbyeStartMs?: number;
 }
@@ -124,15 +122,13 @@ export function useLiveVoiceEnding(live: LiveVoiceEndingTarget, options: LiveVoi
   const goodbyeStartMs = options.goodbyeStartMs ?? LIVE_GOODBYE_START_MS;
   const liveRef = React.useRef(live);
   liveRef.current = live;
-  const answerPendingRef = React.useRef(options.answerPending);
-  answerPendingRef.current = options.answerPending;
   const { active } = live;
 
   React.useEffect(() => {
     if (!active) return;
     const ending = new AbortController();
     let ended = false;
-    const awaitingAnswer = () => liveActivityAwaitsAnswer(activity) || answerPendingRef.current?.() === true;
+    const awaitingAnswer = () => liveActivityAwaitsAnswer(activity);
     const endAfterGoodbye = async (
       signal: AbortSignal,
       replyStartMs: number,

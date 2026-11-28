@@ -400,7 +400,6 @@ function renderDockWithShortcut(live: AssistantLiveController, activity: LiveAct
   }) as unknown as NonNullable<Parameters<typeof AssistantDockPresentation>[0]["useCommand"]>;
   const view = render(
     <AssistantDockPresentation
-      chat={{ approvals: [], decidingApprovalId: null, decideApproval: async () => undefined }}
       live={live}
       activity={activity}
       useCommand={useCommand}
@@ -467,7 +466,7 @@ function EndingHarness({
   return null;
 }
 
-function endingFixture(maxWaitMs?: number, extra: { answerPending?: () => boolean } = {}) {
+function endingFixture(maxWaitMs?: number) {
   const bus = new LiveSessionBus();
   const activity = new LiveActivityStore();
   const audio = playback({ idle: true, bargeIns: 0 });
@@ -484,7 +483,7 @@ function endingFixture(maxWaitMs?: number, extra: { answerPending?: () => boolea
   render(
     <EndingHarness
       live={live}
-      options={{ bus, activity, goodbyeStartMs: 120, settleMs: 60, pollMs: 10, ...(maxWaitMs ? { maxWaitMs } : {}), ...extra }}
+      options={{ bus, activity, goodbyeStartMs: 120, settleMs: 60, pollMs: 10, ...(maxWaitMs ? { maxWaitMs } : {}) }}
     />,
   );
   return { bus, activity, audio, results, stops: () => stops };
@@ -547,18 +546,25 @@ test("an end phrase inside a longer sentence, or while an approval or confirmati
 });
 
 test("neither bye nor Live's end tool ends Live while any request waits on the user", async () => {
-  let legacyApproval = true;
-  const fixture = endingFixture(undefined, { answerPending: () => legacyApproval });
+  const fixture = endingFixture();
+  fixture.activity.set("chat-approvals", {
+    kind: "approval",
+    id: "a1",
+    title: "Run npm test?",
+    chatTitle: "Fix login",
+    voice: true,
+    allow: () => undefined,
+    deny: () => undefined,
+  });
   fixture.bus.publishVoiceInput("bye");
   await tick(250);
-  assert.equal(fixture.stops(), 0, "the dock's Computer Use approval is waiting");
+  assert.equal(fixture.stops(), 0, "an approval request is waiting");
   await fixture.bus.runToolRequest({ sessionId: "s1", requestId: "r1", name: "end_session", args: {} });
   assert.deepEqual(fixture.results[fixture.results.length - 1], {
     ok: false,
     error: { code: "answer_pending", message: "Answer the waiting request first." },
   });
 
-  legacyApproval = false;
   fixture.activity.set("chat-approvals", { kind: "confirm", id: "c1", label: "Delete", confirm: () => undefined, cancel: () => undefined });
   await fixture.bus.runToolRequest({ sessionId: "s1", requestId: "r2", name: "end_session", args: {} });
   assert.equal(fixture.results[fixture.results.length - 1]?.ok, false);

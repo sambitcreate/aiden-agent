@@ -21,11 +21,6 @@ import { AssistantDockPresentation, liveDockClickAction, liveTriggerLabel } from
 import { AidenLiveSwitches } from "../settings/gemini-live-settings.js";
 import { aidenLiveMark, AidenLiveMark } from "./aiden-live-mark.js";
 import { assistantLiveMarkState, assistantLiveTranscriptFollowsLatest } from "./assistant-live.js";
-import {
-  assistantLiveVoiceApprovalDecision,
-  assistantLiveVoiceApprovalForReceipt,
-  assistantLiveVoiceApprovalFromReceipts,
-} from "./use-assistant-live-approvals.js";
 import type { AssistantLiveController } from "./use-assistant-live.js";
 import { idleLiveController } from "./assistant-live-test-fixture.js";
 
@@ -65,7 +60,6 @@ test("Aiden Live mark state prioritizes errors, approvals, and connection work",
     assistantLiveMarkState({ ...idleLive, active: true, state: "connecting", busy: true }),
     "connecting",
   );
-  assert.equal(assistantLiveMarkState({ ...idleLive, active: true }, true), "approval");
   assert.equal(
     assistantLiveMarkState({ ...idleLive, active: true, computerUseActing: true }),
     "acting",
@@ -108,62 +102,6 @@ test("Live transcript follows only when the viewport remains near the latest tur
   assert.equal(assistantLiveTranscriptFollowsLatest(1_000, 700, 200), false);
 });
 
-test("voice approvals accept only a whole allow or deny phrase, in any Live language", () => {
-  assert.equal(assistantLiveVoiceApprovalDecision("Allow once."), "allow");
-  assert.equal(assistantLiveVoiceApprovalDecision("  DENY! "), "deny");
-  assert.equal(assistantLiveVoiceApprovalDecision("allow"), "allow");
-  assert.equal(assistantLiveVoiceApprovalDecision("Permitir"), "allow");
-  assert.equal(assistantLiveVoiceApprovalDecision("अनुमति दो"), "allow");
-  assert.equal(assistantLiveVoiceApprovalDecision("拒绝"), "deny");
-  assert.equal(assistantLiveVoiceApprovalDecision("yes"), null);
-  assert.equal(assistantLiveVoiceApprovalDecision("go ahead"), null);
-  assert.equal(assistantLiveVoiceApprovalDecision("yes, allow once please"), null);
-  assert.equal(assistantLiveVoiceApprovalDecision("do not deny"), null);
-  assert.equal(assistantLiveVoiceApprovalDecision("Allow once?"), null);
-  assert.equal(assistantLiveVoiceApprovalDecision("deny？ "), null);
-});
-
-test("voice approval ignores stale and consumed receipts", () => {
-  const receipt = {
-    id: 7,
-    text: "Allow once",
-  };
-  assert.equal(assistantLiveVoiceApprovalForReceipt(receipt, 6, false), "allow");
-  assert.equal(assistantLiveVoiceApprovalForReceipt(receipt, 7, false), null);
-  assert.equal(assistantLiveVoiceApprovalForReceipt(receipt, 6, true), null);
-});
-
-test("batched voice receipts are examined FIFO and the earliest exact command wins", () => {
-  assert.deepEqual(
-    assistantLiveVoiceApprovalFromReceipts(
-      [
-        { id: 2, text: "Allow once" },
-        { id: 3, text: "Deny" },
-      ],
-      1,
-      new Set(),
-    ),
-    {
-      examinedReceiptIds: [2],
-      match: { receiptId: 2, decision: "allow" },
-    },
-  );
-  assert.deepEqual(
-    assistantLiveVoiceApprovalFromReceipts(
-      [
-        { id: 2, text: "keep going" },
-        { id: 3, text: "Deny" },
-      ],
-      1,
-      new Set(),
-    ),
-    {
-      examinedReceiptIds: [2, 3],
-      match: { receiptId: 3, decision: "deny" },
-    },
-  );
-});
-
 test("dock replaces the retired Assistant panel with one Live trigger", () => {
   const dock = readFileSync(new URL("./assistant-dock.tsx", import.meta.url), "utf8");
   assert.match(dock, /AIDEN_LIVE_SETUP_COMPLETE_KEY/u);
@@ -172,9 +110,6 @@ test("dock replaces the retired Assistant panel with one Live trigger", () => {
     /if \(!live\.active \|\| !live\.microphoneActive \|\| setupCompleted\) return/u,
   );
   assert.match(dock, /AssistantLiveSetupDialog/u);
-  assert.match(dock, /AssistantComputerUseApproval/u);
-  assert.doesNotMatch(dock, /useAssistantLiveApprovals\(/u);
-  assert.match(dock, /chat=\{SESSION_ACTIONS\}/u);
   assert.doesNotMatch(dock, /onDecision=/u);
   assert.doesNotMatch(dock, /AssistantPanel|AssistantBubble/u);
 });
@@ -183,7 +118,6 @@ test("a disabled Live capability renders no dock or setup affordance", () => {
   let commandEnabled = true;
   const markup = renderToStaticMarkup(
     <AssistantDockPresentation
-      chat={{ approvals: [], decidingApprovalId: null, decideApproval: async () => undefined }}
       live={{ ...idleLive, visible: false }}
       useCommand={(_commandId, _handler, enabled = true) => {
         commandEnabled = enabled;
@@ -197,7 +131,6 @@ test("a disabled Live capability renders no dock or setup affordance", () => {
 test("a disconnected Live error stays visible and microphone status is screen-reader-only", () => {
   const render = (live: AssistantLiveController) => renderToStaticMarkup(
     <AssistantDockPresentation
-      chat={{ approvals: [], decidingApprovalId: null, decideApproval: async () => undefined }}
       live={live}
       useCommand={() => undefined}
     />,
@@ -215,19 +148,11 @@ function renderDock(
   options: {
     enabled?: boolean;
     buttonVisible?: boolean;
-    approvalPending?: boolean;
   } = {},
 ): { markup: string; commandEnabled: boolean } {
   let commandEnabled = false;
   const markup = renderToStaticMarkup(
     <AssistantDockPresentation
-      chat={{
-        approvals: options.approvalPending
-          ? [{ approvalId: "a1", toolName: "computer_use", summary: "Click Send" } as never]
-          : [],
-        decidingApprovalId: null,
-        decideApproval: async () => undefined,
-      }}
       live={live}
       enabled={options.enabled}
       buttonVisible={options.buttonVisible}
@@ -257,13 +182,13 @@ test("an idle Live shows no corner pill: the send button starts it, and the shor
 });
 
 test("the Live pill names each state outside a session, and the ribbon names each state in one", () => {
-  const cases: Array<[string, AssistantLiveController, boolean?]> = [
+  const cases: Array<[string, AssistantLiveController]> = [
     ["Connecting…", { ...idleLive, busy: true, state: "connecting" }],
     ["Disconnected", { ...idleLive, state: "disconnected", error: "Connection lost." }],
     ["Stopping…", { ...idleLive, busy: true, state: "closing" }],
   ];
-  for (const [label, live, approvalPending] of cases) {
-    const { markup } = renderDock(live, { approvalPending });
+  for (const [label, live] of cases) {
+    const { markup } = renderDock(live);
     assert.equal(triggerLabel(markup), label, label);
     assert.equal(ribbonStatus(markup), null, `${label}: no ribbon outside a session`);
     // Label in name: voice control must be able to target what the pill shows.
@@ -276,16 +201,15 @@ test("the Live pill names each state outside a session, and the ribbon names eac
   );
 
   const open = { ...idleLive, active: true, state: "open" as const, microphoneActive: true };
-  const sessionCases: Array<[string, AssistantLiveController, boolean?]> = [
+  const sessionCases: Array<[string, AssistantLiveController]> = [
     ["Listening", open],
     ["Thinking", { ...open, captions: [{ id: 1, direction: "input", text: "Hi", final: true, sealed: false }] }],
     ["Speaking", { ...open, captions: [{ id: 1, direction: "output", text: "Hi", final: false, sealed: false }] }],
     ["Working", { ...open, computerUseActing: true }],
-    ["Needs you", open, true],
     ["Connecting…", { ...open, state: "resuming" }],
   ];
-  for (const [label, live, approvalPending] of sessionCases) {
-    const { markup } = renderDock(live, { approvalPending });
+  for (const [label, live] of sessionCases) {
+    const { markup } = renderDock(live);
     assert.equal(ribbonStatus(markup), label, label);
     assert.equal(triggerLabel(markup), null, `${label}: the ribbon replaces the corner pill`);
   }
@@ -293,20 +217,19 @@ test("the Live pill names each state outside a session, and the ribbon names eac
   assert.equal(liveTriggerLabel("listening", true, true), "Stopping…");
 });
 
-test("with the send-button switch off, sessions, approvals and errors still show in the corner", () => {
+test("with the send-button switch off, sessions and errors still show in the corner", () => {
   const hidden = renderDock(idleLive, { buttonVisible: false });
   assert.equal(triggerLabel(hidden.markup), null);
   assert.equal(hidden.commandEnabled, true);
 
   const active = { ...idleLive, active: true, state: "open" as const, microphoneActive: true };
-  for (const [name, live, approvalPending] of [
-    ["active", active, false],
-    ["connecting", { ...idleLive, busy: true, state: "connecting" as const }, false],
-    ["closing", { ...idleLive, active: true, busy: true, state: "closing" as const }, false],
-    ["approval", active, true],
-    ["error", { ...idleLive, state: "failed" as const, error: "The Live provider sent an invalid event." }, false],
+  for (const [name, live] of [
+    ["active", active],
+    ["connecting", { ...idleLive, busy: true, state: "connecting" as const }],
+    ["closing", { ...idleLive, active: true, busy: true, state: "closing" as const }],
+    ["error", { ...idleLive, state: "failed" as const, error: "The Live provider sent an invalid event." }],
   ] as const) {
-    const { markup } = renderDock(live, { buttonVisible: false, approvalPending });
+    const { markup } = renderDock(live, { buttonVisible: false });
     assert.ok(triggerLabel(markup) !== null || ribbonStatus(markup) !== null, name);
   }
   assert.match(
@@ -325,20 +248,6 @@ test("turning Aiden Live off renders nothing and ignores the Live command, even 
     assert.equal(markup, "");
     assert.equal(commandEnabled, false);
   }
-});
-
-test("legacy voice approval presentation remains isolated from the direct-action dock", () => {
-  const approval = readFileSync(
-    new URL("./assistant-computer-use-approval.tsx", import.meta.url),
-    "utf8",
-  );
-  const hook = readFileSync(new URL("./use-assistant-live-approvals.ts", import.meta.url), "utf8");
-  assert.match(approval, /Say “Allow once” or “Deny\.”/u);
-  assert.match(approval, /\{prompt\.summary\}/u);
-  assert.doesNotMatch(approval, /<Button|onClick/u);
-  assert.match(hook, /receipt\.id <= baselineReceiptId/u);
-  assert.match(hook, /latestVoiceApprovalReceiptId\(\)/u);
-  assert.match(hook, /consumedReceiptIds/u);
 });
 
 test("setup discloses macOS access and direct actions until Stop", () => {
@@ -397,7 +306,6 @@ test("every Live state renders a Helix-family mark, frozen when idle or unavaila
     thinking: ["helix-duplex", true],
     speaking: ["helix-duplex", true],
     acting: ["helix-duplex", true],
-    approval: ["glance", true],
     error: ["helix-flat", false],
     unavailable: ["helix-flat", false],
   } as const;

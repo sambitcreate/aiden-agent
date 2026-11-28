@@ -34,17 +34,8 @@ export interface GeminiLiveComputerUseCall {
 
 export interface GeminiLiveComputerUseBridgeOptions {
   sessionId: string;
-  /** Explicit Live-session consent replaces per-action prompts; target checks still apply. */
-  actionPolicy?: "session" | "per-action";
   controller: GeminiLiveComputerUseController;
   isAuthorized(): boolean | Promise<boolean>;
-  requestApproval(input: {
-    streamId: string;
-    toolCallId: string;
-    toolName: typeof COMPUTER_USE_TOOL_NAME;
-    summary: string;
-    signal: AbortSignal;
-  }): Promise<boolean>;
   onActivity?(active: boolean): void;
   sendResult(result: {
     id: string;
@@ -207,14 +198,6 @@ export class GeminiLiveComputerUseBridge {
         entry.controller.signal,
       );
       if (approval) {
-        const allowed = this.options.actionPolicy === "session" || await this.options.requestApproval({
-          streamId: `live:${this.options.sessionId}`,
-          toolCallId: entry.call.id,
-          toolName: COMPUTER_USE_TOOL_NAME,
-          summary: approval.summary,
-          signal: entry.controller.signal,
-        });
-        if (!allowed) throw new Error("The user did not allow this Computer Use action.");
         if (!(await this.options.isAuthorized()) || entry.controller.signal.aborted) {
           throw new Error("Computer Use approval is stale.");
         }
