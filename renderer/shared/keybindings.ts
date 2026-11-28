@@ -857,11 +857,18 @@ export function prettyAccelerator(value: string | null | undefined): string {
 
 export type KeyboardPlatform = "darwin" | "linux" | "other";
 
+type NavigatorWithUserAgentData = Navigator & {
+  readonly userAgentData?: {
+    readonly platform?: string;
+  };
+};
+
 export function detectedKeyboardPlatform(): KeyboardPlatform {
   if (typeof navigator === "undefined") return "darwin";
-  const identity = `${navigator.platform ?? ""} ${navigator.userAgent ?? ""}`;
+  const browser = navigator as NavigatorWithUserAgentData;
+  const identity = browser.userAgentData?.platform?.trim() || browser.userAgent || "";
   if (/linux/iu.test(identity)) return "linux";
-  if (/mac|iphone|ipad/iu.test(identity)) return "darwin";
+  if (/mac|ios|iphone|ipad/iu.test(identity)) return "darwin";
   return "other";
 }
 

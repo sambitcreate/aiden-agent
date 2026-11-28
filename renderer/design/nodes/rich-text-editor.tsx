@@ -4,6 +4,7 @@
 // included, and pasting keeps only the plain words.
 
 import * as React from "react";
+import { isMacPlatform } from "../../lib/ghostty-terminal/host-platform";
 import { cn } from "../../lib/ui-utils";
 import { richTextHtml, serializeRichText } from "../../shared/design-canvas/rich-text";
 import { readRichDom } from "../rich-text-dom";
@@ -189,7 +190,7 @@ export const RichTextEditor = React.forwardRef<RichTextEditorHandle, Props>(func
   // to the sidebar from anywhere, so the editor takes these keys first, in
   // the window's capture phase, and marks them handled.
   React.useEffect(() => {
-    const mac = /Mac/.test(navigator.platform);
+    const mac = isMacPlatform();
     const formatKey = (event: KeyboardEvent) => {
       const element = box.current;
       if (!element || !(event.target instanceof Node) || !element.contains(event.target)) return;

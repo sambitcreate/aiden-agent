@@ -3,6 +3,7 @@ import test, { afterEach } from "node:test";
 import {
   acceleratorFromKeyboardEvent,
   applyKeybindingMutation,
+  detectedKeyboardPlatform,
   effectiveBinding,
   effectiveBindings,
   electronAcceleratorForPlatform,
@@ -11,6 +12,7 @@ import {
   migrateLegacyKeybindings,
   normalizeAccelerator,
   normalizeKeybindingOverrides,
+  prettyAccelerator,
   prettyAcceleratorForPlatform,
   repairKeybindingOverrides,
   setUnavailableCommandCapabilities,
@@ -139,6 +141,92 @@ test("Linux uses Control as the portable primary modifier", () => {
     ),
     "Command+K",
   );
+});
+
+function withNavigator(stub: unknown, run: () => void): void {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  if (stub === undefined) {
+    Reflect.deleteProperty(globalThis, "navigator");
+  } else {
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      writable: true,
+      value: stub,
+    });
+  }
+  try {
+    run();
+  } finally {
+    if (previous) {
+      Object.defineProperty(globalThis, "navigator", previous);
+    } else {
+      Reflect.deleteProperty(globalThis, "navigator");
+    }
+  }
+}
+
+test("detectedKeyboardPlatform reads navigator.userAgentData.platform, falls back to userAgent, and defaults to darwin without navigator", () => {
+  withNavigator(
+    {
+      userAgentData: { platform: "macOS" },
+      userAgent: "Mozilla/5.0 (X11; Linux x86_64)",
+    },
+    () => {
+      assert.equal(detectedKeyboardPlatform(), "darwin");
+      assert.equal(prettyAccelerator("Command+K"), "⌘K");
+    },
+  );
+
+  withNavigator({ userAgentData: { platform: "iOS" }, userAgent: "" }, () => {
+    assert.equal(detectedKeyboardPlatform(), "darwin");
+  });
+
+  withNavigator(
+    {
+      userAgentData: { platform: "Linux" },
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+    },
+    () => {
+      assert.equal(detectedKeyboardPlatform(), "linux");
+      assert.equal(prettyAccelerator("Command+K"), "Ctrl+K");
+    },
+  );
+
+  withNavigator({ userAgentData: { platform: "Windows" }, userAgent: "" }, () => {
+    assert.equal(detectedKeyboardPlatform(), "other");
+  });
+
+  withNavigator(
+    { userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36" },
+    () => {
+      assert.equal(detectedKeyboardPlatform(), "darwin");
+    },
+  );
+
+  withNavigator(
+    {
+      userAgentData: { platform: "" },
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)",
+    },
+    () => {
+      assert.equal(detectedKeyboardPlatform(), "darwin");
+    },
+  );
+
+  withNavigator(
+    {
+      userAgentData: { platform: "" },
+      userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+    },
+    () => {
+      assert.equal(detectedKeyboardPlatform(), "linux");
+    },
+  );
+
+  withNavigator(undefined, () => {
+    assert.equal(detectedKeyboardPlatform(), "darwin");
+    assert.equal(prettyAccelerator("Command+K"), "⌘K");
+  });
 });
 
 test("legacy global settings remain effective until overridden", () => {

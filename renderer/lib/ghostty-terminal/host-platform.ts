@@ -1,4 +1,12 @@
+type NavigatorWithUserAgentData = Navigator & {
+  readonly userAgentData?: {
+    readonly platform?: string;
+  };
+};
+
 export function isMacPlatform(platform?: string): boolean {
-  const value = platform ?? (typeof navigator === "undefined" ? "" : navigator.platform);
-  return /Mac|iPhone|iPad|iPod/iu.test(value);
+  const browser =
+    typeof navigator === "undefined" ? undefined : (navigator as NavigatorWithUserAgentData);
+  const value = platform ?? (browser?.userAgentData?.platform?.trim() || browser?.userAgent || "");
+  return /Mac|iOS|iPhone|iPad|iPod/iu.test(value);
 }

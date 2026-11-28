@@ -32,6 +32,7 @@ import {
   PopoverTrigger,
 } from "../../components/ui";
 import type { DesignTextCommand } from "../../shared/design-canvas/bridge-messages";
+import { isMacPlatform } from "../../lib/ghostty-terminal/host-platform";
 import { linkFromInput } from "../../shared/design-canvas/rich-text";
 
 const STYLES = [
@@ -47,7 +48,7 @@ const ALIGNS: readonly { value: "left" | "center" | "right"; label: string; Icon
   { value: "right", label: "Align right", Icon: AlignRight },
 ];
 
-const MOD = typeof navigator !== "undefined" && /Mac/.test(navigator.platform) ? "⌘" : "Ctrl+";
+const MOD = isMacPlatform() ? "⌘" : "Ctrl+";
 
 const keepFocus = (event: React.MouseEvent) => event.preventDefault();
 
