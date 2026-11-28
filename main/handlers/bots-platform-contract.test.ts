@@ -1,13 +1,67 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { startBotApplication } from "../services/bot-startup-core.js";
+import {
+  BOT_BUBBLE_CHANNELS,
+  BOT_CHANNELS,
+  BOT_COMPUTER_CHANNELS,
+  BOT_ROUTINE_CHANNELS,
+  registerBotSurfaceLazyGroups,
+} from "./bot-lazy-groups.js";
+import {
+  createIpcCaptureScope,
+  createLazyIpcGroup,
+  type IpcInvokeHandler,
+} from "./lazy-ipc-core.js";
 
 test("Bot IPC registration is narrowed by the main-owned host policy", () => {
-  const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
-  assert.match(
-    source,
-    /if \(hostPlatformCapabilities\(\)\.bots\) \{\s+registerBotHandlers\(\);\s+registerBotBubbleHandlers<IpcMainInvokeEvent>\(\{/u,
+  const collectRegisteredChannels = (capabilities: {
+    bots: boolean;
+    botComputers: boolean;
+  }): string[] => {
+    const registered: string[] = [];
+    const scope = createIpcCaptureScope<IpcInvokeHandler>();
+    registerBotSurfaceLazyGroups({
+      capabilities,
+      registerGroup: (name, channels, loadRegistrar) =>
+        createLazyIpcGroup(
+          {
+            handle: (channel, listener) =>
+              scope.handle(channel, listener, (targetChannel) => {
+                registered.push(targetChannel);
+              }),
+            capture: (run) => scope.capture(run),
+          },
+          name,
+          channels,
+          loadRegistrar,
+        ),
+      botRoutines: async () => () => undefined,
+      bots: async () => () => undefined,
+      botBubbles: async () => () => undefined,
+      botComputers: async () => () => undefined,
+    });
+    return registered;
+  };
+
+  assert.deepEqual(
+    collectRegisteredChannels(hostPlatformCapabilities("win32", "x64")),
+    [],
+  );
+  assert.deepEqual(
+    collectRegisteredChannels(hostPlatformCapabilities("linux", "x64")),
+    [...BOT_ROUTINE_CHANNELS, ...BOT_CHANNELS, ...BOT_BUBBLE_CHANNELS],
+  );
+  assert.deepEqual(
+    collectRegisteredChannels(hostPlatformCapabilities("darwin", "arm64")),
+    [
+      ...BOT_ROUTINE_CHANNELS,
+      ...BOT_CHANNELS,
+      ...BOT_BUBBLE_CHANNELS,
+      ...BOT_COMPUTER_CHANNELS,
+    ],
   );
 });
 

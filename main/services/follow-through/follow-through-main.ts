@@ -27,7 +27,7 @@ import { githubApi } from "../github/github-runtime-main.js";
 import { hostPlatformCapabilities } from "../host-platform-capabilities.js";
 import { hostRunRegistry } from "../host-runs-main.js";
 import type { HostRunSummary } from "../host-run-registry.js";
-import { llmClient } from "../llm-client.js";
+import { lazyLlmLifecycleClient } from "../llm-turn-gates-main.js";
 import {
   BACKGROUND_JOB_MARKER,
   BackgroundJobLimitError,
@@ -120,7 +120,7 @@ async function loadState(): Promise<SavedState> {
 
 // ── When each chat was answering (own-comment detection, check trigger) ──
 
-const answeringRuns = new AnsweringRuns({ isChatBusy: (chatId) => llmClient.isChatBusy(chatId) });
+const answeringRuns = new AnsweringRuns({ isChatBusy: (chatId) => lazyLlmLifecycleClient.isChatBusy(chatId) });
 const settledRuns = new Set<string>();
 /** Recently deleted chats, so a run that ends after its chat is gone leaves no window behind. */
 const deletedChats = new Set<string>();
@@ -203,7 +203,7 @@ export const chatSettlement = new ChatSettlement({
   hasStoppableJobs: (chatId) => backgroundJobs.hasSettleStoppable(chatId),
   // The desktop composer's queue lives in the window; a queued message that
   // sends starts an answer, which cancels the window.
-  isChatBusy: (chatId) => llmClient.isChatBusy(chatId) || noticeDelivery.hasPending(chatId),
+  isChatBusy: (chatId) => lazyLlmLifecycleClient.isChatBusy(chatId) || noticeDelivery.hasPending(chatId),
   stopSettled: (chatId) => backgroundJobs.stopSettled(chatId),
   log: (message, error) => logger.warn("background-jobs", message, error),
 });
@@ -597,3 +597,6 @@ export async function resolvePullRequestTarget(
   const { host, repository, number, url: link, title } = current.pullRequest;
   return { host, repository, number, url: link, ...(title ? { title } : {}) };
 }
+
+import * as loadedSubsystems from "../../loaded-subsystems.js";
+loadedSubsystems.registerLoadedSubsystem?.("followThrough", { shutdownFollowThrough });

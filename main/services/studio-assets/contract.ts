@@ -1,4 +1,4 @@
-import { MAX_DISPLAY_IMAGE_DIMENSION, MAX_DISPLAY_IMAGE_PIXELS } from "../display-image-extension.js";
+import { MAX_DISPLAY_IMAGE_DIMENSION, MAX_DISPLAY_IMAGE_PIXELS } from "../display-image-limits.js";
 
 export const STUDIO_ASSET_MEDIA_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
 export type StudioAssetMediaType = (typeof STUDIO_ASSET_MEDIA_TYPES)[number];

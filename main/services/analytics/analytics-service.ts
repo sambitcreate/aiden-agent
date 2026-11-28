@@ -47,7 +47,7 @@ export interface AnalyticsServiceOptions {
   readonly appRoots: readonly string[];
   // Where the run marker and pending-crash file live (userData).
   readonly runDirectory: string;
-  readonly isBuiltinProvider: (providerId: string) => boolean;
+  readonly isBuiltinProvider: (providerId: string) => boolean | Promise<boolean>;
   // Consent as saved on disk, read synchronously. Only a fatal crash during
   // startup needs it, before the transport exists.
   readonly readStateSync?: () => AnalyticsState | undefined;
@@ -629,7 +629,7 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
         try {
           const provider = providerId === undefined
             ? undefined
-            : options.isBuiltinProvider(providerId) ? providerId : "custom";
+            : (await options.isBuiltinProvider(providerId)) ? providerId : "custom";
           core?.track("onboarding_finished", { outcome, ...(provider ? { provider_id: provider } : {}) });
         } catch (error) {
           log("Onboarding analytics could not be recorded.", error);

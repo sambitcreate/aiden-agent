@@ -218,3 +218,10 @@ export function registerDeviceHandlers(): void {
     revealInFinder: (file) => shell.showItemInFolder(file),
   });
 }
+
+import * as loadedSubsystems from "../loaded-subsystems.js";
+loadedSubsystems.registerLoadedSubsystem?.("devices", {
+  closeDeviceSessionsForChat,
+  shutdownDevices,
+  terminateDeviceHelperCommands,
+});

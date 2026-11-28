@@ -37,7 +37,10 @@ import {
 import type { InlineVisualsMode } from "../../renderer/shared/appearance.js";
 import { createRenderUiTool, type RenderUiToolOptions } from "./aiden-ui-tool.js";
 import { checkGenerativeUiScripts, describeGenerativeUiScriptCheck } from "./generative-ui-script-check.js";
+import { displayedAssistantHtmlUsage } from "./generative-ui-usage.js";
 import { visualRoutingRule } from "./visual-routing.js";
+
+export { displayedAssistantHtmlUsage };
 
 export const GENERATIVE_UI_EXTENSION_ID = "aiden.gui.generative-ui";
 export const VISUALIZE_GUIDE_TOOL_NAME = "visualize_guide" as const;
@@ -75,25 +78,6 @@ export function shouldEnableGenerativeUiExtension(scope: GenerativeUiExtensionSc
     !scope.assistantMode &&
     !scope.excluded
   );
-}
-
-export function displayedAssistantHtmlUsage(
-  messages: readonly {
-    role: string;
-    htmlArtifacts?: readonly { size: number }[];
-  }[],
-): { bytes: number; count: number } {
-  let bytes = 0;
-  let count = 0;
-  for (const message of messages) {
-    if (message.role !== "assistant") continue;
-    for (const artifact of message.htmlArtifacts ?? []) {
-      if (!Number.isSafeInteger(artifact.size) || artifact.size < 1) continue;
-      bytes = Math.min(Number.MAX_SAFE_INTEGER, bytes + artifact.size);
-      count += 1;
-    }
-  }
-  return { bytes, count };
 }
 
 const ON_REQUEST_DRAWING_TOOLS: ReadonlySet<string> = new Set([RENDER_ARTIFACT_TOOL_NAME, RENDER_UI_TOOL_NAME]);

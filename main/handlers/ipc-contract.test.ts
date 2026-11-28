@@ -33,6 +33,13 @@ import {
   MAX_IMAGE_BYTES,
 } from "../services/attachments.js";
 import { MAX_ATTACHMENTS_PER_MESSAGE } from "../../renderer/shared/attachment-contract.js";
+import { createLazyModule } from "../lazy-module.js";
+import { createLoadedSubsystemRegistry } from "../loaded-subsystems.js";
+import {
+  createIpcCaptureScope,
+  createLazyIpcGroup,
+  type IpcInvokeHandler,
+} from "./lazy-ipc-core.js";
 
 interface IpcInventory {
   handlers: Set<string>;
@@ -44,8 +51,6 @@ const MAIN_ROOT = path.join(REPO_ROOT, "main");
 const PRELOAD_PATH = path.join(REPO_ROOT, "renderer", "preload.ts");
 const RENDERER_IPC_PATH = path.join(REPO_ROOT, "renderer", "lib", "ipc.ts");
 const ATTACHMENT_HANDLER_PATH = path.join(MAIN_ROOT, "handlers", "attachments.ts");
-
-const HANDLER_BOOTSTRAP_PATH = path.join(MAIN_ROOT, "handlers", "index.ts");
 function calleeName(expression: ts.LeftHandSideExpression): string | undefined {
   if (ts.isIdentifier(expression)) return expression.text;
   if (ts.isPropertyAccessExpression(expression)) return expression.name.text;
@@ -477,19 +482,149 @@ test("every Bot bubble overlay preload channel exists in live main inventory", (
   assert.deepEqual(missingNotifications, [], "Bot bubble overlay notification channels missing from main notification sites");
 });
 
-test("handler bootstrap registers every dedicated handler surface", async () => {
-  const bootstrap = await fs.readFile(HANDLER_BOOTSTRAP_PATH, "utf8");
-
-  for (const registration of ["registerSubagentHandlers", "registerTelegramHandlers"]) {
-    assert.match(
-      bootstrap,
-      new RegExp(`import \\{ ${registration} \\} from "\\./[a-z-]+\\.js";`, "u"),
-      `${registration} must be imported by the IPC bootstrap`,
-    );
-    assert.match(
-      bootstrap,
-      new RegExp(`\\b${registration}\\(\\);`, "u"),
-      `${registration} must be invoked by the IPC bootstrap`,
+test("handler inventory registers every deferred subsystem surface", () => {
+  for (const requiredPrefix of [
+    "subagents:",
+    "telegram:",
+    "browser:",
+    "devices:",
+    "designCanvas:",
+    "remote:",
+    "assistant-live:",
+    "chats:goal:",
+  ]) {
+    assert.equal(
+      [...inventory.handlers].some((channel) => channel.startsWith(requiredPrefix)),
+      true,
+      `Expected at least one registered handler starting with ${requiredPrefix}`,
     );
   }
+});
+
+test("lazy IPC forwarder registers channels synchronously and loads the module once on first invoke", async () => {
+  const registered = new Map<string, IpcInvokeHandler>();
+  const scope = createIpcCaptureScope<IpcInvokeHandler>();
+  const registerHandle = (channel: string, listener: IpcInvokeHandler) => {
+    scope.handle(channel, listener, (targetChannel, targetListener) => {
+      if (registered.has(targetChannel)) {
+        throw new Error(`Duplicate top-level registration for "${targetChannel}"`);
+      }
+      registered.set(targetChannel, targetListener);
+    });
+  };
+
+  let loaderCalls = 0;
+  const group = createLazyIpcGroup(
+    { handle: registerHandle, capture: (run) => scope.capture(run) },
+    "demo",
+    ["demo:alpha", "demo:beta"],
+    async () => {
+      loaderCalls += 1;
+      await Promise.resolve();
+      return () => {
+        registerHandle("demo:alpha", (_event, value) => `alpha:${String(value)}`);
+        registerHandle("demo:beta", (_event, value) => `beta:${String(value)}`);
+      };
+    },
+  );
+
+  // Synchronous registration happens before startup IPC admission opens, while
+  // the underlying module remains unloaded until an invoke arrives.
+  assert.deepEqual([...registered.keys()], ["demo:alpha", "demo:beta"]);
+  assert.equal(group.isLoaded(), false);
+  assert.equal(loaderCalls, 0);
+
+  const [first, second] = await Promise.all([
+    registered.get("demo:alpha")?.({}, 1),
+    registered.get("demo:beta")?.({}, 2),
+  ]);
+  assert.equal(first, "alpha:1");
+  assert.equal(second, "beta:2");
+  assert.equal(group.isLoaded(), true);
+  assert.equal(loaderCalls, 1);
+});
+
+test("lazy IPC forwarder rejects channel drift and retries after transient loader failure", async () => {
+  const registered = new Map<string, IpcInvokeHandler>();
+  const scope = createIpcCaptureScope<IpcInvokeHandler>();
+  const registerHandle = (channel: string, listener: IpcInvokeHandler) => {
+    scope.handle(channel, listener, (targetChannel, targetListener) => {
+      registered.set(targetChannel, targetListener);
+    });
+  };
+
+  const mismatched = createLazyIpcGroup(
+    { handle: registerHandle, capture: (run) => scope.capture(run) },
+    "mismatched",
+    ["mismatch:expected"],
+    async () => () => {
+      registerHandle("mismatch:unexpected", () => "wrong");
+    },
+  );
+  await assert.rejects(
+    async () => await registered.get("mismatch:expected")?.({}),
+    /channel mismatch: missing=\[mismatch:expected\] unexpected=\[mismatch:unexpected\]/u,
+  );
+  assert.equal(mismatched.isLoaded(), false);
+
+  let attempts = 0;
+  const recoverable = createLazyIpcGroup(
+    { handle: registerHandle, capture: (run) => scope.capture(run) },
+    "recoverable",
+    ["recoverable:ping"],
+    async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("transient load failure");
+      return () => {
+        registerHandle("recoverable:ping", () => "pong");
+      };
+    },
+  );
+  await assert.rejects(
+    async () => await registered.get("recoverable:ping")?.({}),
+    /transient load failure/u,
+  );
+  assert.equal(await registered.get("recoverable:ping")?.({}), "pong");
+  assert.equal(recoverable.isLoaded(), true);
+  assert.equal(attempts, 2);
+});
+
+test("lazy modules and loaded-subsystem registry skip unloaded subsystems on shutdown", async () => {
+  interface TestSubsystems {
+    loadedService: { stop: () => void };
+    unloadedService: { stop: () => void };
+  }
+  const registry = createLoadedSubsystemRegistry<TestSubsystems>();
+  let unloadedImports = 0;
+  let loadedStopped = 0;
+  let unloadedStopped = 0;
+
+  const unloadedModule = createLazyModule(async () => {
+    unloadedImports += 1;
+    return registry.register("unloadedService", {
+      stop: () => {
+        unloadedStopped += 1;
+      },
+    });
+  });
+  const loadedModule = createLazyModule(async () =>
+    registry.register("loadedService", {
+      stop: () => {
+        loadedStopped += 1;
+      },
+    }),
+  );
+
+  await loadedModule.load();
+  assert.equal(loadedModule.isLoaded(), true);
+  assert.equal(unloadedModule.isLoaded(), false);
+  assert.equal(await unloadedModule.peekOrAwaitInFlight(), undefined);
+  assert.equal(unloadedImports, 0);
+
+  registry.peek("loadedService")?.stop();
+  registry.peek("unloadedService")?.stop();
+
+  assert.equal(loadedStopped, 1);
+  assert.equal(unloadedStopped, 0);
+  assert.equal(unloadedImports, 0);
 });

@@ -27,3 +27,6 @@ export const subagentHealthMetrics = createSubagentHealthMetricsService({
     logger.warn("subagents", "Could not persist aggregate subagent health metrics.");
   },
 });
+
+import { registerLoadedSubsystem } from "../../loaded-subsystems.js";
+registerLoadedSubsystem("subagentHealthMetrics", subagentHealthMetrics);

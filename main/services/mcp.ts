@@ -1010,3 +1010,6 @@ export function withBotConnectorMcpClient<T>(server: McpServer, signal: AbortSig
 export function withForegroundComposioSettingsMcpClient<T>(server: McpServer, signal: AbortSignal, operation: (port: ForegroundComposioSettingsClientPort) => Promise<T>): Promise<T> {
   return mcpManager.withForegroundComposioSettingsClient(server, signal, operation);
 }
+
+import { registerLoadedSubsystem } from "../loaded-subsystems.js";
+registerLoadedSubsystem("mcpManager", mcpManager);

@@ -1,4 +1,4 @@
-import { displayImageDimensions, validateDisplayImageDimensions } from "../display-image-extension.js";
+import { displayImageDimensions, validateDisplayImageDimensions } from "../display-image-limits.js";
 import {
   STUDIO_ASSET_LIMITS,
   StudioAssetError,

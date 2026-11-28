@@ -8,7 +8,6 @@ import { app, ipcMain, logger } from "../../platform.js";
 import { configStore } from "../config-store.js";
 import { observeDiagnosticEvents } from "../diagnostic-journal.js";
 import { SETTINGS_FILENAME } from "../portable-config-core.js";
-import { providerRegistry } from "../provider-registry.js";
 import { ANALYTICS_BUILD_CONFIG } from "./analytics-build-config.js";
 import type { PostHogTransport } from "./analytics-client.js";
 import { parseAnalyticsState, type AnalyticsState } from "./analytics-consent.js";
@@ -80,7 +79,10 @@ export function analyticsService(): AnalyticsService {
     superProperties: superProperties(),
     appRoots: [app.getAppPath()],
     runDirectory: app.getPath("userData"),
-    isBuiltinProvider: (providerId) => providerRegistry.isBuiltinProvider(providerId),
+    isBuiltinProvider: async (providerId) => {
+      const { providerRegistry } = await import("../provider-registry.js");
+      return providerRegistry.isBuiltinProvider(providerId);
+    },
     readStateSync,
     onSendingChanged: (sending) => ipcMain.broadcast("analytics:sending-changed", { sending }),
     log: (message, error) =>

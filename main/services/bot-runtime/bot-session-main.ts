@@ -1308,3 +1308,6 @@ export async function shutdownBotSessionRuntime(): Promise<void> {
 }
 
 export { BOT_NOTICE_ENTRY_KIND };
+
+import { registerLoadedSubsystem } from "../../loaded-subsystems.js";
+registerLoadedSubsystem("botSessionRuntime", { shutdownBotSessionRuntime });

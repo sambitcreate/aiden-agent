@@ -14,7 +14,9 @@ import { chatActivityRegistry } from "../chat-activity.js";
 import type { GoalNeedsYou } from "../chat-pending-attention.js";
 import { chatStore } from "../chat-store.js";
 import { chatMessageToPiMessage } from "../generation-messages.js";
-import { llmClient } from "../llm-client.js";
+import { peekLoadedSubsystem } from "../../loaded-subsystems.js";
+import * as loadedSubsystems from "../../loaded-subsystems.js";
+import { lazyLlmLifecycleClient } from "../llm-turn-gates-main.js";
 import { resolveModelRuntime } from "../model-runtime.js";
 import { chatSideCallPrefixes } from "../side-call-prefix.js";
 import { createSpendingMeter, spendCounts } from "../spending-service.js";
@@ -97,17 +99,25 @@ const goalWindowRounds = new GoalWindowRounds<WindowRoundPayload>({
   closedMidRound: ({ chatId, streamId, documentId }) => {
     // Pause first, so the stop below reads as the window closing, not the person's Stop.
     goalLoop.windowClosed(chatId);
-    llmClient.cancel(streamId, "user_stop", documentId);
+    peekLoadedSubsystem("llmClient")?.cancel(streamId, "user_stop", documentId);
   },
 });
+
+let cachedLlmClient: Promise<typeof import("../llm-client.js")["llmClient"]> | undefined;
+const loadLlmClient = () =>
+  (cachedLlmClient ??= import("../llm-client.js").then((mod) => mod.llmClient));
 
 const { startAttendedRound, startGoalRound } = createGoalRoundStarter({
   offer: (chatId, payload) => goalWindowRounds.offer(chatId, payload),
   newStreamId: () => `goal-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`,
-  attendedTurnOwner: (chatId, streamId) => llmClient.attendedTurnOwner(chatId, `goal:${streamId}`, roundPromptLifetime),
-  beginChatTurn: (chatId, streamId, ownerId) => llmClient.beginChatTurn(chatId, streamId, ownerId),
+  attendedTurnOwner: (chatId, streamId) => {
+    const loaded = peekLoadedSubsystem("llmClient");
+    if (!loaded) throw new Error("Chat generation runtime is not loaded.");
+    return loaded.attendedTurnOwner(chatId, `goal:${streamId}`, roundPromptLifetime);
+  },
+  beginChatTurn: (chatId, streamId, ownerId) => lazyLlmLifecycleClient.beginChatTurn(chatId, streamId, ownerId),
   appendMessage: (chatId, message, options) => chatStore.appendMessage(chatId, message, options),
-  start: (streamId, params, owner, options) => llmClient.start(streamId, params, owner, options),
+  start: async (streamId, params, owner, options) => (await loadLlmClient()).start(streamId, params, owner, options),
   transcriptChanged,
   log: (message, error) => logger.warn("goal", message, error),
 });
@@ -118,6 +128,7 @@ async function startRound(
   round: GoalRoundMessage,
   isCurrent: RoundStillCurrent,
 ): Promise<GoalRoundStart> {
+  await loadLlmClient();
   const started = await startGoalRound(chatId, context, round, isCurrent);
   return started.kind === "started" ? "started" : started.kind === "busy" ? "busy" : "unavailable";
 }
@@ -151,6 +162,7 @@ export async function startGoalWindowRound(owner: ChatGenerationOwner, token: st
   let result: StartTurnResult = { kind: "unavailable", reason: "The round could not start." };
   try {
     // Its cards show in the window, and one unanswered for 30 minutes moves the goal to Needs you, as off screen.
+    const llmClient = await loadLlmClient();
     const roundOwner = llmClient.attendedWindowOwner(owner, claim.chatId, roundPromptLifetime);
     result = await startAttendedRound(claim.chatId, claim.payload.context, claim.payload.round, { owner: roundOwner, streamId }, claim.payload.isCurrent);
     return result;
@@ -191,8 +203,8 @@ export const goalLoop = new GoalLoop({
     chatActivityRegistry.touch();
   },
   eligibility,
-  isChatBusy: (chatId) => llmClient.isChatBusy(chatId) || noticeDelivery.hasPending(chatId),
-  helperRunning: (chatId) => llmClient.chatHasLiveHelpers(chatId),
+  isChatBusy: (chatId) => lazyLlmLifecycleClient.isChatBusy(chatId) || noticeDelivery.hasPending(chatId),
+  helperRunning: (chatId) => peekLoadedSubsystem("llmClient")?.chatHasLiveHelpers(chatId) ?? false,
   jobsRunning: (chatId) => backgroundJobs.list(chatId).some((job) => job.state === "running"),
   roundActivity: async (chatId) => roundActivity(await chatStore.get(chatId)),
   fallbackContext: async (chatId) => {
@@ -233,8 +245,10 @@ export const goalLoop = new GoalLoop({
   waitForIdle: async (chatId, signal) => {
     // Whatever holds the chat may settle no run (a notice saved as a card, a
     // scheduled task's admission): poll until nothing does.
-    while (!signal.aborted && (llmClient.isChatBusy(chatId) || noticeDelivery.hasPending(chatId))) {
-      if (!(await llmClient.waitForChatIdleWithin(chatId, IDLE_POLL_MS)) || noticeDelivery.hasPending(chatId)) {
+    while (!signal.aborted && (lazyLlmLifecycleClient.isChatBusy(chatId) || noticeDelivery.hasPending(chatId))) {
+      const loaded = peekLoadedSubsystem("llmClient");
+      const settled = loaded ? await loaded.waitForChatIdleWithin(chatId, IDLE_POLL_MS) : !lazyLlmLifecycleClient.isChatBusy(chatId);
+      if (!settled || noticeDelivery.hasPending(chatId)) {
         await new Promise<void>((resolve) => {
           const timer = setTimeout(resolve, IDLE_POLL_MS);
           timer.unref?.();
@@ -244,6 +258,7 @@ export const goalLoop = new GoalLoop({
   },
   lookingChanged: () => {
     for (const listener of lookingListeners) listener();
+    peekLoadedSubsystem("keepAwake")?.notifyInputsChanged?.();
   },
   report: (event) => {
     if (event.event === "goal_started") reportAnalyticsEvent("goal_started", event.properties);
@@ -299,3 +314,10 @@ export function goalNeedsYou(chatId: string): GoalNeedsYou | undefined {
 export function shutdownGoalLoop(): void {
   goalLoop.shutdown();
 }
+
+loadedSubsystems.registerLoadedSubsystem?.("goalLoop", {
+  goalLoop,
+  goalNeedsYou,
+  onGoalLookingChanged,
+  shutdownGoalLoop,
+});

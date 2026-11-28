@@ -26,7 +26,6 @@ import { createBotLifecycleJournal } from "./bot-lifecycle-journal.js";
 import { createBotManagedWorkspaceService } from "./bot-managed-workspace.js";
 import { configStore } from "./config-store.js";
 import { listConfiguredProviders } from "./provider-list-main.js";
-import { inspectConfiguredMcpToolsForBotCatalog } from "./mcp.js";
 import {
   createBotMcpScopeCache,
   resolveBotMcpConnectionIdentities,
@@ -230,6 +229,7 @@ export const botCapabilityCatalog = createBotCapabilityCatalogMainService(
           return botMcpCredentialSignature(server, await opaqueKeyStore.load());
         },
         inspectTools: async (server, inspectSignal) => {
+          const { inspectConfiguredMcpToolsForBotCatalog } = await import("./mcp.js");
           const tools = await inspectConfiguredMcpToolsForBotCatalog(server, inspectSignal);
           mcpDiagnostics.recovered(server);
           return tools;
@@ -309,3 +309,6 @@ export async function botConnectorSourceSelectionIds(serverId:string){
   const mint=createBotCapabilityOpaqueIdMint(await opaqueKeyStore.load());
   return {connectionId:mint("connection",botConnectionCapabilityIdentity({sourceId:serverId,...(serverId===COMPOSIO_SERVICE_SERVER_ID?{accessIdentity:COMPOSIO_SERVICE_ACCESS_IDENTITY}:{})}),"0".repeat(64)),schedulesId:mint("other","schedules","0".repeat(64))};
 }
+
+import { registerLoadedSubsystem } from "../loaded-subsystems.js";
+registerLoadedSubsystem("botSkillContentWatcher", botSkillContentWatcher);

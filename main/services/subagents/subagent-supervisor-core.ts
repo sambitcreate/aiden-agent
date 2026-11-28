@@ -2102,3 +2102,6 @@ export class SubagentSupervisor {
     return formatResults(results, childModels);
   }
 }
+
+import { registerLoadedSubsystem } from "../../loaded-subsystems.js";
+registerLoadedSubsystem("subagentSupervisor", { flushPendingSubagentTranscripts });

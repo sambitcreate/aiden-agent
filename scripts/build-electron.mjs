@@ -1,9 +1,25 @@
 /* global console, URL */
 import { build } from "esbuild";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { analyticsBuildConfigPlugin, resolveAnalyticsBuildConfig } from "./analytics-build-config.mjs";
+
+/**
+ * Removes prior `.js` and `.map` build outputs from `outdir` before emitting
+ * split ESM chunks so incremental builds never leave obsolete chunks behind in
+ * `build/main` (which `electron-builder` packs via `build/main/**\/*`).
+ */
+export function cleanMainBuildOutput(outdir = "build/main") {
+  if (!existsSync(outdir)) return;
+  for (const entry of readdirSync(outdir, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    if (entry.name.endsWith(".js") || entry.name.endsWith(".map")) {
+      rmSync(path.join(outdir, entry.name), { force: true });
+    }
+  }
+}
 
 /**
  * Returns the esbuild option sets for the main-process, worker, and preload
@@ -42,7 +58,10 @@ export function electronBuildOptions({ production = false, analytics } = {}) {
     {
       ...common,
       entryPoints: ["main/bootstrap.ts"],
-      outfile: "build/main/index.js",
+      entryNames: "index",
+      chunkNames: "chunk-[hash]",
+      outdir: "build/main",
+      splitting: true,
       format: "esm",
       packages: "external",
     },
@@ -99,12 +118,30 @@ export function electronBuildOptions({ production = false, analytics } = {}) {
   ];
 }
 
+export async function buildElectronBundles({ production = false, analytics, mainOutdir = "build/main" } = {}) {
+  cleanMainBuildOutput(mainOutdir);
+  await Promise.all(
+    electronBuildOptions({ production, analytics }).map((options) => {
+      if (mainOutdir !== "build/main") {
+        if (options.outdir === "build/main") {
+          return build({ ...options, outdir: mainOutdir });
+        }
+        if (typeof options.outfile === "string" && options.outfile.startsWith("build/main/")) {
+          return build({
+            ...options,
+            outfile: path.join(mainOutdir, path.relative("build/main", options.outfile)),
+          });
+        }
+      }
+      return build(options);
+    }),
+  );
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const production = process.argv.includes("--production");
   const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   const analytics = resolveAnalyticsBuildConfig({ env: process.env, version });
   if (analytics?.warning) console.warn(`warning: ${analytics.warning}`);
-  await Promise.all(
-    electronBuildOptions({ production, analytics: analytics?.config }).map((options) => build(options)),
-  );
+  await buildElectronBundles({ production, analytics: analytics?.config });
 }

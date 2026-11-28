@@ -1187,3 +1187,6 @@ export function createTelegramProfileManager() {
 
 export const telegramService = createTelegramProfileManager();
 registerTelegramDirectRuntime(telegramService);
+
+import { registerLoadedSubsystem } from "../../loaded-subsystems.js";
+registerLoadedSubsystem("telegramService", telegramService);

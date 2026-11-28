@@ -27,3 +27,6 @@ export const computerUseSettings = new ComputerUseSettingsCoordinator({
     geminiLiveService.revokeComputerUse();
   },
 });
+
+import { registerLoadedSubsystem } from "../../loaded-subsystems.js";
+registerLoadedSubsystem("computerUseSettings", computerUseSettings);

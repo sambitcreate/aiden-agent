@@ -1,18 +1,21 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { URL } from "node:url";
+import { createPackage } from "@electron/asar";
 
 import {
   assertGlibcSymbolBaseline,
   assertLinuxBuildConfiguration,
   assertNoMetalSpeechEngine,
+  assertPackagedMainBundleEntries,
   findSharedWritableEntries,
   isElfMagic,
+  verifyPackagedMainBundle,
 } from "./verify-linux-package.mjs";
 
 const packageJson = JSON.parse(
@@ -185,5 +188,57 @@ test("Linux package verification names every file other users could write", asyn
     assert.deepEqual(await findSharedWritableEntries(root), ["aiden-agent", path.join("locales", "en-US.pak")]);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Linux package verification enforces split main-process chunks and excludes source maps", async () => {
+  assert.throws(
+    () => assertPackagedMainBundleEntries(["/build/main/index.js"]),
+    /missing split main-process chunks/u,
+  );
+  assert.throws(
+    () =>
+      assertPackagedMainBundleEntries([
+        "/build/main/index.js",
+        "/build/main/chunk-ABCD1234.js",
+        "/build/main/index.js.map",
+      ]),
+    /must not include main-process source maps/u,
+  );
+
+  const temporaryRoot = await mkdtemp(path.join(tmpdir(), "aiden-linux-main-bundle-"));
+  const root = await realpath(temporaryRoot);
+  try {
+    const source = path.join(root, "source");
+    await mkdir(path.join(source, "build", "main"), { recursive: true });
+    await Promise.all([
+      writeFile(
+        path.join(source, "build", "main", "index.js"),
+        'import { run } from "./chunk-LINUX123.js";\nrun();\n',
+        "utf8",
+      ),
+      writeFile(
+        path.join(source, "build", "main", "chunk-LINUX123.js"),
+        "export function run() { return true; }\n",
+        "utf8",
+      ),
+    ]);
+    const validAsar = path.join(root, "valid.asar");
+    await createPackage(source, validAsar);
+    await assert.doesNotReject(verifyPackagedMainBundle(validAsar));
+
+    await writeFile(
+      path.join(source, "build", "main", "index.js"),
+      'import { run } from "./chunk-DELETED9.js";\nrun();\n',
+      "utf8",
+    );
+    const brokenAsar = path.join(root, "broken.asar");
+    await createPackage(source, brokenAsar);
+    await assert.rejects(
+      verifyPackagedMainBundle(brokenAsar),
+      /imports missing chunk \/build\/main\/chunk-DELETED9\.js/u,
+    );
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
   }
 });

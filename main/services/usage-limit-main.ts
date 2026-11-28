@@ -63,3 +63,9 @@ function notifyGiveUp(owner: UsageLimitOwner, content: { title: string; body: st
     logger.warn("usage-limits", "The usage limit notification could not be shown.");
   }
 }
+
+import * as loadedSubsystems from "../loaded-subsystems.js";
+usageLimits.gate.onChange(() => {
+  loadedSubsystems.peekLoadedSubsystem?.("keepAwake")?.notifyInputsChanged?.();
+});
+loadedSubsystems.registerLoadedSubsystem?.("usageLimits", usageLimits);

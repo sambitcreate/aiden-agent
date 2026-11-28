@@ -361,3 +361,9 @@ export async function chatContextPressure(
     ...(lastCacheMiss ? { lastCacheMiss } : {}),
   };
 }
+
+import * as loadedSubsystems from "../loaded-subsystems.js";
+loadedSubsystems.registerLoadedSubsystem?.("contextPressure", {
+  forgetChatContextProfile,
+});
+

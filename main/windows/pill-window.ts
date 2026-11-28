@@ -147,3 +147,6 @@ export function isCurrentPillEvent(event: IpcMainInvokeEvent): boolean {
     isMainFrame: frame === event.sender.mainFrame,
   });
 }
+
+import { registerLoadedSubsystem } from "../loaded-subsystems.js";
+registerLoadedSubsystem("pillWindow", { destroyPill });

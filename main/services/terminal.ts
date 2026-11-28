@@ -890,3 +890,6 @@ async function ensureHelperExecutable(helper: string): Promise<void> {
 }
 
 export const terminalService = new TerminalService();
+
+import { registerLoadedSubsystem } from "../loaded-subsystems.js";
+registerLoadedSubsystem("terminalService", terminalService);

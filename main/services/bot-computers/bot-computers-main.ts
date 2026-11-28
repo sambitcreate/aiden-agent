@@ -184,3 +184,6 @@ export async function shutdownBotComputers(timeoutMs: number): Promise<void> {
   clearTimeout(timer);
   await singleton.host.shutdown(Math.max(0, timeoutMs - (Date.now() - began)));
 }
+
+import { registerLoadedSubsystem } from "../../loaded-subsystems.js";
+registerLoadedSubsystem("botComputers", { shutdownBotComputers });

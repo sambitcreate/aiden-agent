@@ -19,3 +19,6 @@ export const providerAuthFlow = new ProviderAuthFlowCoordinator({
 export function shutdownProviderAuthFlow(): Promise<void> {
   return providerAuthFlow.shutdown();
 }
+
+import { registerLoadedSubsystem } from "../loaded-subsystems.js";
+registerLoadedSubsystem("providerAuthFlow", { shutdownProviderAuthFlow });
