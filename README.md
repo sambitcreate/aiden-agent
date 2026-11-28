@@ -33,7 +33,7 @@ Aiden runs on the [Pi](https://github.com/earendil-works/pi) agent runtime and g
 curl -fsSL https://raw.githubusercontent.com/sambitcreate/aiden-agent/main/install.sh | sh
 ```
 
-The installer selects the native package for your machine, checks its published SHA-256 checksum, verifies Apple signing/Gatekeeper on macOS, and verifies build provenance with `gh` on Linux.
+The installer selects the native package for your machine, checks its published SHA-256 checksum, verifies SLSA build provenance with `gh` on macOS and Linux, and verifies Apple signing/Gatekeeper on macOS.
 
 | Surface | Install | Notes |
 | --- | --- | --- |

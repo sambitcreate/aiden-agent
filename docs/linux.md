@@ -14,14 +14,16 @@ and common Debian or RPM distribution families:
 curl -fsSL https://raw.githubusercontent.com/sambitcreate/aiden-agent/main/install.sh | sh
 ```
 
-Linux installation requires a current trusted GitHub CLI so the selected package
-can be checked against Aiden's main-branch release-workflow attestation. The
-installer needs `gh` 2.68 or newer and stops with an explicit message otherwise;
-distribution archives can be much older (Ubuntu 26.04 ships 2.46, which has no
-`gh attestation` command), so install `gh` from the
-[GitHub CLI package repository](https://github.com/cli/cli/blob/trunk/docs/install_linux.md)
-when the distribution's copy is rejected. Pass an
-independently reviewed release commit for the strictest path:
+Both macOS and Linux installations require a current trusted GitHub CLI so
+`SHA256SUMS` and the selected archive can be checked against Aiden's main-branch
+release-workflow attestation before mounting a DMG or installing a package. The
+installer needs `gh` 2.68 or newer and stops with an OS-specific install or
+upgrade hint otherwise; Linux distribution archives can be much older (Ubuntu
+26.04 ships 2.46, which has no `gh attestation` command), so install `gh` from
+the [GitHub CLI package repository](https://github.com/cli/cli/blob/trunk/docs/install_linux.md)
+on Linux (or `brew install gh` / `https://cli.github.com` on macOS) when the
+installed copy is missing or rejected. Pass an independently reviewed release
+commit for the strictest path:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/sambitcreate/aiden-agent/main/install.sh | \
@@ -225,7 +227,8 @@ Downloads are verified against the SHA-512 digest in the architecture-specific
 GitHub release feed (`latest-linux.yml` or `latest-linux-arm64.yml`, which list the
 AppImage, `.deb` and `.rpm`). Unlike macOS releases, this does not provide Apple
 code-signing verification; `install.sh` and the manual `gh attestation verify`
-command remain the way to authenticate the publisher.
+command (see [Release artifact provenance](releasing.md#linux-package-provenance))
+remain the way to authenticate the publisher.
 
 Native subagent file replacement preserves metadata or fails closed. On an
 SELinux host, Aiden preserves a non-default `security.selinux` label when the

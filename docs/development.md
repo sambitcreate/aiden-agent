@@ -46,8 +46,28 @@ Native builds discover the newest compatible full Xcode without changing the mac
 ## Companion clients and headless server
 
 - **iOS and iPadOS (`ios/`)** — Aiden On The Go is distributed through TestFlight only (GitHub Releases do not publish an IPA). Open `ios/AidenOnTheGo.xcodeproj` or follow [`ios/README.md`](../ios/README.md).
-- **Android (`android/`)** — Validation runs separately from the desktop release; relevant merges to `main` upload `aiden-on-the-go-debug-apk` (`app-debug.apk` and its SHA-256 checksum) as a 14-day GitHub Actions workflow artifact. See [`android/README.md`](../android/README.md).
-- **Headless server (`packages/cli/`)** — `aiden serve` is a serve-only daemon for paired phones and Macs with no interactive terminal UI. Build it from a clone following [`packages/cli/README.md`](../packages/cli/README.md).
+- **Android (`android/`)** — Validation runs separately from the desktop release; relevant merges to `main` attest and upload `aiden-on-the-go-debug-apk` (`app-debug.apk` and `app-debug.apk.sha256`) as a 14-day GitHub Actions workflow artifact. Before sideloading an extracted main-branch artifact, check its SHA-256 digest and verify SLSA v1 provenance against the reviewed 40-character `main` commit with `gh` 2.68+:
+
+  ```bash
+  approved_commit=REPLACE_WITH_APPROVED_40_CHARACTER_COMMIT
+  (cd /absolute/path/to/extracted-apk && sha256sum --check app-debug.apk.sha256)
+  for subject in /absolute/path/to/extracted-apk/app-debug.apk.sha256 /absolute/path/to/extracted-apk/app-debug.apk; do
+    gh attestation verify "$subject" \
+      --hostname github.com \
+      --repo sambitcreate/aiden-agent \
+      --cert-identity https://github.com/sambitcreate/aiden-agent/.github/workflows/ci.yml@refs/heads/main \
+      --cert-oidc-issuer https://token.actions.githubusercontent.com \
+      --source-ref refs/heads/main \
+      --source-digest "$approved_commit" \
+      --signer-digest "$approved_commit" \
+      --deny-self-hosted-runners \
+      --predicate-type https://slsa.dev/provenance/v1 \
+      --format json
+  done
+  ```
+
+  See [`android/README.md`](../android/README.md).
+- **Headless server (`packages/cli/`)** — `aiden serve` is a serve-only daemon for paired phones and Macs with no interactive terminal UI. Build it from a clone, or verify the attested `aiden-server-keyed-linux-x64` workflow artifact (`server-bundle.yml@refs/heads/main`), following [`packages/cli/README.md`](../packages/cli/README.md).
 
 ## Verify changes
 

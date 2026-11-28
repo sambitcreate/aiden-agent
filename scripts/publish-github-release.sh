@@ -2,7 +2,41 @@
 
 set -euo pipefail
 
-distribution_dir="${1:-release/distribution}"
+mode="all"
+distribution_dir=""
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --prepare)
+      if [[ "$mode" != "all" ]]; then
+        echo "Specify at most one mode (--prepare or --publish)." >&2
+        exit 1
+      fi
+      mode="prepare"
+      shift
+      ;;
+    --publish)
+      if [[ "$mode" != "all" ]]; then
+        echo "Specify at most one mode (--prepare or --publish)." >&2
+        exit 1
+      fi
+      mode="publish"
+      shift
+      ;;
+    --*)
+      echo "Unknown option: $1" >&2
+      exit 1
+      ;;
+    *)
+      if [[ -n "$distribution_dir" ]]; then
+        echo "Unexpected positional argument: $1" >&2
+        exit 1
+      fi
+      distribution_dir="$1"
+      shift
+      ;;
+  esac
+done
+distribution_dir="${distribution_dir:-release/distribution}"
 retry_attempts="${AIDEN_RELEASE_RETRY_ATTEMPTS:-4}"
 retry_base_seconds="${AIDEN_RELEASE_RETRY_BASE_SECONDS:-2}"
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -121,11 +155,13 @@ for update_arch in x64 arm64; do
   node "$(dirname "$0")/prepare-linux-update-feed.mjs" "$distribution_dir" "$update_arch" "$RELEASE_VERSION" --verify
 done
 
-if [[ ! -f "$installer_source" || ! -x "$installer_source" ]]; then
-  echo "Expected an executable checked-in install.sh before publishing." >&2
-  exit 1
+if [[ "$mode" != "publish" ]]; then
+  if [[ ! -f "$installer_source" || ! -x "$installer_source" ]]; then
+    echo "Expected an executable checked-in install.sh before publishing." >&2
+    exit 1
+  fi
+  install -m 0755 -- "$installer_source" "$distribution_dir/install.sh"
 fi
-install -m 0755 -- "$installer_source" "$distribution_dir/install.sh"
 
 cd "$distribution_dir"
 shopt -s nullglob
@@ -180,16 +216,57 @@ for linux_kind in appimage deb rpm; do
 done
 
 website_dmg="$RUNNER_TEMP/Aiden-Agent-Beta-arm64.dmg"
-cp -- "${dmg_assets[0]}" "$website_dmg"
-shasum -a 256 -- \
-  "${dmg_assets[@]}" \
-  "${zip_assets[@]}" \
-  "${appimage_assets[@]}" \
-  "${deb_assets[@]}" \
-  "${rpm_assets[@]}" \
-  latest-mac.yml latest-linux.yml latest-linux-arm64.yml install.sh > SHA256SUMS
+versioned_dmg_sha256="$(shasum -a 256 -- "${dmg_assets[0]}" | awk '{ print $1 }')"
+if [[ "$mode" != "publish" ]]; then
+  cp -- "${dmg_assets[0]}" "$website_dmg"
+  website_sha256="$(shasum -a 256 -- "$website_dmg" | awk '{ print $1 }')"
+  if [[ "$website_sha256" != "$versioned_dmg_sha256" ]]; then
+    echo "Website DMG alias digest does not match versioned DMG ${dmg_assets[0]}." >&2
+    exit 1
+  fi
+  shasum -a 256 -- \
+    "${dmg_assets[@]}" \
+    "${zip_assets[@]}" \
+    "${appimage_assets[@]}" \
+    "${deb_assets[@]}" \
+    "${rpm_assets[@]}" \
+    latest-mac.yml latest-linux.yml latest-linux-arm64.yml install.sh > SHA256SUMS
+  printf '%s  %s\n' "$website_sha256" "$(basename "$website_dmg")" >> SHA256SUMS
+fi
+
+if [[ "$mode" == "prepare" ]]; then
+  exit 0
+fi
+
+if [[ ! -f install.sh || ! -x install.sh ]]; then
+  echo "Expected prepared executable install.sh before publishing; run --prepare first." >&2
+  exit 1
+fi
+if [[ ! -f SHA256SUMS ]]; then
+  echo "Expected prepared SHA256SUMS before publishing; run --prepare first." >&2
+  exit 1
+fi
+if [[ ! -f "$website_dmg" ]]; then
+  echo "Expected prepared website DMG alias before publishing; run --prepare first." >&2
+  exit 1
+fi
 website_sha256="$(shasum -a 256 -- "$website_dmg" | awk '{ print $1 }')"
-printf '%s  %s\n' "$website_sha256" "$(basename "$website_dmg")" >> SHA256SUMS
+if [[ "$website_sha256" != "$versioned_dmg_sha256" ]]; then
+  echo "Website DMG alias digest does not match versioned DMG ${dmg_assets[0]}." >&2
+  exit 1
+fi
+if [[ "$(wc -l < SHA256SUMS | tr -d '[:space:]')" -ne 13 ]]; then
+  echo "Expected SHA256SUMS to contain exactly 13 asset digests." >&2
+  exit 1
+fi
+shasum -a 256 --check <(grep -v '  Aiden-Agent-Beta-arm64\.dmg$' SHA256SUMS) >/dev/null
+recorded_website_sha256="$(
+  awk '$2 == "Aiden-Agent-Beta-arm64.dmg" { count += 1; digest = $1 } END { if (count == 1) print digest }' SHA256SUMS
+)"
+if [[ "$recorded_website_sha256" != "$website_sha256" ]]; then
+  echo "SHA256SUMS entry for Aiden-Agent-Beta-arm64.dmg does not match the prepared DMG." >&2
+  exit 1
+fi
 
 release_assets=(
   "${dmg_assets[@]}"

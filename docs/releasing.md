@@ -81,43 +81,80 @@ authority. Ordinary model reads and application startup remain offline.
 Local `npm run dist` builds do not embed a feed or perform automatic update checks. The release
 workflow opts in with `AIDEN_ENABLE_AUTO_UPDATES=1`.
 
-## Linux package provenance
+<a id="linux-package-provenance"></a>
+## Release artifact provenance
 
-The Linux release matrix attests its verified AppImage, DEB, RPM and update-feed
-bytes using the pinned official [`actions/attest`](https://github.com/actions/attest)
-action. Attestation runs only for a new declared release from `refs/heads/main`,
-after package and GUI checks, and before staging. The Linux job is skipped for
-manual dispatches from other refs; its dependent publication job cannot publish
-a release through that path. The action generates SLSA build
-provenance using GitHub's OIDC identity and uploads it to the repository's
-attestation API. This adds no separately managed signing key.
+Every release build and publication job attests its verified artifacts using the
+pinned official [`actions/attest`](https://github.com/actions/attest) action
+(`1e69f48acb82d1966a394da916b4c1698aa569d6`). Attestation runs only for a new
+declared release from `refs/heads/main`, after platform build, signing,
+notarization, migration, diagnostics, or GUI smoke gates pass, and before staging
+or release creation. Manual dispatches from other refs are skipped; the dependent
+publication job cannot publish a release through that path. The action generates
+SLSA v1 build provenance using GitHub's OIDC identity and uploads it to the
+repository's attestation API with `create-storage-record: false` and
+`push-to-registry: false`, adding no separately managed signing key.
 
-The publisher also includes the reviewed repository-root `install.sh` in the
-release and in `SHA256SUMS`. The script selects exact versioned artifacts; it
-does not install Actions artifacts from the standalone manual Linux-installer
-workflow. That manual workflow is for downloading and testing unpromoted builds
-and has no release-publication permission.
+Across the three `release.yml` jobs, all 14 GitHub Release assets carry SLSA v1
+provenance:
 
-For a release produced by this workflow (v0.50.0 and later), independently select the approved
-40-character source commit from the reviewed release record. Verify each downloaded
-file with a trusted, current GitHub CLI. Use an absolute artifact path and substitute
-the approved commit for the placeholder; do not take the expected commit from the
+- **`release` (`macos-26`)**: attests `Aiden-Agent-Beta-<version>-arm64.dmg`,
+  `Aiden-Agent-<version>-arm64-mac.zip`, and `latest-mac.yml` after packaged
+  diagnostics pass, and stages only those three globs. During publication prep,
+  `scripts/publish-github-release.sh --prepare` copies the versioned DMG to
+  `Aiden-Agent-Beta-arm64.dmg` and asserts identical SHA-256 digests; because
+  GitHub Attestations index subjects by SHA-256 digest, both DMGs authenticate
+  against the `macos-26` builder attestation.
+- **`linux-release` (`ubuntu-24.04` and `ubuntu-24.04-arm`)**: attests
+  `Aiden-Agent-<version>-{x86_64,arm64}-linux.AppImage`,
+  `Aiden-Agent-<version>-{amd64,arm64}-linux.deb`,
+  `Aiden-Agent-<version>-{x86_64,aarch64}-linux.rpm`, `latest-linux.yml`, and
+  `latest-linux-arm64.yml` after package and GUI smoke checks, and stages those
+  exact globs.
+- **`publish` (`ubuntu-24.04`)**: runs `publish-github-release.sh --prepare` to
+  stage the reviewed repository-root `install.sh` and `SHA256SUMS` (covering the
+  other 13 release files), attests `install.sh` and `SHA256SUMS`, and only then
+  invokes `publish-github-release.sh --publish` to create and publish the release.
+
+`install.sh` selects exact versioned GitHub Release artifacts (never Actions
+artifacts from the standalone manual `linux-installers.yml` workflow, which is
+for testing unpromoted builds and has no release-publication permission). On both
+macOS and Linux, `install.sh` requires `gh` 2.68 or newer and verifies SLSA
+provenance for both `SHA256SUMS` and the selected archive before mounting any DMG
+(`diskutil image attach`, followed by `codesign` and `spctl`) or installing a
+Linux package. Non-release workflow deliverables use the same pinned action under
+their own workflow identities: `aiden-server-keyed-linux-x64` (`*.tgz` and
+`SHA256SUMS`) against `server-bundle.yml@refs/heads/main` (see
+[`packages/cli/README.md`](../packages/cli/README.md)) and main-branch
+`aiden-on-the-go-debug-apk` (`app-debug.apk` and `app-debug.apk.sha256`) against
+`ci.yml@refs/heads/main` (see [`docs/development.md`](development.md)), covering
+all 16 distribution deliverables.
+
+For a release produced by this workflow, independently select the approved
+40-character source commit from the reviewed release record. Verify `SHA256SUMS`
+and each downloaded release asset (`*.dmg`, `*.zip`, `latest-mac.yml`,
+`*.AppImage`, `*.deb`, `*.rpm`, `latest-linux*.yml`, or `install.sh`) with a
+trusted, current GitHub CLI (`2.68+`). Use absolute paths and substitute the
+approved commit for the placeholder; do not take the expected commit from the
 unverified bundle or package:
 
 ```sh
 approved_commit=REPLACE_WITH_APPROVED_40_CHARACTER_COMMIT
-artifact=/absolute/path/to/downloaded-package.rpm
-gh attestation verify "$artifact" \
-  --hostname github.com \
-  --repo sambitcreate/aiden-agent \
-  --cert-identity https://github.com/sambitcreate/aiden-agent/.github/workflows/release.yml@refs/heads/main \
-  --cert-oidc-issuer https://token.actions.githubusercontent.com \
-  --source-ref refs/heads/main \
-  --source-digest "$approved_commit" \
-  --signer-digest "$approved_commit" \
-  --deny-self-hosted-runners \
-  --predicate-type https://slsa.dev/provenance/v1 \
-  --format json
+checksums=/absolute/path/to/SHA256SUMS
+artifact=/absolute/path/to/Aiden-Agent-Beta-arm64.dmg
+for subject in "$checksums" "$artifact"; do
+  gh attestation verify "$subject" \
+    --hostname github.com \
+    --repo sambitcreate/aiden-agent \
+    --cert-identity https://github.com/sambitcreate/aiden-agent/.github/workflows/release.yml@refs/heads/main \
+    --cert-oidc-issuer https://token.actions.githubusercontent.com \
+    --source-ref refs/heads/main \
+    --source-digest "$approved_commit" \
+    --signer-digest "$approved_commit" \
+    --deny-self-hosted-runners \
+    --predicate-type https://slsa.dev/provenance/v1 \
+    --format json
+done
 ```
 
 Require successful verification before trusting the downloaded bytes. A checksum
@@ -206,8 +243,10 @@ its history scan, before changing visibility.
 
 4. Keep `RELEASES_ENABLED` unset while configuring the environment. Set the non-secret
    repository variable to `true` only when the first public beta is approved. The workflow uses
-   its scoped `GITHUB_TOKEN`; publication has `contents: write`, while the Linux build job
-   overrides that with read access plus attestation permissions. No separate release-repository token exists.
+   its scoped `GITHUB_TOKEN` with top-level `contents: read`; `release` and `linux-release` grant
+   only `contents: read`, `id-token: write`, and `attestations: write`, while `publish` is the
+   only job granted `contents: write` alongside `id-token: write` and `attestations: write`. No
+   separate release-repository token exists.
 5. Trigger `Release desktop` manually from `main` for the first release or push a reviewed commit to `main`.
 6. Install the published DMG, then publish one higher version and verify the installed app
    downloads it, reports it ready, and installs it through the in-app Update and Restart action.
