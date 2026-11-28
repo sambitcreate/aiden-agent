@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { readdir, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { URL } from "node:url";
 import { parse } from "yaml";
@@ -9,9 +11,14 @@ import { fileURLToPath } from "node:url";
 import { AREA_NAMES } from "./ci-changes.mjs";
 import { PLAN_DECISIONS, REQUIRED_JOB_RULES } from "./ci-required.mjs";
 import { readRegistry } from "./ci-test-registry.mjs";
+import { REQUIRED_HELPERS } from "./verify-linux-package.mjs";
 
 const workflowUrl = new URL("../.github/workflows/ci.yml", import.meta.url);
 const releaseWorkflowUrl = new URL("../.github/workflows/release.yml", import.meta.url);
+const linuxInstallersWorkflowUrl = new URL(
+  "../.github/workflows/linux-installers.yml",
+  import.meta.url,
+);
 const pullfrogWorkflowUrl = new URL(
   "../.github/workflows/pullfrog.yml",
   import.meta.url,
@@ -614,6 +621,369 @@ test("GitHub issue forms and chooser config are valid YAML matching GitHub's req
       }
     }
     assert.ok(inputCount > 0, `${name}: issue form must contain at least one non-markdown input`);
+  }
+});
+
+function findStandaloneShellNegations(source) {
+  const rawLines = source.split("\n");
+  const filtered = [];
+  let heredocEnd = null;
+  for (let i = 0; i < rawLines.length; i += 1) {
+    const line = rawLines[i];
+    if (heredocEnd !== null) {
+      if (line.trim() === heredocEnd) heredocEnd = null;
+      filtered.push("");
+      continue;
+    }
+    const strippedQuotes = line
+      .replace(/<<(-?\s*)['"]([A-Za-z_][A-Za-z0-9_]*)['"]/gu, "<<$1$2")
+      .replace(/'[^']*'/gu, "''")
+      .replace(/"(?:\\.|[^"\\])*"/gu, '""')
+      .replace(/(?:^|\s)#.*$/u, "");
+    const heredocMatch = strippedQuotes.match(/<<-?\s*([A-Za-z_][A-Za-z0-9_]*)/u);
+    if (heredocMatch) heredocEnd = heredocMatch[1];
+    filtered.push(line);
+  }
+
+  let masked = filtered.join("\n");
+  masked = masked.replace(/\\\n/gu, " ");
+  masked = masked.replace(/'[^']*'/gu, (match) => "''" + "\n".repeat(match.split("\n").length - 1));
+  masked = masked.replace(/"(?:\\.|[^"\\])*"/gu, (match) => '""' + "\n".repeat(match.split("\n").length - 1));
+
+  const offenders = [];
+  for (const [index, rawLine] of masked.split("\n").entries()) {
+    let line = rawLine.replace(/\[\[[^\n]*?\]\]/gu, "[[ ]]").replace(/(?:^|\s)#.*$/u, "").trim();
+    while (/^(?:then|do|else|\{)\b\s*;?/u.test(line)) {
+      line = line.replace(/^(?:then|do|else|\{)\b\s*;?/u, "").trim();
+    }
+    if (/^(?:if|elif|while|until)\b/u.test(line)) {
+      const branch = line.match(/;\s*(?:then|do)\b(.*)$/u);
+      if (!branch) continue;
+      line = branch[1].trim();
+    }
+    if (/(?:^|[;&|]+)\s*!(?:\s|\(|$)/u.test(line)) {
+      offenders.push(index + 1);
+    }
+  }
+  return offenders;
+}
+
+async function listFilesWithSuffix(dirUrl, suffix) {
+  const results = [];
+  const entries = await readdir(dirUrl, { withFileTypes: true });
+  for (const entry of entries) {
+    const childUrl = new URL(`${entry.name}${entry.isDirectory() ? "/" : ""}`, dirUrl);
+    if (entry.isDirectory()) {
+      results.push(...(await listFilesWithSuffix(childUrl, suffix)));
+    } else if (entry.name.endsWith(suffix)) {
+      results.push(childUrl);
+    }
+  }
+  return results;
+}
+
+function assertNoStandaloneNegationsInRepoSources({ workflows, shellScripts }) {
+  const violations = [];
+  for (const [workflowName, raw] of workflows) {
+    const doc = parse(raw);
+    for (const [jobName, job] of Object.entries(doc.jobs ?? {})) {
+      for (const [stepIndex, step] of (job.steps ?? []).entries()) {
+        if (typeof step.run !== "string") continue;
+        const lines = findStandaloneShellNegations(step.run);
+        if (lines.length > 0) {
+          violations.push(`${workflowName}:${jobName}:${step.name ?? stepIndex}:L${lines.join(",L")}`);
+        }
+      }
+    }
+  }
+  for (const [scriptName, raw] of shellScripts) {
+    const lines = findStandaloneShellNegations(raw);
+    if (lines.length > 0) {
+      violations.push(`${scriptName}:L${lines.join(",L")}`);
+    }
+  }
+  assert.deepEqual(violations, []);
+}
+
+test("workflows and repository shell scripts contain zero standalone ! commands under set -e", async () => {
+  const workflowsDir = new URL("../.github/workflows/", import.meta.url);
+  const workflowEntries = (await readdir(workflowsDir)).filter((name) => /\.ya?ml$/u.test(name)).sort();
+  const workflows = await Promise.all(
+    workflowEntries.map(async (name) => [name, await readFile(new URL(name, workflowsDir), "utf8")]),
+  );
+
+  const scriptsDir = new URL("../scripts/", import.meta.url);
+  const scriptUrls = await listFilesWithSuffix(scriptsDir, ".sh");
+  const repoRoot = fileURLToPath(new URL("../", import.meta.url));
+  const shellScripts = await Promise.all(
+    scriptUrls.map(async (url) => [path.relative(repoRoot, fileURLToPath(url)), await readFile(url, "utf8")]),
+  );
+
+  assertNoStandaloneNegationsInRepoSources({ workflows, shellScripts });
+
+  for (const mutatedLine of [
+    '! ldd "/opt/Aiden Agent/aiden-agent" | grep -q "not found"',
+    '! getent passwd "$user" >/dev/null',
+    "! semodule -l | grep -q aiden_ipc_probe",
+    "! grep -q 'invalid context' \"$evidence/runcon.txt\"",
+    "echo ready && ! false",
+  ]) {
+    assert.throws(() =>
+      assertNoStandaloneNegationsInRepoSources({
+        workflows,
+        shellScripts: [["mutated.sh", `set -euo pipefail\n${mutatedLine}\n`]],
+      }),
+    );
+    assert.throws(() =>
+      assertNoStandaloneNegationsInRepoSources({
+        workflows: [["mutated.yml", `jobs:\n  linux:\n    steps:\n      - name: Check\n        run: |\n          set -euo pipefail\n          ${mutatedLine}\n`]],
+        shellScripts: [],
+      }),
+    );
+  }
+});
+
+test("all four Linux packaging jobs verify aiden-agent and all 8 native ELF helpers fail-closed", async () => {
+  const [ciRaw, releaseRaw, installersRaw] = await Promise.all([
+    readFile(workflowUrl, "utf8"),
+    readFile(releaseWorkflowUrl, "utf8"),
+    readFile(linuxInstallersWorkflowUrl, "utf8"),
+  ]);
+  const ciJobs = parse(ciRaw).jobs;
+  const releaseJobs = parse(releaseRaw).jobs;
+  const installerJobs = parse(installersRaw).jobs;
+
+  const targets = [
+    ["ci.yml:linux", ciJobs.linux.steps.find((s) => s.name === "Build, install, and verify Linux distributions")?.run],
+    ["ci.yml:linux-rpm", ciJobs["linux-rpm"].steps.find((s) => s.name === "Install and verify baseline-verified RPM package")?.run],
+    ["release.yml:linux-release", releaseJobs["linux-release"].steps.find((s) => s.name === "Build and verify Linux distributions")?.run],
+    ["linux-installers.yml:build", installerJobs.build.steps.find((s) => s.name === "Build and verify Linux installers")?.run],
+  ];
+
+  const expectedBinaries = [
+    "/opt/Aiden Agent/aiden-agent",
+    ...REQUIRED_HELPERS.map((helper) => `/opt/Aiden Agent/Helpers/${helper}`),
+  ];
+  assert.equal(expectedBinaries.length, 9);
+
+  for (const [label, runScript] of targets) {
+    assert.equal(typeof runScript, "string", `${label}: missing packaging verification step`);
+    assert.doesNotMatch(runScript, /aiden-package-install/u, `${label}: must exclude root shell script from ELF ldd checks`);
+    const loopMatch = runScript.match(/for binary in[\s\S]*?\bdone\b/u);
+    assert.ok(loopMatch, `${label}: missing fail-closed ldd loop`);
+    const loopSource = loopMatch[0];
+    for (const binaryPath of expectedBinaries) {
+      assert.ok(loopSource.includes(`"${binaryPath}"`), `${label}: missing ldd target ${binaryPath}`);
+    }
+
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "linux-ldd-guard-"));
+    try {
+      const binDir = path.join(tempRoot, "bin");
+      const installRoot = path.join(tempRoot, "opt/Aiden Agent");
+      await mkdir(binDir, { recursive: true });
+      await mkdir(path.join(installRoot, "Helpers"), { recursive: true });
+      const logFile = path.join(tempRoot, "ldd-calls.log");
+      await writeFile(
+        path.join(binDir, "ldd"),
+        [
+          "#!/usr/bin/env bash",
+          'printf "%s\\n" "$1" >> "$MOCK_LDD_LOG"',
+          'if [[ -n "${MOCK_LDD_FAIL_TARGET:-}" && "$1" == *"$MOCK_LDD_FAIL_TARGET" ]]; then',
+          '  echo "ldd: error: cannot read header" >&2',
+          '  exit "${MOCK_LDD_EXIT:-1}"',
+          "fi",
+          'if [[ -n "${MOCK_LDD_MISSING_TARGET:-}" && "$1" == *"$MOCK_LDD_MISSING_TARGET" ]]; then',
+          '  echo "\tlibmissing.so.1 => not found"',
+          "  exit 0",
+          "fi",
+          'echo "\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f)"',
+        ].join("\n") + "\n",
+        { mode: 0o755 },
+      );
+
+      const harnessPath = path.join(tempRoot, "check-ldd.sh");
+      await writeFile(
+        harnessPath,
+        `#!/usr/bin/env bash\nset -euo pipefail\n${loopSource.replaceAll("/opt/Aiden Agent", installRoot)}\n`,
+        { mode: 0o755 },
+      );
+
+      const runHarness = (extraEnv = {}) =>
+        spawnSync("bash", [harnessPath], {
+          encoding: "utf8",
+          env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, MOCK_LDD_LOG: logFile, ...extraEnv },
+        });
+
+      const okRun = runHarness();
+      assert.equal(okRun.status, 0, `${label}: ${okRun.stderr}`);
+      const loggedTargets = (await readFile(logFile, "utf8")).trim().split("\n");
+      assert.deepEqual(
+        loggedTargets,
+        expectedBinaries.map((target) => target.replace("/opt/Aiden Agent", installRoot)),
+        `${label}: must check main binary and all 8 ELF helpers`,
+      );
+
+      for (const missingTarget of ["aiden-agent", "Helpers/aiden-subagent-shell-runner"]) {
+        const missingRun = runHarness({ MOCK_LDD_MISSING_TARGET: missingTarget });
+        assert.equal(missingRun.status, 1, `${label} missing library on ${missingTarget}`);
+        assert.match(missingRun.stderr, /libmissing\.so\.1 => not found/u);
+      }
+
+      for (const exitCode of ["1", "2"]) {
+        const errorRun = runHarness({
+          MOCK_LDD_FAIL_TARGET: "Helpers/aiden-secret-service-authority",
+          MOCK_LDD_EXIT: exitCode,
+        });
+        assert.equal(errorRun.status, 1, `${label} ldd exit ${exitCode}`);
+      }
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+test("iOS failure summary steps fail closed without || true while skipping absent bundles", async () => {
+  const { jobs } = parse(await readFile(workflowUrl, "utf8"));
+  for (const jobName of ["ios", "ios-27"]) {
+    const step = jobs[jobName].steps.find((entry) => entry.name === "Print failed iOS simulator test messages");
+    assert.ok(step, `${jobName}: missing simulator failure message step`);
+    assert.equal(step.shell, "bash");
+    assert.match(step.run, /^\s*set -euo pipefail$/mu, `${jobName}: must set -euo pipefail`);
+    assert.match(step.run, /\[\[ -d "\$path" \]\] \|\| continue/u, `${jobName}: must skip missing xcresult bundles`);
+    assert.doesNotMatch(step.run, /\|\|\s*true\b/u, `${jobName}: must not mask xcrun/python failures with || true`);
+
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), `ios-xcresult-${jobName}-`));
+    try {
+      const binDir = path.join(tempRoot, "bin");
+      const bundlesDir = path.join(tempRoot, "bundles");
+      await mkdir(binDir, { recursive: true });
+      await mkdir(bundlesDir, { recursive: true });
+      await writeFile(
+        path.join(binDir, "xcrun"),
+        [
+          "#!/usr/bin/env bash",
+          'if [[ "${MOCK_XCRUN_EXIT:-0}" != "0" ]]; then exit "$MOCK_XCRUN_EXIT"; fi',
+          'printf "%s\\n" "${MOCK_XCRUN_STDOUT:-}"',
+        ].join("\n") + "\n",
+        { mode: 0o755 },
+      );
+
+      const scriptPath = path.join(tempRoot, "print-ios-failures.sh");
+      await writeFile(scriptPath, step.run.replaceAll("${{ runner.temp }}", bundlesDir), { mode: 0o755 });
+      const runStep = (extraEnv = {}) =>
+        spawnSync("bash", [scriptPath], {
+          encoding: "utf8",
+          env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, ...extraEnv },
+        });
+
+      assert.equal(runStep({ MOCK_XCRUN_EXIT: "9" }).status, 0, `${jobName}: missing bundles must continue cleanly`);
+
+      await mkdir(path.join(bundlesDir, "AidenOnTheGoSimulator.xcresult"));
+      const valid = runStep({
+        MOCK_XCRUN_STDOUT: JSON.stringify({
+          testFailures: [{ testName: "AidenTests.testExample", failureText: "Expected 1\nGot 2" }],
+        }),
+      });
+      assert.equal(valid.status, 0, valid.stderr);
+      assert.match(valid.stdout, /^::error title=AidenTests\.testExample::Expected 1 Got 2$/mu);
+
+      assert.notEqual(runStep({ MOCK_XCRUN_EXIT: "1" }).status, 0, `${jobName}: xcrun error must fail step`);
+      assert.notEqual(runStep({ MOCK_XCRUN_STDOUT: "not-json" }).status, 0, `${jobName}: invalid JSON must fail step`);
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+function assertFailureReceiptWorkflowPolicy({ ciWorkflow, releaseWorkflow }) {
+  for (const [workflowName, raw] of [
+    ["ci.yml", ciWorkflow],
+    ["release.yml", releaseWorkflow],
+  ]) {
+    const doc = parse(raw);
+    let receiptCommands = 0;
+    for (const [jobName, job] of Object.entries(doc.jobs ?? {})) {
+      for (const step of job.steps ?? []) {
+        if (typeof step.run !== "string") continue;
+        if (!/diagnostics:failure-receipt|write-diagnostic-failure-receipt\.mjs/u.test(step.run)) continue;
+        receiptCommands += 1;
+        const match = step.run
+          .trim()
+          .match(
+            /^(?:npm run diagnostics:failure-receipt --|node scripts\/write-diagnostic-failure-receipt\.mjs)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)$/u,
+          );
+        assert.ok(match, `${workflowName}:${jobName}:${step.name} must pass exactly 4 receipt arguments`);
+        const detailsArg = match[4];
+        assert.ok(
+          detailsArg === "--no-details" || detailsArg.endsWith("safe-test-details.json"),
+          `${workflowName}:${jobName}:${step.name} must pass safe-test-details.json or --no-details`,
+        );
+      }
+    }
+    assert.ok(receiptCommands >= 1, `${workflowName} must build sanitized failure receipts`);
+  }
+
+  const releaseSteps = parse(releaseWorkflow).jobs.release.steps;
+  const e2eStep = releaseSteps.find((step) => step.name === "Run deterministic Electron E2E gate");
+  const diagStep = releaseSteps.find((step) => step.name === "Verify production-profile diagnostics support workflow");
+  assert.ok(e2eStep?.id, "release.yml E2E gate must declare a step id");
+  assert.ok(diagStep?.id, "release.yml production diagnostics E2E gate must declare a step id");
+
+  const expectedOutcomeGate = `(steps.${e2eStep.id}.outcome == 'failure' || steps.${diagStep.id}.outcome == 'failure')`;
+  for (const stepName of ["Build sanitized E2E failure receipt", "Upload sanitized E2E failure receipt"]) {
+    const step = releaseSteps.find((entry) => entry.name === stepName);
+    assert.ok(step?.if, `release.yml ${stepName} must have an if condition`);
+    assert.ok(
+      step.if.includes("failure()") &&
+        step.if.includes("steps.version.outputs.publish == 'true'") &&
+        step.if.includes(expectedOutcomeGate),
+      `release.yml ${stepName} must gate on E2E step failure outcomes`,
+    );
+  }
+}
+
+test("workflow failure receipts require explicit details argument and gate release receipts on E2E outcomes", async () => {
+  const [ciWorkflow, releaseWorkflow] = await Promise.all([
+    readFile(workflowUrl, "utf8"),
+    readFile(releaseWorkflowUrl, "utf8"),
+  ]);
+  assertFailureReceiptWorkflowPolicy({ ciWorkflow, releaseWorkflow });
+
+  for (const [name, mutateCi, mutateRelease] of [
+    [
+      "3-argument ci receipt call",
+      (s) => s.replace("electron-e2e test-failed test-results/safe-test-details.json", "electron-e2e test-failed"),
+      (s) => s,
+    ],
+    [
+      "3-argument release receipt call",
+      (s) => s,
+      (s) => s.replace("electron-e2e test-failed test-results/safe-test-details.json", "electron-e2e test-failed"),
+    ],
+    [
+      "missing release E2E step id",
+      (s) => s,
+      (s) => s.replace("        id: e2e\n", ""),
+    ],
+    [
+      "ungated release receipt upload",
+      (s) => s,
+      (s) =>
+        s.replace(
+          "- name: Upload sanitized E2E failure receipt\n        if: ${{ failure() && steps.version.outputs.publish == 'true' && (steps.e2e.outcome == 'failure' || steps.e2e_diagnostics.outcome == 'failure') }}",
+          "- name: Upload sanitized E2E failure receipt\n        if: ${{ failure() && steps.version.outputs.publish == 'true' }}",
+        ),
+    ],
+  ]) {
+    assert.throws(
+      () =>
+        assertFailureReceiptWorkflowPolicy({
+          ciWorkflow: mutateCi(ciWorkflow),
+          releaseWorkflow: mutateRelease(releaseWorkflow),
+        }),
+      undefined,
+      name,
+    );
   }
 });
 

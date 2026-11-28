@@ -6,14 +6,24 @@ import process from "node:process";
 const ALLOWED_STAGES = new Set(["desktop-tests", "electron-e2e", "ios-compile", "android-tests", "release"]);
 const ALLOWED_CODES = new Set(["test-failed", "build-failed", "timed-out", "cancelled", "unknown"]);
 
-const [output, stage, code = "unknown", detailsFile] = process.argv.slice(2);
-if (!output || !ALLOWED_STAGES.has(stage) || !ALLOWED_CODES.has(code)) {
-  throw new Error("Usage: write-diagnostic-failure-receipt.mjs <output> <allowed-stage> <allowed-code>");
+const args = process.argv.slice(2);
+const [output, stage, code, detailsArg] = args;
+if (
+  args.length !== 4 ||
+  !output ||
+  !ALLOWED_STAGES.has(stage) ||
+  !ALLOWED_CODES.has(code) ||
+  !detailsArg ||
+  (detailsArg.startsWith("-") && detailsArg !== "--no-details")
+) {
+  throw new Error(
+    "Usage: write-diagnostic-failure-receipt.mjs <output> <allowed-stage> <allowed-code> (<details-file>|--no-details)",
+  );
 }
 
 let details = [];
-if (detailsFile) {
-  try { if (fs.statSync(detailsFile).size <= 65536) details = sanitizeTestDetails(JSON.parse(fs.readFileSync(detailsFile, "utf8"))); } catch { /* Setup may fail before reporter starts. */ }
+if (detailsArg !== "--no-details") {
+  try { if (fs.statSync(detailsArg).size <= 65536) details = sanitizeTestDetails(JSON.parse(fs.readFileSync(detailsArg, "utf8"))); } catch { /* Setup may fail before reporter starts. */ }
 }
 const identity = {};
 if (/^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA ?? "")) identity.commit = process.env.GITHUB_SHA;

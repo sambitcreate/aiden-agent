@@ -37,8 +37,8 @@ test("reporter lifecycle and receipt command emit only safe fields and tolerate 
   reporter.onTestEnd({ location: { file: path.join(process.cwd(), "tests/e2e/chat.spec.ts") }, titlePath: () => ["fixture"] }, { status: "failed", retry: 0, duration: 42, error: "private assertion" });
   reporter.onEnd();
   const details = path.join(root, "test-results/safe-test-details.json");
-  for (const kind of ["valid", "missing", "malformed", "oversized"]) {
-    const input = kind === "valid" ? details : path.join(root, kind);
+  for (const kind of ["valid", "--no-details", "missing", "malformed", "oversized"]) {
+    const input = kind === "valid" ? details : kind === "--no-details" ? "--no-details" : path.join(root, kind);
     if (kind === "malformed") await fs.writeFile(input, "not json secret");
     if (kind === "oversized") await fs.writeFile(input, "x".repeat(65537));
     const output = path.join(root, `receipt-${kind}.json`);
@@ -48,5 +48,22 @@ test("reporter lifecycle and receipt command emit only safe fields and tolerate 
     assert.deepEqual(receipt.identity, { commit: "a".repeat(40), runAttempt: 2 });
     assert.equal(receipt.tests.length, kind === "valid" ? 2 : 0);
     assert.ok(!raw.includes("private") && !raw.includes("secret") && !raw.includes(root));
+  }
+
+  for (const badArgs of [
+    [],
+    [path.join(root, "bad-1.json")],
+    [path.join(root, "bad-2.json"), "electron-e2e"],
+    [path.join(root, "bad-3.json"), "electron-e2e", "test-failed"],
+    [path.join(root, "bad-flag.json"), "electron-e2e", "test-failed", "--unknown"],
+    [path.join(root, "bad-extra.json"), "electron-e2e", "test-failed", details, "--no-details"],
+  ]) {
+    const child = spawnSync(process.execPath, [command, ...badArgs], { encoding: "utf8" });
+    assert.notEqual(child.status, 0);
+    assert.match(
+      child.stderr,
+      /Usage: write-diagnostic-failure-receipt\.mjs <output> <allowed-stage> <allowed-code> \(<details-file>\|--no-details\)/u,
+    );
+    if (badArgs[0]) await assert.rejects(fs.stat(badArgs[0]));
   }
 });

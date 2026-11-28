@@ -162,10 +162,35 @@ test("release installs Chromium before JavaScript containment tests", () => {
   assert.ok(install >= 0 && testSuite > install);
 });
 
-test("desktop workflows upload only fixed sanitized receipts with short retention", () => {
-  for (const workflow of [".github/workflows/ci.yml", ".github/workflows/release.yml"]) {
-    const source = fs.readFileSync(path.join(root, workflow), "utf8");
-    const uploadBlocks = source.match(/uses:\s*actions\/upload-artifact@[\s\S]*?(?=\n\s*- name:|\n\s*\w+:\s*$|$)/gu) ?? [];
+function standaloneWorkflowNegations(source) {
+  return source
+    .split("\n")
+    .map((line, index) => ({ line: line.replace(/(?:^|\s)#.*$/u, ""), number: index + 1 }))
+    .filter(({ line }) => !/^\s*(?:if|elif|while|until)\b/u.test(line))
+    .filter(({ line }) =>
+      /(?:^|[;&|]+)\s*!(?:\s|\(|$)/u.test(
+        line
+          .replace(/\[\[[^\n]*?\]\]/gu, "[[ ]]")
+          .replace(/'[^']*'/gu, "''")
+          .replace(/"(?:\\.|[^"\\])*"/gu, '""'),
+      ),
+    )
+    .map(({ number }) => number);
+}
+
+function assertDesktopWorkflowDiagnosticsPolicy({ ciSource, releaseSource }) {
+  for (const [workflow, source] of [
+    [".github/workflows/ci.yml", ciSource],
+    [".github/workflows/release.yml", releaseSource],
+  ]) {
+    assert.deepEqual(
+      standaloneWorkflowNegations(source),
+      [],
+      `${workflow} must not contain standalone negated shell checks`,
+    );
+
+    const uploadBlocks =
+      source.match(/uses:\s*actions\/upload-artifact@[\s\S]*?(?=\n\s*- name:|\n\s*\w+:\s*$|$)/gu) ?? [];
     const diagnosticUploads = uploadBlocks.filter((block) => /e2e-safe-receipt/u.test(block));
     assert.ok(diagnosticUploads.length >= 1, `${workflow} must retain sanitized failure receipts`);
     for (const block of diagnosticUploads) {
@@ -173,5 +198,80 @@ test("desktop workflows upload only fixed sanitized receipts with short retentio
       assert.match(block, /retention-days:\s*7/u);
       assert.doesNotMatch(block, /playwright-report|test-results\/e2e\s*$/mu);
     }
+
+    const receiptLines = source
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => /diagnostics:failure-receipt|write-diagnostic-failure-receipt\.mjs/u.test(line));
+    assert.ok(receiptLines.length >= 1, `${workflow} must invoke diagnostics:failure-receipt`);
+    for (const line of receiptLines) {
+      const match = line.match(
+        /^run:\s*(?:npm run diagnostics:failure-receipt --|node scripts\/write-diagnostic-failure-receipt\.mjs)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)$/u,
+      );
+      assert.ok(match, `${workflow}: receipt command must pass 4 arguments (${line})`);
+      assert.ok(
+        match[4] === "--no-details" || match[4] === "test-results/safe-test-details.json",
+        `${workflow}: receipt command must pass test-results/safe-test-details.json or --no-details`,
+      );
+    }
+  }
+
+  const e2eGateId = releaseSource.match(
+    /- name: Run deterministic Electron E2E gate\n\s+id:\s*([A-Za-z0-9_-]+)/u,
+  )?.[1];
+  const prodDiagId = releaseSource.match(
+    /- name: Verify production-profile diagnostics support workflow\n\s+id:\s*([A-Za-z0-9_-]+)/u,
+  )?.[1];
+  assert.ok(e2eGateId && prodDiagId, "release.yml must assign step IDs to both Electron E2E steps");
+  const expectedGate = `(steps.${e2eGateId}.outcome == 'failure' || steps.${prodDiagId}.outcome == 'failure')`;
+
+  for (const stepName of ["Build sanitized E2E failure receipt", "Upload sanitized E2E failure receipt"]) {
+    const stepBlock = releaseSource.match(
+      new RegExp(`- name: ${stepName}\\n([\\s\\S]*?)(?=\\n\\s*- name:|$)`, "u"),
+    )?.[1];
+    assert.ok(stepBlock, `release.yml missing step: ${stepName}`);
+    assert.ok(
+      stepBlock.includes(expectedGate),
+      `release.yml ${stepName} must be gated on ${expectedGate}`,
+    );
+  }
+}
+
+test("desktop workflows upload only fixed sanitized receipts, pass 4 receipt args, and gate release E2E receipts", () => {
+  const ciSource = fs.readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8");
+  const releaseSource = fs.readFileSync(path.join(root, ".github/workflows/release.yml"), "utf8");
+  assertDesktopWorkflowDiagnosticsPolicy({ ciSource, releaseSource });
+
+  for (const [name, mutateCi, mutateRelease] of [
+    [
+      "3-argument receipt in ci.yml",
+      (s) => s.replace("electron-e2e test-failed test-results/safe-test-details.json", "electron-e2e test-failed"),
+      (s) => s,
+    ],
+    [
+      "3-argument receipt in release.yml",
+      (s) => s,
+      (s) => s.replace("electron-e2e test-failed test-results/safe-test-details.json", "electron-e2e test-failed"),
+    ],
+    [
+      "standalone ! check in release.yml",
+      (s) => s,
+      (s) => `${s}\n          ! ldd "/opt/Aiden Agent/aiden-agent" | grep -q "not found"\n`,
+    ],
+    [
+      "ungated E2E receipt in release.yml",
+      (s) => s,
+      (s) => s.replace(" && (steps.e2e.outcome == 'failure' || steps.e2e_diagnostics.outcome == 'failure')", ""),
+    ],
+  ]) {
+    assert.throws(
+      () =>
+        assertDesktopWorkflowDiagnosticsPolicy({
+          ciSource: mutateCi(ciSource),
+          releaseSource: mutateRelease(releaseSource),
+        }),
+      undefined,
+      name,
+    );
   }
 });

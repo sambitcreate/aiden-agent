@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import process from "node:process";
 import test from "node:test";
+import { fileURLToPath, URL } from "node:url";
 import { verifyEvidence } from "./verify.mjs";
 
 function fixture() {
@@ -103,4 +109,95 @@ test("delegation requires exact receiver, private file, source context and effec
   }
   const files = fixture(); files["after-fd-allow.txt"] = "allow domain domain:fd use;";
   assert.throws(() => verifyEvidence(reader(files)), /fd use allow survived/u);
+});
+
+function standaloneNegations(source) {
+  return source
+    .split("\n")
+    .map((line, index) => ({ line: line.replace(/(?:^|\s)#.*$/u, ""), number: index + 1 }))
+    .filter(({ line }) => !/^\s*(?:if|elif|while|until)\b/u.test(line))
+    .filter(({ line }) => /(?:^|[;&|]+)\s*!(?:\s|\(|$)/u.test(line.replace(/\[\[[^\n]*?\]\]/gu, "[[ ]]").replace(/'[^']*'/gu, "''").replace(/"(?:\\.|[^"\\])*"/gu, '""')))
+    .map(({ number }) => number);
+}
+
+test("run.sh rejects existing users, loaded modules, invalid runcon contexts, and standalone ! checks", () => {
+  const runner = fileURLToPath(new URL("./run.sh", import.meta.url));
+  const cleanup = fileURLToPath(new URL("./cleanup.sh", import.meta.url));
+  const source = fs.readFileSync(runner, "utf8");
+  assert.deepEqual(standaloneNegations(source), []);
+  assert.deepEqual(standaloneNegations(fs.readFileSync(cleanup, "utf8")), []);
+  assert.equal(standaloneNegations("! grep -q 'invalid context' \"$evidence/runcon.txt\"\n").length, 1);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "boundary-probe-guard-"));
+  try {
+    const bin = path.join(dir, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(dir, "os-release"), "ID=fedora\n");
+    for (const [name, body] of [
+      ["getenforce", "#!/usr/bin/env bash\necho Enforcing\n"],
+      ["getent", '#!/usr/bin/env bash\nif [[ "${MOCK_USER_EXISTS:-0}" == "1" ]]; then echo "aiden-boundary-probe:x:981:981::/:/sbin/nologin"; exit 0; fi\nexit 2\n'],
+      ["semodule", '#!/usr/bin/env bash\nif [[ "${MOCK_SEMODULE_EXIT:-0}" != "0" ]]; then exit "$MOCK_SEMODULE_EXIT"; fi\nprintf "%b" "${MOCK_SEMODULE_OUTPUT:-}"\n'],
+      ["runuser", '#!/usr/bin/env bash\nif [[ "$*" == *"runcon"* ]]; then printf "%s\\n" "${MOCK_RUNCON_OUTPUT:-}"; exit "${MOCK_RUNCON_STATUS:-126}"; fi\nexit "${MOCK_DIRECT_STATUS:-126}"\n'],
+    ]) {
+      fs.writeFileSync(path.join(bin, name), body, { mode: 0o755 });
+    }
+    const cutoff = source.indexOf('\nmkdir -m 700 -- "$evidence"\n');
+    assert.notEqual(cutoff, -1);
+    const guardScript = source
+      .slice(0, cutoff)
+      .replace("export PATH=/usr/sbin:/usr/bin:/sbin:/bin", 'export PATH="$TEST_BIN:$PATH"')
+      .replace('"$EUID" -eq 0', '"${TEST_EUID:-0}" -eq 0')
+      .replace("/etc/os-release", '"$TEST_ROOT/os-release"')
+      .replaceAll("/usr/libexec/", "$TEST_ROOT/libexec/")
+      .replaceAll("/etc/systemd/system/", "$TEST_ROOT/systemd/")
+      .replaceAll("/run/", "$TEST_ROOT/run/");
+    const harness = path.join(dir, "guard.sh");
+    fs.writeFileSync(harness, `${guardScript}\n`, { mode: 0o755 });
+    const runGuard = (env) => spawnSync("bash", [harness, path.join(dir, "evidence")], {
+      encoding: "utf8",
+      env: { ...process.env, TEST_BIN: bin, TEST_ROOT: dir, ...env },
+    });
+
+    assert.equal(runGuard({ MOCK_SEMODULE_OUTPUT: "unconfined\naiden_boundary_probe_other\n" }).status, 0);
+
+    const existingUser = runGuard({ MOCK_USER_EXISTS: "1", MOCK_SEMODULE_OUTPUT: "unconfined\n" });
+    assert.equal(existingUser.status, 1);
+    assert.match(existingUser.stderr, /fixture user aiden-boundary-probe already exists/u);
+
+    for (const mod of ["aiden_boundary_probe", "aiden_boundary_probe\t1.0.0", "aiden_boundary_probe_deny"]) {
+      const loaded = runGuard({ MOCK_SEMODULE_OUTPUT: `unconfined\n${mod}\n` });
+      assert.equal(loaded.status, 1);
+      assert.match(loaded.stderr, /aiden_boundary_probe policy module already loaded/u);
+    }
+
+    assert.equal(runGuard({ MOCK_SEMODULE_EXIT: "2" }).status, 2);
+
+    const entryStart = source.indexOf("\nset +e\nrunuser -u \"$user\" -- timeout --kill-after=1 2 \"$installation/holder\" holder");
+    const entryEnd = source.indexOf("\nsystemctl stop \"$unit\"\n", entryStart);
+    assert.notEqual(entryStart, -1);
+    assert.notEqual(entryEnd, -1);
+    const evidenceDir = path.join(dir, "entry-evidence");
+    fs.mkdirSync(evidenceDir);
+    const runconHarness = path.join(dir, "runcon-guard.sh");
+    fs.writeFileSync(
+      runconHarness,
+      `#!/usr/bin/env bash\nset -euo pipefail\nexport PATH="${bin}:$PATH"\nuser=aiden-boundary-probe\ninstallation=/nonexistent\nevidence="${evidenceDir}"\n${source.slice(entryStart + 1, entryEnd)}\n`,
+      { mode: 0o755 },
+    );
+
+    const denied = spawnSync("bash", [runconHarness], {
+      encoding: "utf8",
+      env: { ...process.env, MOCK_RUNCON_OUTPUT: "runcon: holder: Permission denied", MOCK_RUNCON_STATUS: "126" },
+    });
+    assert.equal(denied.status, 0, denied.stderr);
+
+    const invalidContext = spawnSync("bash", [runconHarness], {
+      encoding: "utf8",
+      env: { ...process.env, MOCK_RUNCON_OUTPUT: "runcon: invalid context: system_u:system_r:aiden_boundary_probe_t:s0", MOCK_RUNCON_STATUS: "125" },
+    });
+    assert.equal(invalidContext.status, 1);
+    assert.match(invalidContext.stderr, /invalid context/u);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

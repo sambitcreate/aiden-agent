@@ -14,7 +14,7 @@ function fixture(change = () => {}) {
   const files = {
     'app.json': { electron: '43.1.1', errors: [], mainPid: 1, mainContext: context('main'), renderer: 'Renderer computed 42', network: 'synthetic-network-ok', worker: { value: 42, pid: 6, context: context('child') }, shell: { status: 0, stdout: context('child') }, command: { status: 0 } },
     'processes.json': { mainPid: 1, rows: ['', '--type=renderer', '--type=zygote', '--type=gpu-process', '--utility-sub-type=network.mojom.NetworkService', '--utility-sub-type=node.mojom.NodeService'].map((cmdline, index) => ({ pid: index + 1, context: context(index ? 'child' : 'main'), uid: '1000 1000 1000 1000', cmdline, exe: '/usr/libexec/aiden-electron-role-probe/electron', seccomp: 2, noNewPrivs: 1 })) },
-    'enforcement-before.txt': 'Enforcing\n', 'negative-status.json': { direct: 126, forged: 126 }, 'direct.txt': 'Permission denied', 'forged.txt': 'Permission denied', 'main-execute-no-trans.txt': '', 'outsider-transition.txt': '',
+    'enforcement-before.txt': 'Enforcing\n', 'modules-before.txt': 'unconfined\n', 'negative-status.json': { direct: 126, forged: 126 }, 'direct.txt': 'Permission denied', 'forged.txt': 'Permission denied', 'main-execute-no-trans.txt': '', 'outsider-transition.txt': '',
   };
   const senderContext = context('sender');
   const protectedContext = 'system_u:object_r:aiden_electron_role_probe_protected_t:s0';
@@ -46,7 +46,69 @@ test('journal evidence uses an absolute epoch independent of host timezone', () 
   assert.match(source, /run_started="@\$\(date \+%s\)"/u);
   assert.doesNotMatch(source, /date -u \+['"]%Y-%m-%d/u);
 });
+function standaloneNegations(source) {
+  return source
+    .split('\n')
+    .map((line, index) => ({ line: line.replace(/(?:^|\s)#.*$/u, ''), number: index + 1 }))
+    .filter(({ line }) => !/^\s*(?:if|elif|while|until)\b/u.test(line))
+    .filter(({ line }) => /(?:^|[;&|]+)\s*!(?:\s|\(|$)/u.test(line.replace(/\[\[[^\n]*?\]\]/gu, '[[ ]]').replace(/'[^']*'/gu, "''").replace(/"(?:\\.|[^"\\])*"/gu, '""')))
+    .map(({ number }) => number);
+}
+test('run.sh fails closed on preexisting role modules and avoids standalone ! checks', () => {
+  const source = fs.readFileSync(runner, 'utf8');
+  assert.deepEqual(standaloneNegations(source), []);
+  assert.deepEqual(standaloneNegations(fs.readFileSync(fileURLToPath(new URL('./cleanup.sh', import.meta.url)), 'utf8')), []);
+  assert.equal(standaloneNegations('! semodule -l | grep -q aiden_electron_role_probe\n').length, 1);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'electron-role-guard-'));
+  try {
+    const bin = path.join(dir, 'bin');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(dir, 'os-release'), 'ID=fedora\n');
+    fs.writeFileSync(path.join(dir, 'wayland-0'), '');
+    for (const [name, body] of [
+      ['getenforce', '#!/usr/bin/env bash\necho Enforcing\n'],
+      ['id', '#!/usr/bin/env bash\necho 1000\n'],
+      ['semodule', '#!/usr/bin/env bash\nif [[ "${MOCK_SEMODULE_EXIT:-0}" != "0" ]]; then exit "$MOCK_SEMODULE_EXIT"; fi\nprintf "%b" "${MOCK_SEMODULE_OUTPUT:-}"\n'],
+    ]) {
+      const target = path.join(bin, name);
+      fs.writeFileSync(target, body, { mode: 0o755 });
+    }
+    const cutoff = source.indexOf('\npayload=/var/tmp/aiden-electron43/dist\n');
+    assert.notEqual(cutoff, -1);
+    const guardScript = source
+      .slice(0, cutoff)
+      .replace('export PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C', 'export PATH="$TEST_BIN:$PATH" LC_ALL=C')
+      .replace('$EUID -eq 0', '${TEST_EUID:-0} -eq 0')
+      .replace('/etc/os-release', '"$TEST_ROOT/os-release"')
+      .replace('-S /run/user/1000/wayland-0', '-e "$TEST_ROOT/wayland-0"')
+      .replaceAll('/usr/libexec/', '$TEST_ROOT/libexec/')
+      .replaceAll('/var/tmp/', '$TEST_ROOT/var-tmp/')
+      .replaceAll('/etc/systemd/system/', '$TEST_ROOT/systemd/')
+      .replaceAll('/run/', '$TEST_ROOT/run/');
+    const harness = path.join(dir, 'guard.sh');
+    fs.writeFileSync(harness, `${guardScript}\n`, { mode: 0o755 });
+    const runGuard = (env) => spawnSync('bash', [harness, path.join(dir, 'evidence')], {
+      encoding: 'utf8',
+      env: { ...process.env, TEST_BIN: bin, TEST_ROOT: dir, ...env },
+    });
+
+    assert.equal(runGuard({ MOCK_SEMODULE_OUTPUT: 'unconfined\naiden_electron_role_probe_other\n' }).status, 0);
+    for (const mod of ['aiden_electron_role_probe', 'aiden_electron_role_probe\t1.0.0', 'aiden_electron_role_probe_deny']) {
+      const res = runGuard({ MOCK_SEMODULE_OUTPUT: `unconfined\n${mod}\n` });
+      assert.equal(res.status, 1);
+      assert.match(res.stderr, /aiden_electron_role_probe policy module already loaded/u);
+    }
+    assert.equal(runGuard({ MOCK_SEMODULE_EXIT: '2' }).status, 2);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 for (const [name, mutate] of [
+  ['missing modules-before receipt', f => delete f['modules-before.txt']],
+  ['preexisting base role module', f => f['modules-before.txt'] = 'unconfined\naiden_electron_role_probe\n'],
+  ['preexisting versioned base role module', f => f['modules-before.txt'] = 'unconfined\naiden_electron_role_probe\t1.0.0\n'],
+  ['preexisting deny role module', f => f['modules-before.txt'] = 'unconfined\naiden_electron_role_probe_deny\n'],
   ['main protected token missing', f => f['app.json'].ipc[1].tokenRead = false],
   ['child protected descriptor received', f => f['app.json'].worker.ipc[1].receivedFd = true],
   ['child protected CTRUNC absent', f => f['app.json'].worker.ipc[1].truncated = false],
