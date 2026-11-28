@@ -46,7 +46,7 @@ Native builds discover the newest compatible full Xcode without changing the mac
 ## Companion clients and headless server
 
 - **iOS and iPadOS (`ios/`)** — Aiden On The Go is distributed through TestFlight only (GitHub Releases do not publish an IPA). Open `ios/AidenOnTheGo.xcodeproj` or follow [`ios/README.md`](../ios/README.md).
-- **Android (`android/`)** — Validation runs separately from the desktop release; relevant merges to `main` upload `aiden-on-the-go-debug-apk` (`app-debug.apk` and its SHA-256 checksum) as a 14-day GitHub Actions workflow artifact. See [`android/README.md`](../android/README.md).
+- **Android (`android/`)** — Validation runs separately from the desktop release; relevant merges to `main` upload `aiden-on-the-go-debug-apk-<sha>-<run_id>-<run_attempt>` (`app-debug.apk` and its SHA-256 checksum) as a 14-day GitHub Actions workflow artifact. See [`android/README.md`](../android/README.md).
 - **Headless server (`packages/cli/`)** — `aiden serve` is a serve-only daemon for paired phones and Macs with no interactive terminal UI. Build it from a clone following [`packages/cli/README.md`](../packages/cli/README.md).
 
 ## Verify changes

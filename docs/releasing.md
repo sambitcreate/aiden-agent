@@ -70,11 +70,19 @@ authority. Ordinary model reads and application startup remain offline.
   consumers first, then change Aiden's release configuration.
 - Aiden checks shortly after launch and every six hours. It owns and observes one full-package
   download of a newer signed update rather than using differential updates because the release
-  set does not publish separate blockmaps. Settings → About and the chat sidebar expose bounded progress, failure,
+  set does not publish separate blockmaps; macOS workflow staging likewise uploads only the
+  published `*.dmg`, `*.zip`, and `latest-mac.yml` files (excluding `*.zip.blockmap` and the
+  unpacked `.app` bundle), and archives crash-symbolication source maps
+  (`symbols-macos-<run_id>-<run_attempt>`) only after both signed packaged acceptance checks pass.
+  Settings → About and the chat sidebar expose bounded progress, failure,
   retry, and ready states. A two-minute no-progress stall is cancelled and retried with bounded
   backoff. Installation starts only after the package and macOS updater handoff are ready, and
   never interrupts an open workspace or bypasses the existing quit barriers.
-- A failed or rerun job refuses to overwrite an existing tag. If no tag or draft was created, rerun
+- A failed or rerun job refuses to overwrite an existing tag. Staged workflow artifacts
+  (`release-macos-<run_id>-<run_attempt>` and `release-linux-<arch>-<run_id>-<run_attempt>`) and
+  symbol maps are scoped to the workflow run and attempt, and `publish` binds the macOS producer's
+  `artifact-name` output and stages each Linux architecture's newest attempt so partial and full
+  reruns never collide on immutable v4 artifact names. If no tag or draft was created, rerun
   the same declared version. If a partial draft exists, inspect and remove only that exact failed
   draft before retrying. Never manufacture a version from a workflow run number.
 

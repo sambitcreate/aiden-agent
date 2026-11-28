@@ -692,7 +692,7 @@ jobs:
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: aiden-on-the-go-debug-apk
+          name: aiden-on-the-go-debug-apk-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             android/app/build/outputs/apk/debug/app-debug.apk
             android/app/build/outputs/apk/debug/app-debug.apk.sha256
