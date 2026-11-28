@@ -3,7 +3,8 @@
  * rules: a card goes only to a live desktop window, waits at most 2 minutes,
  * at most 16 wait at once, and only the window that shows a card may answer
  * it. One card per app key: a second request while one waits joins it.
- * 2c adds attach cards, under their own key (`attachConsentKey`).
+ * 2c adds attach cards, under their own key (`attachConsentKey`), and 3d
+ * the design app scaffold card (`scaffoldConsentKey`).
  */
 import { randomUUID } from "node:crypto";
 import {
@@ -23,6 +24,18 @@ export type DesignAppConsentResult = "allow" | "decline" | "unanswered" | "unava
 export type LaunchConsentCard = Omit<Extract<DesignAppConsentRequest, { kind: "launch" }>, "requestId">;
 /** 2c (D10): an `apps[].url` root asks before Aiden connects to the person's server. */
 export type AttachConsentCard = Omit<Extract<DesignAppConsentRequest, { kind: "attach" }>, "requestId">;
+
+/** 3d (S102): the design app scaffold card, which is also the new app's launch consent. */
+export type ScaffoldConsentCard = Omit<Extract<DesignAppConsentRequest, { kind: "scaffold" }>, "requestId">;
+
+/**
+ * The scaffold card's key: one per workspace. An app root is never empty, so
+ * no launch key (`${workspaceId}\0${appRoot}`) or attach key matches it, and
+ * `closeAll(`${workspaceId}\0`)` closes it and forgets its decline.
+ */
+export function scaffoldConsentKey(workspaceId: string): string {
+  return `${workspaceId}\0\0scaffold`;
+}
 
 /** An attach card's key: apart from the root's launch key, so the two never join or share a decline. */
 export function attachConsentKey(workspaceId: string, appRoot: string): string {
@@ -54,7 +67,7 @@ export class DesignAppConsent {
   request(input: {
     key: string;
     by: "person" | "aiden";
-    request: LaunchConsentCard | AttachConsentCard;
+    request: LaunchConsentCard | AttachConsentCard | ScaffoldConsentCard;
     owner?: DesignAppConsentOwner;
     signal?: AbortSignal;
   }): Promise<DesignAppConsentResult> {

@@ -8,7 +8,7 @@
 // the install is the caller's, after the person's Allow.
 
 import { createHash } from "node:crypto";
-import { lstat, readdir, realpath, rmdir, unlink } from "node:fs/promises";
+import { lstat, readdir, realpath, rmdir, symlink, unlink } from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "../../../shared/path-containment.js";
 import { inspectCanvasConfig, readCanvasConfigText, saveCanvasConfigApp, type CanvasConfigInspection } from "../canvas-config.js";
@@ -355,4 +355,27 @@ export async function writeMockApp(
     canvasConfig = "not-saved";
   }
   return { ok: true, written: written.map((file) => file.rel), canvasConfig };
+}
+
+// ---- E2E only (unpackaged builds) ----
+
+/**
+ * `AIDEN_E2E_DESIGN_APP_NODE_MODULES`: an absolute folder an E2E run links in
+ * as the new design app's node_modules, so its install never reaches the
+ * network. A packaged build ignores it.
+ */
+export function e2eDesignAppNodeModules(runtime: { isPackaged: boolean; env: NodeJS.ProcessEnv }): string | undefined {
+  if (runtime.isPackaged) return undefined;
+  const value = runtime.env.AIDEN_E2E_DESIGN_APP_NODE_MODULES;
+  return typeof value === "string" && value.length > 0 && path.isAbsolute(value) ? value : undefined;
+}
+
+/** Links `target` as `folder/node_modules`, create-only, inside the workspace's real folder. */
+export async function linkDesignAppNodeModules(workspaceRoot: string, folder: string, target: string): Promise<void> {
+  if (!isMockFolder(folder)) throw new Error("That isn't a design app folder.");
+  const root = await realpath(workspaceRoot);
+  const dir = path.join(root, folder);
+  const info = await lstat(dir);
+  if (!info.isDirectory() || (await realpath(dir)) !== dir) throw new Error("The design app folder moved.");
+  await symlink(target, path.join(dir, "node_modules"), "dir");
 }

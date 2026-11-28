@@ -89,7 +89,7 @@ export const ANALYTICS_EVENTS = {
   design_mode_declined: {},
   design_comments_sent: { count_bucket: enumProp(...COUNT_BUCKETS) },
   design_md_linted: { errors_bucket: enumProp(...COUNT_BUCKETS), warnings_bucket: enumProp(...COUNT_BUCKETS) },
-  design_md_drafted: { source: enumProp("app") },
+  design_md_drafted: { source: enumProp("app", "mock") },
   // A design-mode dev server's attempt settled (2b): which framework and
   // package manager, and whether it ran. Never the app's root, script or port.
   design_app_started: {
@@ -103,6 +103,13 @@ export const ANALYTICS_EVENTS = {
   design_app_frame_added: {
     source: enumProp("person", "aiden"),
     device_bucket: enumProp("phone", "tablet", "laptop", "desktop"),
+  },
+  // A design app's scaffold card was answered (3d, S115): which kind of app,
+  // and whether it was added, declined, or failed after Allow. Never its
+  // folder, files, aliases or the project it mocks.
+  design_app_scaffolded: {
+    kind: enumProp("react-nonweb", "starter"),
+    outcome: enumProp("added", "declined", "failed"),
   },
   browser_element_grabbed: {
     kind: enumProp("react", "dom"),

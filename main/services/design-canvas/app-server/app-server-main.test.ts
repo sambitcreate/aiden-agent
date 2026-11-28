@@ -2543,3 +2543,343 @@ test("3d: with the flag off there is no mock field", async (t) => {
   assert.equal("mock" in snapshot, false);
   assert.deepEqual(reads, []);
 });
+
+// ── 3d: scaffolding a design app (S102, S106, S107, S112, S113) ──
+
+const TEMPLATE_PACKAGE = { name: "design-app", aiden: { designApp: 1 }, scripts: { dev: "vite" }, dependencies: { react: "19.2.7", "react-dom": "19.2.7" }, devDependencies: { vite: "8.3.5" } };
+
+/** The scaffold's disk and canvas effects, faked: a write makes `design-app` a mock app that detection then finds. */
+function withScaffold(
+  h: ReturnType<typeof harness>,
+  options: { write?: "ok" | "verify"; place?: "placed" | "already" | "refused"; drafted?: boolean; folders?: Map<string, "missing" | "mock" | "taken"> } = {},
+) {
+  const folders = options.folders ?? ALL_FREE();
+  const calls = {
+    writes: [] as Array<{ folder: string; files: string[]; mock: unknown }>,
+    homes: [] as Array<{ chatId: string; appRoot: string; by: string; page: unknown }>,
+    reports: [] as Array<{ kind: string; outcome: string }>,
+    drafted: 0,
+    invalidated: [] as string[],
+    templates: 0,
+    afterWrite: [] as string[],
+  };
+  h.deps.mockInputs = async () => ({ folders: new Map(folders), patterns: { include: [], exclude: [] }, config: null });
+  h.deps.scaffold = {
+    template: async () => {
+      calls.templates += 1;
+      return { ok: true, files: new Map([["package.json", Buffer.from(JSON.stringify(TEMPLATE_PACKAGE))], ["vite.config.js", Buffer.from("export default {}\n")], ["aiden.mock.json", Buffer.from("{}")]]) };
+    },
+    config: async (_root, input) => ({
+      version: 1 as const,
+      kind: input.kind,
+      source: input.source ?? null,
+      aliases: (input.source ? { "@app": "src/renderer" } : {}) as Record<string, string>,
+      stubs: (input.shell === "electron" ? { electron: "src/stubs/electron.ts" } : {}) as Record<string, string>,
+      globals: [],
+    }),
+    draft: async () => (options.drafted ? { designMd: "drafted", files: { "DESIGN.md": Buffer.from("---\n"), "src/theme.css": Buffer.from(":root{}") }, styleSources: ["src/index.css"] } : { designMd: "starter", styleSources: [], reason: "no-tokens" }),
+    write: async (_root, folder, files) => {
+      h.order.push(`write:${folder}`);
+      calls.writes.push({ folder, files: [...files.keys()], mock: JSON.parse(files.get("aiden.mock.json")!.toString("utf8")) });
+      if (options.write === "verify") return { ok: false, step: "verify", kept: ["vite.config.js"] };
+      folders.set(folder, "mock");
+      h.state.apps = [...h.state.apps, webApp({ root: folder, name: "design-app", mock: true, installed: false, installRoot: folder })];
+      return { ok: true, written: [...files.keys()], canvasConfig: "saved" };
+    },
+    afterWrite: async (_root, folder) => {
+      calls.afterWrite.push(folder);
+    },
+    invalidateRoots: (root) => calls.invalidated.push(root),
+    placeHome: async (input) => {
+      calls.homes.push({ chatId: input.chatId, appRoot: input.appRoot, by: input.by, page: input.page });
+      return options.place ?? "placed";
+    },
+    report: (event) => calls.reports.push({ ...event }),
+    reportDrafted: () => {
+      calls.drafted += 1;
+    },
+  };
+  return calls;
+}
+
+const scaffoldInput = (h: ReturnType<typeof harness>, overrides: Partial<Parameters<DesignAppServers["scaffold"]>[0]> = {}) => ({
+  workspaceId: "ws",
+  chatId: "chat-1",
+  by: "person" as const,
+  owner: h.owner,
+  permission: "full" as const,
+  page: { pageId: "page-1" },
+  ...overrides,
+});
+
+const electronDesk = () => nonWebApp({ desktopShell: "electron", name: "desk" });
+
+/** The install job finishes: node_modules is there now, as detection will see it. */
+async function finishInstall(h: ReturnType<typeof harness>) {
+  h.state.apps = h.state.apps.map((app) => (app.mock ? { ...app, installed: true } : app));
+  h.jobs.exit(h.jobs.last().view.id, 0);
+  await settle();
+}
+
+test("3d: no install job starts before Allow, and no file is written", async (t) => {
+  const h = harness(t, { apps: [electronDesk()] });
+  const calls = withScaffold(h);
+  const scaffolded = h.servers.scaffold(scaffoldInput(h));
+  await settle();
+  const card = h.openCard();
+  assert.ok(card, "the scaffold card waits");
+  assert.equal(card.kind, "scaffold");
+  assert.deepEqual(
+    { folder: card.folder, mockKind: card.mockKind, shellLabel: card.shellLabel, installCommand: card.installCommand, runCommand: card.runCommand, scripts: card.scripts, files: card.files },
+    { folder: "design-app", mockKind: "react-nonweb", shellLabel: "Electron", installCommand: "npm ci", runCommand: "npm run dev", scripts: [{ name: "dev", text: "vite" }], files: ["aiden.mock.json", "package.json", "vite.config.js"] },
+  );
+  assert.deepEqual(card.packages, [{ name: "react", version: "19.2.7" }, { name: "react-dom", version: "19.2.7" }, { name: "vite", version: "8.3.5" }]);
+  assert.deepEqual(h.jobs.jobs, [], "no job before the answer");
+  assert.deepEqual(calls.writes, []);
+  await h.answer("decline");
+  assert.deepEqual(await scaffolded, { status: "problem", problem: { problem: "consent-declined" } });
+});
+
+test("3d: Not now writes nothing, starts nothing and sends declined; Aiden's next scaffold gets no card; the person's does", async (t) => {
+  const h = harness(t, { apps: [electronDesk()] });
+  const calls = withScaffold(h);
+  const first = h.servers.scaffold(scaffoldInput(h, { by: "aiden" }));
+  await settle();
+  await h.answer("decline");
+  assert.equal((await first).status, "problem");
+  assert.deepEqual(calls.reports, [{ kind: "react-nonweb", outcome: "declined" }]);
+  assert.deepEqual([h.jobs.jobs.length, calls.writes.length], [0, 0]);
+
+  assert.deepEqual(await h.servers.scaffold(scaffoldInput(h, { by: "aiden" })), { status: "problem", problem: { problem: "consent-declined" } });
+  assert.equal(h.cards().length, 1, "no second card for Aiden");
+  assert.equal(calls.reports.length, 1, "an answer without a card sends nothing");
+
+  const person = h.servers.scaffold(scaffoldInput(h));
+  await settle();
+  assert.equal(h.cards().length, 2, "the person's ask always shows the card");
+  await h.answer("decline");
+  await person;
+});
+
+test("3d: an unanswered card, a Remote owner, a refusal and a toolchain problem start nothing and send nothing", async (t) => {
+  const h = harness(t, { apps: [electronDesk()] });
+  const calls = withScaffold(h);
+  assert.deepEqual(await h.servers.scaffold(scaffoldInput(h, { owner: fakeOwner(9, "remote") })), { status: "problem", problem: { problem: "desktop-only" } });
+  assert.deepEqual(await h.servers.scaffold(scaffoldInput(h, { permission: "read-only" })), { status: "problem", problem: { problem: "no-access" } });
+
+  h.state.apps = [electronDesk(), nonWebApp({ root: "packages/x", kind: "none", reason: "workspace-runner" })];
+  assert.deepEqual(await h.servers.scaffold(scaffoldInput(h)), { status: "problem", problem: { problem: "scaffold-refused", why: "workspace-runner" } });
+  h.state.apps = [electronDesk(), webApp({ root: "apps/site" })];
+  assert.deepEqual(await h.servers.scaffold(scaffoldInput(h)), { status: "problem", problem: { problem: "scaffold-refused", why: "has-web-app" } });
+
+  h.state.apps = [electronDesk()];
+  h.state.toolchain = { ok: false, problem: "node-missing" } as AppToolchain;
+  assert.deepEqual(await h.servers.scaffold(scaffoldInput(h)), { status: "problem", problem: { problem: "node-missing" } });
+  assert.equal(calls.templates, 0, "node-missing answers before the template is even read");
+  assert.deepEqual((await h.servers.snapshot("ws")).mock?.problem, { problem: "node-missing" }, "the chip shows it");
+
+  h.state.toolchain = { ok: true, node: NODE, manager: { name: "npm", path: MANAGER } } as AppToolchain;
+  const unanswered = h.servers.scaffold(scaffoldInput(h));
+  await settle();
+  assert.ok(h.openCard());
+  // An unanswered card closes after 2 minutes (the consent's own timer, real time): close it as the timer would.
+  h.consent.closeAll("ws\0");
+  assert.deepEqual(await unanswered, { status: "problem", problem: { problem: "consent-unavailable" } });
+  assert.deepEqual([h.jobs.jobs.length, calls.writes.length, calls.reports.length], [0, 0, 0]);
+  assert.equal((await h.servers.snapshot("ws")).mock?.problem, undefined, "a found toolchain clears the chip's problem");
+});
+
+test("3d: Allow writes, approves the written fingerprint, installs with npm ci and starts without a second card", async (t) => {
+  const h = harness(t, { apps: [electronDesk()] });
+  const calls = withScaffold(h);
+  const phases: string[] = [];
+  const scaffolded = h.servers.scaffold(scaffoldInput(h, { onPhase: (phase) => phases.push(phase) }));
+  await settle();
+  await h.answer("allow");
+  assert.deepEqual(calls.writes.map((write) => write.folder), ["design-app"]);
+  assert.deepEqual(calls.writes[0]!.mock, { version: 1, kind: "react-nonweb", source: ".", aliases: { "@app": "src/renderer" }, stubs: { electron: "src/stubs/electron.ts" }, globals: [] });
+  assert.equal((await h.records.consentOf("ws", "design-app"))?.installShown, true, "the written fingerprint is approved, install included");
+  const install = h.jobs.last();
+  assert.deepEqual([install.input.appRoot, install.input.argv.args], ["design-app", ["ci"]]);
+  await finishInstall(h);
+  assert.deepEqual(h.jobs.last().input.argv.args.slice(0, 2), ["run", "dev"]);
+  await h.makeReady();
+  const result = await scaffolded;
+  assert.equal(h.cards().length, 1, "one card for the whole scaffold");
+  assert.equal(result.status, "scaffolded");
+  assert.ok(result.status === "scaffolded");
+  assert.deepEqual(
+    { root: result.root, kind: result.kind, phase: result.app.phase, mock: result.app.mock, placed: result.placed, designMd: result.designMd, aliases: result.aliases },
+    { root: "design-app", kind: "react-nonweb", phase: "running", mock: true, placed: "placed", designMd: "starter", aliases: { "@app": "src/renderer" } },
+  );
+  assert.deepEqual(phases, ["card", "writing", "app"]);
+  assert.deepEqual(h.order.filter((step) => step.startsWith("write:") || step.startsWith("spawn:")).map((step) => step.split(" ")[0]), ["write:design-app", "spawn:ci", "spawn:run"]);
+  assert.deepEqual(calls.reports, [{ kind: "react-nonweb", outcome: "added" }]);
+  assert.deepEqual(calls.invalidated, ["/w/ws"], "DESIGN.md's roots see the new app");
+  assert.deepEqual(calls.homes, [{ chatId: "chat-1", appRoot: "design-app", by: "person", page: { pageId: "page-1" } }], "/ is placed once, on the page asked from");
+  assert.deepEqual(h.reports, [{ framework: "vite", manager: "npm", outcome: "running" }]);
+  assert.equal(calls.drafted, 0, "a starter DESIGN.md isn't a draft");
+});
+
+test("3d: a file Aiden changes after the scaffold asks again on the next start", async (t) => {
+  const h = harness(t, { apps: [electronDesk()] });
+  withScaffold(h);
+  const scaffolded = h.servers.scaffold(scaffoldInput(h));
+  await settle();
+  await h.answer("allow");
+  await finishInstall(h);
+  await h.makeReady();
+  await scaffolded;
+  await h.servers.stop("ws", "design-app");
+  h.state.fingerprints.set("design-app", "F2");
+  const restarted = h.servers.start(h.input({ appRoot: "design-app" }));
+  await settle();
+  const card = h.openCard();
+  assert.ok(card, "the edited vite.config.js asks again");
+  assert.deepEqual([card.kind, card.reason], ["launch", "changed"]);
+  await h.answer("decline");
+  await restarted;
+});
+
+test("3d: an existing design app isn't scaffolded again", async (t) => {
+  const h = harness(t, { apps: [electronDesk(), webApp({ root: "design-app", mock: true, installRoot: "design-app" })] });
+  const calls = withScaffold(h, { folders: new Map([...ALL_FREE(), ["design-app", "mock"]]) });
+  const result = await h.servers.scaffold(scaffoldInput(h));
+  assert.equal(result.status, "existing");
+  assert.equal(result.status === "existing" && result.root, "design-app");
+  assert.deepEqual([h.cards().length, calls.writes.length, calls.reports.length, calls.homes.length], [0, 0, 0, 0]);
+});
+
+test("3d: the person's scaffold clears the toolchain cache, so a Node installed since is found", async (t) => {
+  const h = harness(t, { apps: [electronDesk()] });
+  withScaffold(h);
+  assert.deepEqual(await h.servers.scaffold(scaffoldInput(h, { signal: AbortSignal.abort() })), { status: "problem", problem: { problem: "interrupted" } });
+  assert.deepEqual([h.attachState.clears, h.cards().length], [0, 0], "an aborted ask does nothing");
+  const aiden = h.servers.scaffold(scaffoldInput(h, { by: "aiden" }));
+  await settle();
+  assert.equal(h.attachState.clears, 0, "Aiden's ask keeps the cache");
+  await h.answer("decline");
+  await aiden;
+  const person = h.servers.scaffold(scaffoldInput(h));
+  await settle();
+  assert.equal(h.attachState.clears, 1);
+  await h.answer("decline");
+  await person;
+});
+
+test("3d: a failed install keeps the files and the pending /, and the Retry that reaches running places it", async (t) => {
+  const h = harness(t, { apps: [electronDesk()] });
+  const calls = withScaffold(h);
+  const scaffolded = h.servers.scaffold(scaffoldInput(h, { by: "aiden" }));
+  await settle();
+  await h.answer("allow");
+  h.jobs.output(h.jobs.last().view.id, "npm ERR! code ENOTFOUND\n");
+  h.jobs.exit(h.jobs.last().view.id, 1);
+  const result = await scaffolded;
+  assert.ok(result.status === "scaffolded");
+  assert.deepEqual([result.app.problem?.problem, result.placed], ["install-failed", "pending"]);
+  assert.deepEqual(calls.reports, [{ kind: "react-nonweb", outcome: "added" }], "the files were added; the install's failure is the app's");
+  assert.equal(calls.homes.length, 0);
+
+  const retried = h.servers.retry({ ...h.input({ appRoot: "design-app" }) });
+  await settle();
+  assert.equal(h.openCard(), undefined, "Retry reinstalls under the same consent");
+  assert.deepEqual(h.jobs.last().input.argv.args, ["ci"]);
+  await finishInstall(h);
+  await h.makeReady();
+  assert.equal((await retried).phase, "running");
+  assert.deepEqual(calls.homes.map((home) => home.appRoot), ["design-app"], "placed on the run that reached running");
+
+  // Running again places nothing more.
+  await h.servers.stop("ws", "design-app");
+  await h.runApp({ appRoot: "design-app" });
+  assert.equal(calls.homes.length, 1);
+});
+
+test("3d: a pending / is dropped after one more failed attempt", async (t) => {
+  const h = harness(t, { apps: [electronDesk()] });
+  const calls = withScaffold(h);
+  const scaffolded = h.servers.scaffold(scaffoldInput(h));
+  await settle();
+  await h.answer("allow");
+  h.jobs.exit(h.jobs.last().view.id, 1);
+  await scaffolded;
+  const again = h.servers.retry({ ...h.input({ appRoot: "design-app" }) });
+  await settle();
+  h.jobs.exit(h.jobs.last().view.id, 1);
+  await again;
+  const third = h.servers.retry({ ...h.input({ appRoot: "design-app" }) });
+  await settle();
+  await finishInstall(h);
+  await h.makeReady();
+  assert.equal((await third).phase, "running");
+  assert.deepEqual(calls.homes, [], "a pending / survives one retry, not two");
+});
+
+test("3d: a failed verification reports failed and starts nothing", async (t) => {
+  const h = harness(t, { apps: [electronDesk()] });
+  const calls = withScaffold(h, { write: "verify" });
+  const scaffolded = h.servers.scaffold(scaffoldInput(h));
+  await settle();
+  await h.answer("allow");
+  assert.deepEqual(await scaffolded, { status: "problem", problem: { problem: "scaffold-failed", step: "verify" } });
+  assert.deepEqual(calls.reports, [{ kind: "react-nonweb", outcome: "failed" }]);
+  assert.deepEqual(h.jobs.jobs, []);
+  assert.equal(await h.records.consentOf("ws", "design-app"), undefined, "nothing approved");
+});
+
+test("3d: a drafted DESIGN.md is reported once as design_md_drafted", async (t) => {
+  const h = harness(t, { apps: [electronDesk()] });
+  const calls = withScaffold(h, { drafted: true });
+  const scaffolded = h.servers.scaffold(scaffoldInput(h));
+  await settle();
+  await h.answer("allow");
+  await finishInstall(h);
+  await h.makeReady();
+  const result = await scaffolded;
+  assert.ok(result.status === "scaffolded");
+  assert.deepEqual([result.designMd, result.styleSources, calls.drafted], ["drafted", ["src/index.css"], 1]);
+});
+
+test("3d: an abort during the card ends the wait, and an Allow after it still writes and installs", async (t) => {
+  const h = harness(t, { apps: [electronDesk()] });
+  const calls = withScaffold(h);
+  const controller = new AbortController();
+  const waiting = h.servers.scaffold(scaffoldInput(h, { by: "aiden", signal: controller.signal }));
+  await settle();
+  controller.abort();
+  assert.deepEqual(await waiting, { status: "problem", problem: { problem: "interrupted" } });
+  assert.ok(h.openCard(), "the card stays for the person");
+  await h.answer("allow");
+  assert.deepEqual(calls.writes.map((write) => write.folder), ["design-app"]);
+  assert.deepEqual(h.jobs.last().input.argv.args, ["ci"]);
+  // A second ask while the first is still going joins it: no second card.
+  const joined = h.servers.scaffold(scaffoldInput(h));
+  await settle();
+  assert.equal(h.cards().length, 1);
+  await finishInstall(h);
+  await h.makeReady();
+  assert.equal((await joined).status, "scaffolded");
+});
+
+test("3d: the scaffold card closes on forgetWorkspace", async (t) => {
+  const h = harness(t, { apps: [electronDesk()] });
+  const calls = withScaffold(h);
+  const waiting = h.servers.scaffold(scaffoldInput(h));
+  await settle();
+  assert.ok(h.openCard());
+  await h.servers.forgetWorkspace("ws");
+  assert.deepEqual(await waiting, { status: "problem", problem: { problem: "consent-unavailable" } });
+  assert.deepEqual([calls.writes.length, h.jobs.jobs.length], [0, 0]);
+});
+
+test("3d: flag off, scaffold is unavailable", async (t) => {
+  const h = harness(t, { apps: [electronDesk()] });
+  const calls = withScaffold(h);
+  h.deps.enabled = () => false;
+  assert.deepEqual(await h.servers.scaffold(scaffoldInput(h)), { status: "problem", problem: { problem: "unavailable" } });
+  delete h.deps.scaffold;
+  h.deps.enabled = () => true;
+  assert.deepEqual(await h.servers.scaffold(scaffoldInput(h)), { status: "problem", problem: { problem: "unavailable" } }, "no scaffold deps, no scaffold");
+  assert.deepEqual([h.cards().length, calls.templates], [0, 0]);
+});

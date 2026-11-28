@@ -266,12 +266,30 @@ test("design_md_linted carries only its two count buckets", async (t) => {
 test("design_md_drafted carries only where the draft came from", async (t) => {
   const events = captureAnalyticsEvents(t);
   reportAnalyticsEvent("design_md_drafted", { source: "app" });
-  // Drafting from a mockup arrives with Phase 3d; until then it isn't a value the registry keeps.
-  reportAnalyticsEvent("design_md_drafted", { source: "mock" } as never);
+  // 3d: a design app's DESIGN.md drafted from the project it mocks.
+  reportAnalyticsEvent("design_md_drafted", { source: "mock" });
+  reportAnalyticsEvent("design_md_drafted", { source: "design-app/DESIGN.md" } as never);
   await analyticsSettled();
   assert.deepEqual(events, [
     { event: "design_md_drafted", props: { source: "app" } },
+    { event: "design_md_drafted", props: { source: "mock" } },
     { event: "design_md_drafted", props: undefined },
+  ]);
+});
+
+test("design_app_scaffolded carries only the kind and the outcome", async (t) => {
+  const events = captureAnalyticsEvents(t);
+  reportAnalyticsEvent("design_app_scaffolded", { kind: "react-nonweb", outcome: "added" });
+  reportAnalyticsEvent("design_app_scaffolded", { kind: "starter", outcome: "declined" });
+  // A folder is stripped, and an outcome the registry doesn't name drops the properties.
+  reportAnalyticsEvent("design_app_scaffolded", { kind: "starter", outcome: "failed", folder: "design-app" } as never);
+  reportAnalyticsEvent("design_app_scaffolded", { kind: "starter", outcome: "existing" } as never);
+  await analyticsSettled();
+  assert.deepEqual(events, [
+    { event: "design_app_scaffolded", props: { kind: "react-nonweb", outcome: "added" } },
+    { event: "design_app_scaffolded", props: { kind: "starter", outcome: "declined" } },
+    { event: "design_app_scaffolded", props: { kind: "starter", outcome: "failed" } },
+    { event: "design_app_scaffolded", props: undefined },
   ]);
 });
 

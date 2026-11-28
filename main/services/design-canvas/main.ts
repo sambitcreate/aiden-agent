@@ -27,6 +27,18 @@ import { createDesignAppRecords } from "./app-server/app-records.js";
 import { DESIGN_APP_PRESENCE_GRACE_MS, DesignAppServers, type DesignAppJobs } from "./app-server/app-server-main.js";
 import { clearAppToolchainCache, defaultAppToolchainDeps, resolveAppToolchain } from "./app-server/app-toolchain.js";
 import { readCanvasConfig, saveCanvasConfigApp } from "./canvas-config.js";
+import {
+  designAppTemplateDir,
+  draftMockDesignMd,
+  e2eDesignAppNodeModules,
+  firstMockConfig,
+  linkDesignAppNodeModules,
+  readMockInputs,
+  readTemplate,
+  writeMockApp,
+} from "./app-server/mock-app.js";
+import { placeMockHome } from "./mock-home.js";
+import { deviceBucket } from "../../../renderer/shared/design-canvas/app-devices.js";
 import type { DesignJobView } from "../follow-through/background-jobs.js";
 import { defaultSocketReaderDeps, type ProcessRow } from "../follow-through/listening-ports.js";
 import { agentShellCommandEnvironment } from "../agent-command-environment.js";
@@ -41,7 +53,7 @@ import { DesignGrantRegistry } from "./grants.js";
 import { createDesignLiveChats } from "./liveness.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL, DesignCanvasStore, DesignChatCanvases, type DesignCanvasUpdated } from "./store.js";
 import { createDesignTitleFollow } from "./title-follow.js";
-import { DesignCanvasViews } from "./views.js";
+import { DesignCanvasViews, designTurnPages } from "./views.js";
 import { DESIGN_FILES_CHANGED_CHANNEL, DesignFileWatcher } from "./watch.js";
 import { PendingEntries, RecentWrittenPages } from "./written-pages.js";
 import { installedAppNetwork } from "./app-frames/app-network-main.js";
@@ -340,7 +352,56 @@ export const designAppServers = new DesignAppServers({
   limits: { graceMs: presenceGraceMs() },
   ...(designAppAttach ? { attach: designAppAttach } : {}),
   clearToolchainCache: clearAppToolchainCache,
+  // 3d (S103): the design app offer reads only files: the folders, the root's workspace patterns and canvas.json.
+  mockInputs: readMockInputs,
+  scaffold: designAppScaffoldDeps(),
 });
+
+/** 3d (S102–S115): writing, placing and reporting a design app. Nothing here runs before the scaffold card's Allow. */
+function designAppScaffoldDeps(): NonNullable<ConstructorParameters<typeof DesignAppServers>[0]["scaffold"]> {
+  const nodeModules = e2eDesignAppNodeModules({ isPackaged: app.isPackaged, env: process.env });
+  return {
+    template: () => readTemplate(designAppTemplateDir({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() })),
+    config: (workspaceRoot, input) => firstMockConfig(workspaceRoot, input),
+    draft: (workspaceRoot, source) => draftMockDesignMd(workspaceRoot, source, { reader: designMdReader }),
+    write: (workspaceRoot, folder, files, options) => writeMockApp(workspaceRoot, folder, files, options),
+    ...(nodeModules ? { afterWrite: (workspaceRoot: string, folder: string) => linkDesignAppNodeModules(workspaceRoot, folder, nodeModules) } : {}),
+    invalidateRoots: (workspaceRoot) => designAppRoots.invalidate(workspaceRoot),
+    placeHome: (input) =>
+      placeMockHome(
+        {
+          chatId: input.chatId,
+          workspaceId: input.workspaceId,
+          workspaceRoot: input.workspaceRoot,
+          appRoot: input.appRoot,
+          pages:
+            "pages" in input.page
+              ? input.page.pages
+              : designTurnPages({ views: designCanvasViews, chatId: input.chatId, message: { selection: [], pageId: input.page.pageId } }),
+        },
+        {
+          store: designCanvasStore,
+          broadcast: broadcastDesignCanvasUpdate,
+          newId: randomUUID,
+          isLive: designLiveChats,
+          inDesignMode: async (chatId) => (await chatStore.getMeta(chatId))?.designMode === true,
+          focus: (request) => {
+            const owner = input.owner;
+            if (!owner || owner.isDestroyed()) return;
+            try {
+              owner.send("designCanvas:focus", { ...request, ...(input.by === "person" ? { own: true } : {}) });
+            } catch {
+              // The window went away; the frame is placed.
+            }
+          },
+          // S115, call site 7: the design app's `/`, after the store commit.
+          onAppFrameAdded: (width) => reportAnalyticsEvent("design_app_frame_added", { source: input.by, device_bucket: deviceBucket(width) }),
+        },
+      ),
+    report: (event) => reportAnalyticsEvent("design_app_scaffolded", event),
+    reportDrafted: () => reportAnalyticsEvent("design_md_drafted", { source: "mock" }),
+  };
+}
 
 // Every window hears each workspace's app status; it carries no output beyond a crash's bounded tail.
 designAppServers.onStatus((snapshot) => ipcMain.broadcast("designApp:status", snapshot));

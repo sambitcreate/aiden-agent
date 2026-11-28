@@ -10,7 +10,7 @@ import test, { type TestContext } from "node:test";
 import { DesignMdReader } from "../design-md/reader.js";
 import { createPageFile } from "./app-page-files.js";
 import { MOCK_FOLDERS } from "./mock-app-core.js";
-import { designAppTemplateDir, draftMockDesignMd, firstMockConfig, mockFiles, mockFolderStates, readMockInputs, readTemplate, writeMockApp } from "./mock-app.js";
+import { designAppTemplateDir, draftMockDesignMd, e2eDesignAppNodeModules, linkDesignAppNodeModules, firstMockConfig, mockFiles, mockFolderStates, readMockInputs, readTemplate, writeMockApp } from "./mock-app.js";
 
 const TEMPLATE = path.resolve("resources/design-app-template");
 const admission = () => ({ signal: new AbortController().signal });
@@ -350,4 +350,19 @@ test("a draft source that is a link out of the workspace is refused", async (t) 
   const ws = await tempDir(t);
   await symlink(outside, path.join(ws, "desk"));
   assert.deepEqual(await draftMockDesignMd(ws, "desk", { reader: new DesignMdReader() }), { designMd: "starter", styleSources: [], reason: "unavailable" });
+});
+
+test("a packaged build ignores AIDEN_E2E_DESIGN_APP_NODE_MODULES", async (t) => {
+  const env = { AIDEN_E2E_DESIGN_APP_NODE_MODULES: "/repo/node_modules" };
+  assert.equal(e2eDesignAppNodeModules({ isPackaged: true, env }), undefined);
+  assert.equal(e2eDesignAppNodeModules({ isPackaged: false, env }), "/repo/node_modules");
+  assert.equal(e2eDesignAppNodeModules({ isPackaged: false, env: { AIDEN_E2E_DESIGN_APP_NODE_MODULES: "relative/node_modules" } }), undefined);
+  assert.equal(e2eDesignAppNodeModules({ isPackaged: false, env: {} }), undefined);
+
+  const modules = await tempDir(t, { "vite/package.json": "{}" });
+  const ws = await tempDir(t, { "design-app/package.json": "{}" });
+  await linkDesignAppNodeModules(ws, "design-app", modules);
+  assert.ok((await lstat(path.join(ws, "design-app/node_modules"))).isSymbolicLink());
+  await assert.rejects(linkDesignAppNodeModules(ws, "design-app", modules), "never over what's there");
+  await assert.rejects(linkDesignAppNodeModules(ws, "src", modules), "only a design app folder");
 });

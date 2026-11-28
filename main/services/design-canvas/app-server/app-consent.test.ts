@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { DesignAppConsentRequest } from "../../../../renderer/shared/design-app.js";
-import { attachConsentKey, DesignAppConsent, type AttachConsentCard, type DesignAppConsentOwner } from "./app-consent.js";
+import { attachConsentKey, DesignAppConsent, scaffoldConsentKey, type AttachConsentCard, type DesignAppConsentOwner, type ScaffoldConsentCard } from "./app-consent.js";
 
 type Sent = { channel: string; payload: Record<string, unknown> };
 
@@ -215,4 +215,41 @@ test("closeAll for the workspace closes attach cards too", async () => {
   consent.closeAll("ws\0");
   assert.equal(await attach, "unavailable");
   assert.equal(closed(owner).length, 1);
+});
+
+const scaffoldCard: ScaffoldConsentCard = {
+  kind: "scaffold",
+  chatId: "chat-1",
+  workspaceId: "ws",
+  folder: "design-app",
+  mockKind: "starter",
+  installCommand: "npm ci",
+  runCommand: "npm run dev",
+  scripts: [{ name: "dev", text: "vite" }],
+  packages: [{ name: "vite", version: "8.3.5" }],
+  files: ["package.json"],
+};
+
+test("3d: the scaffold card has one key per workspace, apart from every app's, and closeAll closes it and its decline", async () => {
+  const consent = new DesignAppConsent();
+  const owner = fakeOwner(7);
+  const key = scaffoldConsentKey("ws");
+  for (const appRoot of [".", "design-app", "a"]) {
+    assert.notEqual(key, `ws\0${appRoot}`);
+    assert.notEqual(key, attachConsentKey("ws", appRoot));
+  }
+  const first = consent.request({ key, by: "aiden", request: scaffoldCard, owner });
+  const launch = consent.request({ key: "ws\0design-app", by: "aiden", request: { ...card, appRoot: "design-app" }, owner });
+  assert.equal(shown(owner).length, 2, "the scaffold card and a launch card never join");
+  assert.equal(shown(owner)[0]!.payload.kind, "scaffold");
+  consent.answer(shown(owner)[0]!.payload.requestId, "decline", owner);
+  assert.equal(await first, "decline");
+  assert.equal(await consent.request({ key, by: "aiden", request: scaffoldCard, owner }), "decline", "Aiden's next scaffold gets no card");
+  consent.closeAll("ws\0");
+  assert.equal(await launch, "unavailable");
+  const again = consent.request({ key, by: "aiden", request: scaffoldCard, owner });
+  assert.equal(shown(owner).length, 3, "the workspace's decline went with closeAll");
+  consent.closeAll("other\0");
+  consent.closeAll("ws\0");
+  assert.equal(await again, "unavailable");
 });

@@ -20,8 +20,10 @@ import {
   type DesignAppPhase,
   type DesignAppProblem,
   type DesignAppRunningScan,
+  type DesignAppScaffoldResult,
   type DesignAppsSnapshot,
   type DesignAppStatus,
+  type DesignMockKind,
   type DesignMockOffer,
   type FrameworkId,
   type PackageManagerName,
@@ -41,10 +43,12 @@ import { attachOrigins, deepestRoot, parseAttachUrl, type AttachCheck, type Atta
 import {
   attachConsentKey,
   isDesktopOwner,
+  scaffoldConsentKey,
   type AttachConsentCard,
   type DesignAppConsent,
   type DesignAppConsentOwner,
   type LaunchConsentCard,
+  type ScaffoldConsentCard,
 } from "./app-consent.js";
 import type { LaunchSurfaceProblem, LaunchSurfaceRead } from "./app-fingerprint.js";
 import {
@@ -70,7 +74,10 @@ import {
 import type { AppToolchain } from "./app-toolchain.js";
 import type { AppRouteList } from "../../../../renderer/shared/design-canvas/app-routes.js";
 import { mergeRouteList, type RouteApp } from "./app-routes-core.js";
-import { mockOffer, type MockFolderState } from "./mock-app-core.js";
+import { mockOffer, type MockConfigFile, type MockFolderState } from "./mock-app-core.js";
+import type { MockDesignMd, MockWriteResult } from "./mock-app.js";
+import { mockFiles } from "./mock-app.js";
+import type { DesignTurnPages } from "../views.js";
 import { discoverRoutes } from "./app-routes.js";
 
 export const DESIGN_APP_PRESENCE_GRACE_MS = 60_000;
@@ -120,7 +127,7 @@ export interface DesignAppServersDeps {
   records: DesignAppRecords;
   choosePort(input: { sticky?: number; fallback: number }): Promise<number>;
   osPort(): Promise<number>;
-  consent: Pick<DesignAppConsent, "request" | "forgetDecline" | "closeAll">;
+  consent: Pick<DesignAppConsent, "request" | "forgetDecline" | "closeAll" | "isDeclined">;
   views: { visible(workspaceId: string): number; onPresence(listener: (workspaceId: string, visibleCount: number) => void): () => void };
   workspace(workspaceId: string): Promise<DesignWorkspace | undefined>;
   gate: Pick<WorkspaceMutationGate, "admit">;
@@ -149,7 +156,71 @@ export interface DesignAppServersDeps {
    * Without it, the snapshot has no `mock` field and nothing can scaffold.
    */
   mockInputs?(workspaceRoot: string): Promise<MockOfferInputs>;
+  /** 3d (S102, S107, S113): writing a design app after the person's Allow. Without it, `scaffold` is unavailable. */
+  scaffold?: DesignAppScaffoldDeps;
 }
+
+/** What `scaffold` writes, places and reports through; every disk and canvas effect is here. */
+export interface DesignAppScaffoldDeps {
+  /** The template from Aiden's bundle, read bounded (S107). */
+  template(): Promise<{ ok: true; files: ReadonlyMap<string, Buffer> } | { ok: false; problem: "template" }>;
+  /** Main's first aiden.mock.json (S109). */
+  config(workspaceRoot: string, input: { kind: DesignMockKind; source?: string; shell?: "electron" | "tauri"; reactNative?: boolean }): Promise<MockConfigFile>;
+  /** The drafted DESIGN.md pair, in memory (S110). */
+  draft(workspaceRoot: string, source: string): Promise<MockDesignMd>;
+  write(workspaceRoot: string, folder: string, files: ReadonlyMap<string, Buffer>, options: { admission: { signal: AbortSignal } }): Promise<MockWriteResult>;
+  /** E2E only, in an unpackaged build: links a prepared node_modules into the new app, so no install reaches the network. */
+  afterWrite?(workspaceRoot: string, folder: string): Promise<void>;
+  /** DESIGN.md's roots forget the workspace's detection, so they see the new app at once (S110). */
+  invalidateRoots(workspaceRoot: string): void;
+  /** `/` on the canvas (S113, `placeMockHome`). */
+  placeHome(input: {
+    chatId: string;
+    workspaceId: string;
+    workspaceRoot: string;
+    appRoot: string;
+    by: "person" | "aiden";
+    page: DesignAppScaffoldPage;
+    owner?: DesignAppConsentOwner;
+  }): Promise<"placed" | "already" | "refused">;
+  /** `design_app_scaffolded` (S115). */
+  report(event: { kind: DesignMockKind; outcome: "added" | "declined" | "failed" }): void;
+  /** `design_md_drafted {source: "mock"}`: a drafted, not starter, DESIGN.md was written. */
+  reportDrafted(): void;
+}
+
+/** Where `/` goes: the person's page on screen (checked by the caller), or the turn's pages (S84). */
+export type DesignAppScaffoldPage = { pageId: string } | { pages: Pick<DesignTurnPages, "resolver" | "show"> };
+
+export interface DesignAppScaffoldInput {
+  workspaceId: string;
+  chatId: string;
+  by: "person" | "aiden";
+  owner?: DesignAppConsentOwner;
+  permission: WorkspaceGatePermission;
+  page: DesignAppScaffoldPage;
+  /** The tool's wait follows these: "card" waits for the card, "writing" and "app" for the start (S102). */
+  onPhase?(phase: "card" | "writing" | "app"): void;
+  /** Ends only the caller's wait: an answered card's write, install and start go on. */
+  signal?: AbortSignal;
+}
+
+/** A `/` placement waiting for its app to run: it survives one failed attempt (S113). */
+interface PendingHome {
+  chatId: string;
+  workspaceId: string;
+  workspaceRoot: string;
+  appRoot: string;
+  by: "person" | "aiden";
+  page: DesignAppScaffoldPage;
+  owner?: DesignAppConsentOwner;
+  /** Attempts that may still end without running before it is dropped. */
+  attemptsLeft: number;
+  /** Set while the scaffold that asked still waits on its own start, so it can answer with the placement. */
+  onPlacing?(placing: Promise<"placed" | "already" | "refused">): void;
+}
+
+const SHELL_LABELS = { electron: "Electron", tauri: "Tauri" } as const;
 
 /** The disk facts `mockOffer` decides from (3d). */
 export interface MockOfferInputs {
@@ -356,6 +427,10 @@ export class DesignAppServers {
   /** 3d: each workspace's design app offer as last read, and a toolchain problem its last scaffold hit. */
   private readonly mockOffers = new Map<string, DesignMockOffer>();
   private readonly mockProblems = new Map<string, ToolchainProblem>();
+  /** 3d: `/` placements waiting for their app to run, by app key. */
+  private readonly homes = new Map<string, PendingHome>();
+  /** 3d: one scaffold at a time per workspace; a second joins it. */
+  private readonly scaffolds = new Map<string, Promise<DesignAppScaffoldResult>>();
   private readonly presenceTimers = new Map<string, unknown>();
   private readonly jobWaiters = new Map<string, (view: DesignJobView) => void>();
   private readonly statusListeners = new Set<(snapshot: DesignAppsSnapshot) => void>();
@@ -599,6 +674,222 @@ export class DesignAppServers {
    * points past this run's end, belongs to an earlier run: the read starts at
    * this run's oldest kept byte instead, marked `truncated`.
    */
+  /**
+   * 3d (S102, S106, S107, S112, S113): a design app for a workspace with no
+   * web app. Refusals and a missing toolchain answer before any card; the
+   * card's Allow is the only way on to the write, the approval and the
+   * install (`npm ci`, the network's only use). The caller's `signal` ends
+   * only its own wait: an answered card's write, install and start go on.
+   * One scaffold at a time per workspace; a second call joins the first.
+   */
+  async scaffold(input: DesignAppScaffoldInput): Promise<DesignAppScaffoldResult> {
+    if (input.signal?.aborted) return { status: "problem", problem: { problem: "interrupted" } };
+    let work = this.scaffolds.get(input.workspaceId);
+    if (!work) {
+      work = this.runScaffold(input).finally(() => this.scaffolds.delete(input.workspaceId));
+      this.scaffolds.set(input.workspaceId, work);
+    }
+    const signal = input.signal;
+    if (!signal) return work;
+    return new Promise<DesignAppScaffoldResult>((resolve, reject) => {
+      const onAbort = () => resolve({ status: "problem", problem: { problem: "interrupted" } });
+      signal.addEventListener("abort", onAbort, { once: true });
+      work.then(
+        (result) => {
+          signal.removeEventListener("abort", onAbort);
+          resolve(result);
+        },
+        (error: unknown) => {
+          signal.removeEventListener("abort", onAbort);
+          reject(error);
+        },
+      );
+    });
+  }
+
+  private async runScaffold(input: DesignAppScaffoldInput): Promise<DesignAppScaffoldResult> {
+    const problem = (value: DesignAppProblem): DesignAppScaffoldResult => ({ status: "problem", problem: value });
+    const scaffold = this.deps.scaffold;
+    if (!this.available() || !scaffold || !this.deps.mockInputs) return problem({ problem: "unavailable" });
+    if (!isDesktopOwner(input.owner)) return problem({ problem: "desktop-only" });
+    if (input.permission === "none" || input.permission === "read-only") return problem({ problem: "no-access" });
+    if (!(await this.recovered())) return problem({ problem: "recovery-failed" });
+    const workspace = await this.deps.workspace(input.workspaceId);
+    if (!runnable(workspace) || workspace.permission === "read-only") return problem({ problem: "no-access" });
+    const workspacePath = workspace.path;
+    // The person's own ask finds a Node installed since the last look (S112).
+    if (input.by === "person") this.deps.clearToolchainCache?.();
+    const cached = await this.detectFor(workspace.id, workspacePath);
+    const offer = await this.readMockOffer(workspace, cached.detection);
+    if (!offer) {
+      // A workspace with a web app (a design app included) is that app's.
+      const existing = designTarget(cached.detection);
+      if (existing.kind === "single" && existing.app.mock) return { status: "existing", root: existing.app.root, app: this.statusWith(workspace.id, existing.app.root) };
+      return problem({ problem: "scaffold-refused", why: "has-web-app" });
+    }
+    if (offer.offer === "existing") return { status: "existing", root: offer.folder, app: this.statusWith(workspace.id, offer.folder) };
+    if (offer.offer === "refused") return problem({ problem: "scaffold-refused", why: offer.why });
+    const kind: DesignMockKind = offer.offer;
+    const folder = offer.folder;
+
+    // Node and npm before any card (S112): the chip shows the problem, with Retry.
+    const toolchain = await this.deps.toolchain(mockAppFor(folder));
+    if (!toolchain.ok) {
+      const { ok: _ok, ...toolchainProblem } = toolchain;
+      this.mockProblems.set(workspace.id, toolchainProblem as ToolchainProblem);
+      this.emit(workspace.id);
+      return problem(toolchainProblem as ToolchainProblem);
+    }
+    if (this.mockProblems.delete(workspace.id)) this.emit(workspace.id);
+
+    const template = await scaffold.template();
+    if (!template.ok) return problem({ problem: "scaffold-failed", step: "template" });
+    const card = scaffoldCard(input, workspace.id, offer, template.files);
+    if (!card) return problem({ problem: "scaffold-failed", step: "template" });
+
+    const consentKey = scaffoldConsentKey(workspace.id);
+    if (input.by === "person") this.deps.consent.forgetDecline(consentKey);
+    // Aiden's ask after the person's Not now gets no card, so it reports nothing (S115).
+    const cardless = input.by === "aiden" && this.deps.consent.isDeclined(consentKey);
+    input.onPhase?.("card");
+    // The card's own wait: never the caller's signal (S102).
+    const answer = await this.deps.consent.request({ key: consentKey, by: input.by, request: card, ...(input.owner ? { owner: input.owner } : {}) });
+    if (answer !== "allow") {
+      if (answer === "decline" && !cardless) this.reportScaffold(kind, "declined");
+      return problem({ problem: answer === "decline" ? "consent-declined" : answer === "unanswered" ? "consent-unanswered" : "consent-unavailable" });
+    }
+
+    input.onPhase?.("writing");
+    const failed = (step: "template" | "write" | "verify" | "design-md"): DesignAppScaffoldResult => {
+      this.reportScaffold(kind, "failed");
+      return problem({ problem: "scaffold-failed", step });
+    };
+    let admission: { signal: AbortSignal; release(): void };
+    try {
+      admission = this.deps.gate.admit(workspace.id);
+    } catch {
+      return failed("write");
+    }
+    let written: Extract<MockWriteResult, { ok: true }>;
+    let config: MockConfigFile;
+    let designMd: MockDesignMd;
+    try {
+      // The workspace is still there, with the same folder and write access, after the card's wait.
+      const current = await this.deps.workspace(workspace.id);
+      if (!runnable(current) || current.path !== workspacePath || current.permission === "read-only") return failed("write");
+      const source = offer.offer === "react-nonweb" ? offer.source : undefined;
+      config = await scaffold.config(workspacePath, {
+        kind,
+        ...(source !== undefined ? { source } : {}),
+        ...(offer.offer === "react-nonweb" && offer.shell ? { shell: offer.shell } : {}),
+        ...(offer.offer === "react-nonweb" && offer.reactNative ? { reactNative: true } : {}),
+      });
+      designMd = source !== undefined ? await scaffold.draft(workspacePath, source) : { designMd: "starter", styleSources: [], reason: "no-tokens" };
+      if (admission.signal.aborted) return failed("write");
+      const result = await scaffold.write(workspacePath, folder, mockFiles(template.files, config, designMd), { admission });
+      if (!result.ok) return failed(result.step);
+      written = result;
+      await scaffold.afterWrite?.(workspacePath, folder);
+    } finally {
+      admission.release();
+    }
+
+    // Approve exactly what was written and verified (S107): the launch card won't follow.
+    const fresh = await this.detectFor(workspace.id, workspacePath);
+    const app = this.resolveApp(fresh.detection, fresh.config, folder);
+    if (!app || !app.mock) return failed("verify");
+    const surface = await this.deps.fingerprint(workspacePath, app);
+    if ("problem" in surface) return failed("verify");
+    const stored = await this.deps.records.approveShown(workspace.id, folder, { script: app.script!, installShown: true }, surface.fingerprint, surface.fingerprint);
+    if (!stored) return failed("verify");
+    this.reportScaffold(kind, "added");
+    if (designMd.designMd === "drafted") {
+      try {
+        scaffold.reportDrafted();
+      } catch {
+        // Reporting never changes the scaffold.
+      }
+    }
+    scaffold.invalidateRoots(workspacePath);
+    this.mockOffers.delete(workspace.id);
+    this.deps.log?.("design-app-scaffolded", { kind, canvasConfig: written.canvasConfig });
+
+    input.onPhase?.("app");
+    const key = keyOf(workspace.id, folder);
+    let placing: Promise<"placed" | "already" | "refused"> | undefined;
+    const home: PendingHome = {
+      chatId: input.chatId,
+      workspaceId: workspace.id,
+      workspaceRoot: workspacePath,
+      appRoot: folder,
+      by: input.by,
+      page: input.page,
+      ...(input.owner ? { owner: input.owner } : {}),
+      attemptsLeft: 2,
+      onPlacing: (started) => {
+        placing = started;
+      },
+    };
+    this.homes.set(key, home);
+    const status = await this.start({
+      workspaceId: workspace.id,
+      appRoot: folder,
+      by: input.by,
+      chatId: input.chatId,
+      ...(input.owner ? { owner: input.owner } : {}),
+      permission: workspace.permission,
+    });
+    delete home.onPlacing;
+    let placed: "placed" | "already" | "pending" | "none" = this.homes.get(key) === home ? "pending" : "none";
+    if (placing) {
+      const outcome = await placing;
+      placed = outcome === "refused" ? "none" : outcome;
+    }
+    return {
+      status: "scaffolded",
+      root: folder,
+      kind,
+      app: status,
+      placed,
+      aliases: { ...config.aliases },
+      stubs: { ...config.stubs },
+      globals: [...config.globals],
+      designMd: designMd.designMd,
+      styleSources: [...designMd.styleSources],
+    };
+  }
+
+  private reportScaffold(kind: DesignMockKind, outcome: "added" | "declined" | "failed"): void {
+    try {
+      this.deps.scaffold?.report({ kind, outcome });
+    } catch {
+      // Reporting never changes the scaffold.
+    }
+  }
+
+  /** A run reached `running`: a pending `/` for it is placed now, once (S113). */
+  private placePendingHome(entry: Entry): void {
+    const home = this.homes.get(entry.key);
+    const scaffold = this.deps.scaffold;
+    if (!home || !scaffold) return;
+    this.homes.delete(entry.key);
+    const { attemptsLeft: _left, onPlacing, ...request } = home;
+    const placing = scaffold.placeHome(request).catch((error: unknown) => {
+      this.deps.log?.("design-app-home-failed", { error: String(error) });
+      return "refused" as const;
+    });
+    onPlacing?.(placing);
+  }
+
+  /** An attempt ended without running: a pending `/` waits for one more (S113). */
+  private attemptEnded(entry: Entry, status: DesignAppStatus): void {
+    if (status.phase === "running") return;
+    const home = this.homes.get(entry.key);
+    if (!home) return;
+    home.attemptsLeft -= 1;
+    if (home.attemptsLeft <= 0) this.homes.delete(entry.key);
+  }
+
   async logs(workspaceId: string, appRoot: string, options: { after?: number; run?: string; maxBytes: number }): Promise<DesignAppLogs> {
     const entry = this.entries.get(keyOf(workspaceId, appRoot));
     // Aiden doesn't own an attached server's output (D9, B-M4).
@@ -648,6 +939,9 @@ export class DesignAppServers {
     this.served.delete(workspaceId);
     this.cache.delete(workspaceId);
     this.forgetRouteWalks(workspaceId);
+    this.mockOffers.delete(workspaceId);
+    this.mockProblems.delete(workspaceId);
+    for (const key of [...this.homes.keys()]) if (key.startsWith(`${workspaceId}\0`)) this.homes.delete(key);
     this.deps.consent.closeAll(`${workspaceId}\0`);
     await this.deps.records.forgetWorkspace(workspaceId);
     if (originsGo) this.originsChanged();
@@ -801,6 +1095,7 @@ export class DesignAppServers {
         .then((status) => {
           // D5: Retry replays a choose that ended with a problem; anything else ending clears it.
           entry.lastChoose = input.choose && status.phase !== "running" && status.problem ? input.choose : undefined;
+          this.attemptEnded(entry, status);
           return status;
         })
         .finally(() => {
@@ -1670,6 +1965,7 @@ export class DesignAppServers {
       ...extra,
     };
     if (phase === "starting" && this.deps.views.visible(entry.workspaceId) === 0) this.armPresence(entry.workspaceId);
+    if (phase === "running") this.placePendingHome(entry);
     this.emit(entry.workspaceId);
     return { ...entry.status };
   }
@@ -1751,4 +2047,61 @@ export class DesignAppServers {
 /** 3b: what a route walk depends on in a detection — each web root, its framework and (3d) the design app marker. */
 function detectionShape(detection: WebAppDetection): string {
   return JSON.stringify(detection.apps.filter((app) => app.kind === "web").map((app) => [app.root, app.framework ?? null, app.mock === true]));
+}
+
+/** The design app as detection will see it once written: Vite on npm, in its own install root (S108). */
+function mockAppFor(folder: string): DetectedApp {
+  return {
+    root: folder,
+    name: "design-app",
+    kind: "web",
+    reason: "ok",
+    framework: "vite",
+    script: "dev",
+    scripts: ["dev"],
+    usesReact: true,
+    packageManager: { name: "npm", source: "lockfile", lockfile: "package-lock.json", lockfileLevelsUp: 0 },
+    installRoot: folder,
+    installed: false,
+    mock: true,
+  };
+}
+
+const MAX_CARD_PACKAGES = 20;
+
+/** The scaffold card (S102): the folder, the files, the install and run commands, and the template's own packages. */
+function scaffoldCard(
+  input: Pick<DesignAppScaffoldInput, "chatId">,
+  workspaceId: string,
+  offer: Extract<DesignMockOffer, { offer: "react-nonweb" | "starter" }>,
+  files: ReadonlyMap<string, Buffer>,
+): ScaffoldConsentCard | undefined {
+  const pkgBytes = files.get("package.json");
+  if (!pkgBytes) return undefined;
+  let pkg: { scripts?: Record<string, unknown>; dependencies?: Record<string, unknown>; devDependencies?: Record<string, unknown> };
+  try {
+    pkg = JSON.parse(pkgBytes.toString("utf8"));
+  } catch {
+    return undefined;
+  }
+  const dev = pkg.scripts?.dev;
+  if (typeof dev !== "string") return undefined;
+  const packages = [...Object.entries(pkg.dependencies ?? {}), ...Object.entries(pkg.devDependencies ?? {})]
+    .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+    .slice(0, MAX_CARD_PACKAGES)
+    .map(([name, version]) => ({ name, version }));
+  const shellLabel = offer.offer === "react-nonweb" ? (offer.reactNative ? "React Native" : offer.shell ? SHELL_LABELS[offer.shell] : undefined) : undefined;
+  return {
+    kind: "scaffold",
+    chatId: input.chatId,
+    workspaceId,
+    folder: offer.folder,
+    mockKind: offer.offer,
+    ...(shellLabel ? { shellLabel } : {}),
+    installCommand: "npm ci",
+    runCommand: "npm run dev",
+    scripts: [{ name: "dev", text: dev }],
+    packages,
+    files: [...files.keys()].sort(),
+  };
 }
