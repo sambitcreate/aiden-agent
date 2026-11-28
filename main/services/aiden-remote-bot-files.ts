@@ -1,7 +1,9 @@
 import { createHash, randomBytes } from "node:crypto";
+import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { mapWorkspaceMetadata } from "./workspace-metadata.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { assertAgentMayWriteConfigPath } from "./protected-agent-config-paths.js";
 import type {
   AidenRemoteFileDocument,
   AidenRemoteFileEntry,
@@ -19,6 +21,7 @@ import {
   type BotRuntimeAuthorityAdmission,
 } from "./bot-runtime-authority.js";
 import {
+  hasWorkspaceGitSegment,
   listWorkspaceFiles,
   readWorkspaceFile,
   WorkspaceFileError,
@@ -141,6 +144,20 @@ function parseWrite(value: unknown): { content: string; expectedVersion: string 
     throw new AidenRemoteServiceError("invalid_request", "The file save request is invalid.", 400);
   }
   return { content: record.content, expectedVersion: record.expectedVersion };
+}
+
+const REMOTE_PROTECTED_FILE_WRITE_MESSAGE =
+  "Hook, agent, and Git configuration files can only be edited directly on your computer.";
+
+function assertRemoteBotMayWriteTarget(...candidates: readonly string[]): void {
+  if (candidates.some(hasWorkspaceGitSegment)) {
+    throw new AidenRemoteServiceError("capability_denied", REMOTE_PROTECTED_FILE_WRITE_MESSAGE, 403);
+  }
+  try {
+    assertAgentMayWriteConfigPath(...candidates);
+  } catch {
+    throw new AidenRemoteServiceError("capability_denied", REMOTE_PROTECTED_FILE_WRITE_MESSAGE, 403);
+  }
 }
 
 function projectedDocument(
@@ -366,6 +383,7 @@ export class AidenRemoteBotFileService {
     operation: (input: {
       folderPath: string;
       displayPath: string;
+      canonicalPath: string;
       signal: AbortSignal;
       identity: { device: string; inode: string };
     }) => Promise<T>,
@@ -396,6 +414,7 @@ export class AidenRemoteBotFileService {
           return await operation({
             folderPath: authority.workingDirectory,
             displayPath,
+            canonicalPath: current.canonicalPath,
             signal: authority.signal,
             identity: { device: current.filesystemDevice, inode: current.filesystemInode },
           });
@@ -442,6 +461,14 @@ export class AidenRemoteBotFileService {
     const input = parseWrite(value);
     return this.withResolvedFile(deviceId, chatId, fileId, async (resolved) => {
       try {
+        const lexicalTargetPath = path.join(resolved.folderPath, resolved.displayPath);
+        const canonicalTargetPath = await realpath(lexicalTargetPath).catch(() => resolved.canonicalPath);
+        assertRemoteBotMayWriteTarget(
+          resolved.displayPath,
+          lexicalTargetPath,
+          canonicalTargetPath,
+          resolved.canonicalPath,
+        );
         const { document, installed } = await writeWorkspaceFileInstalling(
           resolved.folderPath,
           resolved.displayPath,
@@ -452,6 +479,7 @@ export class AidenRemoteBotFileService {
         await rebindAidenFileHandleToSavedFile(this.handles, fileId, resolved.folderPath, resolved.displayPath, installed);
         return projectedDocument(fileId, resolved.displayPath, document);
       } catch (error) {
+        if (error instanceof AidenRemoteServiceError) throw error;
         if (error instanceof WorkspaceFileError && error.code === "changed_on_disk") {
           throw new AidenRemoteServiceError(
             "revision_conflict",
