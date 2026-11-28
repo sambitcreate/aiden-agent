@@ -160,6 +160,33 @@ test("with no fiber the data-aiden-src stamp on the element or an ancestor is us
   assert.deepEqual(bare, { owners: [] });
 });
 
+test("3d: a ws: stamp is read as workspace-relative, and the walk's result carries base; an unprefixed one is as before", async () => {
+  const window = page(
+    '<section data-aiden-src="ws:src/renderer/components/Hero.tsx:14"><p><b>Hi</b></p></section>' +
+      '<div data-aiden-src="src/Hero.tsx:7"><i>v1</i></div>' +
+      '<div data-aiden-src="ws:design-app/src/routes/index.tsx"><u>no line</u></div>',
+  );
+  assert.deepEqual(await walkReactSource(window.document.querySelector("b"), ORIGIN, noFetch), {
+    owners: [],
+    path: "src/renderer/components/Hero.tsx",
+    line: 14,
+    base: "workspace",
+  });
+  assert.deepEqual(await walkReactSource(window.document.querySelector("i"), ORIGIN, noFetch), { owners: [], path: "src/Hero.tsx", line: 7 });
+  assert.deepEqual(await walkReactSource(window.document.querySelector("u"), ORIGIN, noFetch), {
+    owners: [],
+    path: "design-app/src/routes/index.tsx",
+    base: "workspace",
+  });
+});
+
+test("3d: a ws: stamp that is empty, absolute or climbs out gives no path", async () => {
+  const window = page('<p data-aiden-src="ws:"><b>a</b></p><p data-aiden-src="ws:/etc/passwd:1"><i>b</i></p><p data-aiden-src="ws:../x.tsx:1"><u>c</u></p>');
+  for (const selector of ["b", "i", "u"]) {
+    assert.deepEqual(await walkReactSource(window.document.querySelector(selector), ORIGIN, noFetch), { owners: [] }, selector);
+  }
+});
+
 test("owners stop at 8 and names are bounded", async () => {
   const window = page("<h1>x</h1>");
   const h1 = window.document.querySelector("h1");

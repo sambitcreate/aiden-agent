@@ -145,8 +145,17 @@ export const REACT_SOURCE_WALK_SOURCE = String.raw`(function () {
     for (var node = element; node && node.getAttribute; node = node.parentElement) {
       var value = node.getAttribute("data-aiden-src");
       if (!value) continue;
+      // 3d (S111): "ws:" marks a design app's stamp as workspace-relative, never
+      // absolute or climbing out; an unprefixed stamp is the page's own path.
+      var workspace = value.indexOf("ws:") === 0;
+      if (workspace) value = value.slice(3);
       var match = /^(.*):(\d+)$/.exec(value);
-      return match ? { path: match[1], line: Number(match[2]) } : { path: value };
+      var found = match ? { path: match[1], line: Number(match[2]) } : { path: value };
+      if (workspace) {
+        if (!found.path || found.path.charAt(0) === "/" || found.path.split("/").indexOf("..") >= 0 || found.path.indexOf("\\") >= 0) return null;
+        found.base = "workspace";
+      }
+      return found;
     }
     return null;
   }
@@ -214,6 +223,7 @@ export const REACT_SOURCE_WALK_SOURCE = String.raw`(function () {
       if (found && found.path) {
         result.path = found.path;
         if (found.line) result.line = found.line;
+        if (found.base) result.base = found.base;
       }
       return result;
     });
@@ -223,7 +233,14 @@ export const REACT_SOURCE_WALK_SOURCE = String.raw`(function () {
 })()`;
 
 type SourceMapLike = { mappings: string; sources: string[] };
-export type ReactSourceResult = { component?: string; owners: string[]; path?: string; line?: number };
+export type ReactSourceResult = {
+  component?: string;
+  owners: string[];
+  path?: string;
+  line?: number;
+  /** 3d (S111): `path` is relative to the workspace, from a design app's `ws:` stamp; otherwise to the app root. */
+  base?: "workspace";
+};
 type ReactSourceWalk = {
   walk(element: unknown, origin: string, fetchText: (url: string) => Promise<string>): Promise<ReactSourceResult>;
   decodeSourceMapLine(map: SourceMapLike, line: number, column: number): { source: string; line: number } | null;

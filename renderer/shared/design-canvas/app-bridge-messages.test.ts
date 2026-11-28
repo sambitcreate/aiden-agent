@@ -27,6 +27,10 @@ test("each message type's valid shape is accepted as sent", () => {
     ],
     [{ type: "aiden-app:source", requestId: "r2", owners: [] }, { type: "source", requestId: "r2", owners: [] }],
     [
+      { type: "aiden-app:source", requestId: "r3", owners: [], path: "src/renderer/Hero.tsx", line: 4, base: "workspace" },
+      { type: "source", requestId: "r3", owners: [], path: "src/renderer/Hero.tsx", line: 4, base: "workspace" },
+    ],
+    [
       { type: "aiden-app:picked", requestId: "p1", element, point: [5, 6] },
       { type: "picked", requestId: "p1", element, point: [5, 6] },
     ],
@@ -110,6 +114,16 @@ test("a bad line or a path outside the app's files is trimmed off, keeping the r
     parse({ type: "aiden-app:source", requestId: "r", owners: [], line: 3 }),
     { type: "source", requestId: "r", owners: [] },
     "a line without its file",
+  );
+  assert.deepEqual(
+    parse({ type: "aiden-app:source", requestId: "r", owners: [], base: "workspace" }),
+    { type: "source", requestId: "r", owners: [] },
+    "3d: a base without its file",
+  );
+  assert.deepEqual(
+    parse({ type: "aiden-app:source", requestId: "r", owners: [], path: "src/a.ts", base: "root" }),
+    { type: "source", requestId: "r", owners: [], path: "src/a.ts" },
+    "3d: only the workspace base is kept",
   );
   assert.equal(isAppSourcePath("src/Pricing.tsx"), true);
   assert.equal(isAppSourcePath("app/(marketing)/page.tsx"), true);

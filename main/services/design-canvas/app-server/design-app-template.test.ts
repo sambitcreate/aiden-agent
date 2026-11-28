@@ -280,3 +280,72 @@ test("a bad alias name or a non-identifier global refuses", async () => {
   fs.symlinkSync(path.join(linkedFile.root, "real.json"), path.join(linkedFile.mock, "aiden.mock.json"));
   await refuses(linkedFile, /regular file/u);
 });
+
+// ── S111: the data-aiden-src shim ──
+
+type Shim = typeof import("../../../../resources/design-app-template/src/aiden/jsx-dev-runtime.js");
+
+/** The shim as Vite serves it, with the workspace roots vite.config.js defines (its realpath first, then as given). */
+async function shim(roots: readonly string[]): Promise<Shim> {
+  (globalThis as { __AIDEN_WORKSPACE_ROOTS__?: readonly string[] }).__AIDEN_WORKSPACE_ROOTS__ = roots;
+  try {
+    // A fresh module per roots: the shim reads the define once, as it loads.
+    return (await import(`${pathToFileURL(path.join(TEMPLATE, "src/aiden/jsx-dev-runtime.ts")).href}?roots=${encodeURIComponent(roots.join("|"))}`)) as Shim;
+  } finally {
+    delete (globalThis as { __AIDEN_WORKSPACE_ROOTS__?: readonly string[] }).__AIDEN_WORKSPACE_ROOTS__;
+  }
+}
+
+const propsOf = (element: unknown) => (element as { props: Record<string, unknown> }).props;
+
+test("a host element gets data-aiden-src with ws:, the workspace path and line", async () => {
+  const { jsxDEV } = await shim(["/Users/person/site"]);
+  const element = jsxDEV("h1", { children: "Hello" }, undefined, false, { fileName: "/Users/person/site/design-app/src/routes/index.tsx", lineNumber: 9 }, undefined);
+  assert.equal(propsOf(element)["data-aiden-src"], "ws:design-app/src/routes/index.tsx:9");
+  assert.equal(propsOf(element).children, "Hello", "the other props pass through");
+  // An aliased project component compiles through the same runtime.
+  const aliased = jsxDEV("button", {}, undefined, false, { fileName: "/Users/person/site/src/renderer/components/Button.tsx?v=3", lineNumber: 14 }, undefined);
+  assert.equal(propsOf(aliased)["data-aiden-src"], "ws:src/renderer/components/Button.tsx:14");
+});
+
+test("a workspace under a linked folder still matches", async () => {
+  // vite.config.js defines the realpath'd root and the root as given; Vite's fileName is the realpath form.
+  const { jsxDEV } = await shim(["/private/var/folders/ab/site", "/var/folders/ab/site"]);
+  for (const fileName of ["/private/var/folders/ab/site/design-app/src/App.tsx", "/var/folders/ab/site/design-app/src/App.tsx"]) {
+    const element = jsxDEV("main", {}, undefined, false, { fileName, lineNumber: 3 }, undefined);
+    assert.equal(propsOf(element)["data-aiden-src"], "ws:design-app/src/App.tsx:3", fileName);
+  }
+});
+
+test("a component element, an element that has one already, and a source outside the workspace are left alone", async () => {
+  const { jsxDEV } = await shim(["/Users/person/site"]);
+  const source = { fileName: "/Users/person/site/design-app/src/routes/index.tsx", lineNumber: 4 };
+  const Card = () => null;
+  assert.equal("data-aiden-src" in propsOf(jsxDEV(Card, {}, undefined, false, source, undefined)), false, "a component");
+  assert.equal(propsOf(jsxDEV("div", { "data-aiden-src": "mine" }, undefined, false, source, undefined))["data-aiden-src"], "mine");
+  for (const outside of [
+    { fileName: "/Users/person/other/src/App.tsx", lineNumber: 1 },
+    { fileName: "/Users/person/site-two/src/App.tsx", lineNumber: 1 },
+    { fileName: "/Users/person/site/node_modules/../secret.tsx", lineNumber: 1 },
+    { fileName: "/Users/person/site/design-app/src/App.tsx", lineNumber: 0 },
+    undefined,
+  ]) {
+    assert.equal("data-aiden-src" in propsOf(jsxDEV("div", {}, undefined, false, outside, undefined)), false, JSON.stringify(outside));
+  }
+});
+
+test("the value is capped at 256 characters and never absolute or with ..", async () => {
+  const { aidenSourceStamp } = await shim([]);
+  const root = "/Users/person/site";
+  const long = `design-app/src/${"a".repeat(240)}.tsx`;
+  assert.equal(aidenSourceStamp({ fileName: `${root}/${long}`, lineNumber: 1 }, [root]), null);
+  const fits = `design-app/src/${"a".repeat(220)}.tsx`;
+  const stamp = aidenSourceStamp({ fileName: `${root}/${fits}`, lineNumber: 12 }, [root]);
+  assert.ok(stamp && stamp.length <= 256);
+  for (const fileName of [`${root}/design-app/../x.tsx`, `${root}//x.tsx`, `${root}/./x.tsx`, "/etc/passwd"]) {
+    const value = aidenSourceStamp({ fileName, lineNumber: 1 }, [root]);
+    assert.equal(value, null, fileName);
+  }
+  const ok = aidenSourceStamp({ fileName: `${root}/design-app/x.tsx`, lineNumber: 1 }, [root])!;
+  assert.ok(ok.startsWith("ws:") && !ok.slice(3).startsWith("/") && !ok.includes(".."));
+});

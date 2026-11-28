@@ -33,7 +33,7 @@ export type AppBridgeMessage =
   | { type: "hmr" }
   | { type: "escape" }
   | { type: "breakpoints"; widths: number[] }
-  | { type: "source"; requestId: string; component?: string; owners: string[]; path?: string; line?: number }
+  | { type: "source"; requestId: string; component?: string; owners: string[]; path?: string; line?: number; base?: "workspace" }
   | Extract<DesignBridgeMessage, { type: "picked" | "anchors" }>;
 
 /** A message to an app frame's bridge. */
@@ -150,6 +150,8 @@ export function parseAppBridgeMessage(data: unknown, origin: string): AppBridgeM
       source.path = raw.path;
       const line = lineNumber(raw.line);
       if (line !== null) source.line = line;
+      // 3d: a design app's stamp names a workspace path, not one under its root.
+      if (raw.base === "workspace") source.base = "workspace";
     }
     return source;
   }
