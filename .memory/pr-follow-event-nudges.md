@@ -38,6 +38,12 @@ A forced full read (probedUnchanged) keeps backing off.
 
 **No new hosts, credentials or analytics.** The probes use the same `GitHubApi` and `gh` credential path.
 
+## Bounded concurrency — 2026-11-28
+
+- `PullRequestFollowReader.probe` dispatches all `followProbePaths` REST `If-None-Match` requests in parallel and aborts sibling probes as soon as any probe hits a rate limit.
+- `PullRequestFollowReader.read` evaluates comment trust in parallel while keeping `commentsFromPullRequest` order, and deduplicates concurrent collaborator permission checks per `(host, repository, login)` in `permissionsInFlight` beside the hourly `permissions` cache without letting one aborted caller cancel a shared lookup still awaited by another follow.
+- `PullRequestFollows` polls up to `MAX_CONCURRENT_FOLLOW_POLLS` (`4`) due pull requests concurrently in `dueAt` order without re-claiming in-flight follows, downloads `checksNeedingLogs` job logs in parallel, and tracks per-follow `AbortController`s in `pollsInFlight` so `stop`, `pauseChats`, `deleteChat` and `shutdown` cancel matching reads.
+
 ## Phase B: GitHub App webhooks (spike notes, not built)
 
 Upstream design (T3 Code #33548):
