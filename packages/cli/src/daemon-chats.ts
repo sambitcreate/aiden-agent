@@ -46,7 +46,13 @@ import { acquireLease, JsonStore, readJson } from "./state.ts";
 import { deleteCliBotSubagentHistory } from "./bot-subagents.ts";
 import { DaemonGenerationRun, DaemonTurnOwner } from "./daemon-turn-lifecycle.ts";
 import { createDaemonApprovals } from "./daemon-approvals.ts";
-import { workspaceStore, accessFor, assertCliWorkspaceFolderPresent, type CliWorkspace } from "./workspaces.ts";
+import { workspaceStore, accessFor, accessForWorkspace, assertCliWorkspaceFolderPresent, type CliWorkspace } from "./workspaces.ts";
+import {
+  assertCanonicalDirectoryIdentity,
+  bindCliSessionAuthority,
+  captureCanonicalDirectoryIdentity,
+  createCliChatSessionInstructions,
+} from "./cli-agents-instructions.ts";
 import { recordUsage } from "./usage-ledger.ts";
 import { messageText } from "./sessions.ts";
 import { GenerationTimelineProjector } from "../../../main/services/generation-timeline.js";
@@ -277,12 +283,18 @@ export function createDaemonChats(agentDir: string) {
         // A Bot's home is Aiden's own folder; any other chat's folder may have been moved or deleted.
         if (!botAdmission) await assertCliWorkspaceFolderPresent(workspace as CliWorkspace, "turn");
         const unattended = !botAdmission && (options.usageSource === "telegram" || options.usageSource === "scheduled");
-        if (unattended && (!workspace.folderPath || accessFor(agentDir, workspace.folderPath) !== "full")) throw new Error("Unattended generation requires explicitly granted full workspace access.");
-        const cwd = workspace.folderPath || root;
+        const declaredAccess = botAdmission ? "full" : (workspace as CliWorkspace).access;
+        const pinnedWorkspaceRoot = !botAdmission && declaredAccess !== "none" && workspace.folderPath
+          ? await captureCanonicalDirectoryIdentity(workspace.folderPath, { requireCanonicalPath: true })
+          : undefined;
+        const initialAccess = botAdmission ? "full" : accessForWorkspace(agentDir, workspace.id);
+        if (unattended && (!workspace.folderPath || initialAccess !== "full" || accessFor(agentDir, workspace.folderPath) !== "full")) throw new Error("Unattended generation requires explicitly granted full workspace access.");
+        const hasWorkspaceAccess = Boolean(botAdmission || (workspace.folderPath && initialAccess !== "none"));
+        const cwd = hasWorkspaceAccess && workspace.folderPath ? workspace.folderPath : root;
         // Hooks (docs/plans/aiden-hooks-plan.md §7): a workspace chat runs the
         // person's global, workspace and chat hooks; a legacy Bot chat runs
         // global and Bot hooks, for its tools only.
-        const hookTarget = { chatId: chat.id, ...(workspace.folderPath ? { workspaceRoot: workspace.folderPath } : {}) };
+        const hookTarget = { chatId: chat.id, ...(hasWorkspaceAccess && workspace.folderPath ? { workspaceRoot: workspace.folderPath } : {}) };
         // Hook messages reach the person as transcript status events, never the model.
         const reportHookLines = (messages: readonly string[]) => { if (messages.length) send("chat:status", { streamId, phase: "hook_messages", messages: [...messages] }); };
         const hookReport = { report: reportHookLines };
@@ -301,13 +313,26 @@ export function createDaemonChats(agentDir: string) {
           reportHookLines(hookNoticeLines(outcome));
           return outcome;
         };
-        const assertAuthority = async () => {
-          const assertNotStopped = () => { if (entry.stopRequested || owner.isDestroyed()) throw new Error("Generation authority was revoked."); };
+        const assertAuthority = async (signal?: AbortSignal) => {
+          const assertNotStopped = () => {
+            signal?.throwIfAborted();
+            if (entry.stopRequested || owner.isDestroyed()) throw new Error("Generation authority was revoked.");
+          };
           assertNotStopped();
           // A stop can land during this await, and the next step may be the provider request.
           if (botAdmission) { await botAdmission.revalidateBeforeEffect(); assertNotStopped(); return; }
           const current = (await workspaceStore(agentDir).load()).find((item) => item.id === workspace.id);
-          if (entry.stopRequested || owner.isDestroyed() || current?.folderPath !== workspace.folderPath || (unattended && accessFor(agentDir, cwd) !== "full")) throw new Error("The unattended workspace authority was revoked.");
+          assertNotStopped();
+          if (!current || current.folderPath !== workspace.folderPath) throw new Error("The unattended workspace authority was revoked.");
+          if (!hasWorkspaceAccess) {
+            if (current.access !== declaredAccess) throw new Error("Workspace instruction access changed. Start a new response.");
+            return;
+          }
+          if (pinnedWorkspaceRoot) await assertCanonicalDirectoryIdentity(pinnedWorkspaceRoot);
+          const currentTier = accessForWorkspace(agentDir, workspace.id);
+          if (unattended && (currentTier !== "full" || accessFor(agentDir, cwd) !== "full")) throw new Error("The unattended workspace authority was revoked.");
+          if (currentTier === "none" || accessFor(agentDir, cwd) === "none") throw new Error("Workspace instruction access changed. Start a new response.");
+          assertNotStopped();
         };
         const runtime = await createCliModelRuntime(agentDir);
         const found = runtime.getModel(params.providerId, params.model);
@@ -371,7 +396,7 @@ export function createDaemonChats(agentDir: string) {
         // A new turn on the chat ends the warmer its last reply left, even one that does not warm.
         adoptIdleWarmer(chat.id, idleWarmer);
         const botTools = botAdmission ? await bots!.tools(botAdmission) : [];
-        const codingTools = !botAdmission && workspace.folderPath ? cliWorkspaceCodingTools(cwd) : [];
+        const codingTools = !botAdmission && hasWorkspaceAccess ? cliWorkspaceCodingTools(cwd) : [];
         const additionalNames: string[] = [];
         const registeredTools: { readonly name: string; readonly label?: string }[] = [];
         // Activity shows MCP tools by their server label, not the generated name.
@@ -380,8 +405,8 @@ export function createDaemonChats(agentDir: string) {
         // no-memory, never brick the generation (desktop parity: llm-client
         // warns and continues without memory).
         const toldFacts = memoryFactsTold.get(chat.id) ?? new Set<string>();
-        if (!botAdmission) memoryFactsTold.set(chat.id, toldFacts);
-        const memory = botAdmission || !workspace.folderPath ? undefined : await createMemoryInlineExtension({ agentDir, workspaceRoot: cwd, readOnly: unattended, toldFacts })
+        if (!botAdmission && hasWorkspaceAccess) memoryFactsTold.set(chat.id, toldFacts);
+        const memory = botAdmission || !hasWorkspaceAccess ? undefined : await createMemoryInlineExtension({ agentDir, workspaceRoot: cwd, readOnly: unattended, toldFacts })
           .catch((error: unknown) => {
             process.stderr.write(`[daemon-chats] memory unavailable: ${error instanceof Error ? error.message : error}\n`);
             return { name: "aiden-memory", factory: () => undefined };
@@ -394,10 +419,18 @@ export function createDaemonChats(agentDir: string) {
           createAdvisorInlineExtension({ agentDir }),
           createArtifactsExtension(agentDir, { visuals }),
         ];
-        if (!botAdmission && workspace.folderPath) {
+        if (!botAdmission && hasWorkspaceAccess) {
           const web = await createWebSearchInlineExtension({ agentDir });
           if (web) extensions.push(web);
         }
+        const agentsInstructions = botAdmission ? undefined : await createCliChatSessionInstructions({
+          globalRoot: agentDir,
+          workspaceRoot: hasWorkspaceAccess ? cwd : undefined,
+          userDataDir: agentDir,
+          chatId: chat.id,
+          revalidate: assertAuthority,
+          onNotices: (notices) => send("chat:status", { streamId, phase: "agents_instructions_limited", notices }),
+        }, entry.abort.signal);
         const additionalExtensions = extensions.map((extension): InlineExtension => ({
           name: extension.name,
           factory: (pi) => (typeof extension === "function" ? extension : extension.factory)(new Proxy(pi, { get(target, key, receiver) {
@@ -412,8 +445,8 @@ export function createDaemonChats(agentDir: string) {
           } })),
         }));
         const sessionSettings = daemonSettingsManager(cwd, agentDir, { attended, longRetention: turnCache.retention === "long" });
-        const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
-          extensionFactories: [...additionalExtensions, createPromptCacheBreakpointsInlineExtension(stableHead), { name: "aiden-daemon-authority", factory(pi) {
+        const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager: sessionSettings, noContextFiles: true, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
+          extensionFactories: [...(agentsInstructions ? [agentsInstructions.extension] : []), ...additionalExtensions, createPromptCacheBreakpointsInlineExtension(stableHead), { name: "aiden-daemon-authority", factory(pi) {
             pi.on("before_agent_start", async (event) => {
               // SessionStart and UserPromptSubmit context, once per turn, as host data the chat store never
               // saves. Pi journals it after the prompt, in the same shape the desktop journals.
@@ -428,8 +461,8 @@ export function createDaemonChats(agentDir: string) {
             try {
               await assertAuthority();
               if (botAdmission && !botTools.some((tool) => tool.name === event.toolName)) return { block: true, reason: "This tool is outside the Bot capability grant." };
-              const tier = botAdmission ? "full" : workspace.folderPath ? accessFor(agentDir, cwd) : "none";
-              if (tier === "none") return { block: true, reason: "Workspace tools are disabled." };
+              const tier = botAdmission ? "full" : hasWorkspaceAccess ? accessForWorkspace(agentDir, workspace.id) : "none";
+              if (tier === "none" || (!botAdmission && accessFor(agentDir, cwd) === "none")) return { block: true, reason: "Workspace tools are disabled." };
               if (!botAdmission && (event.toolName === "write_file" || event.toolName === "edit_file") && daemonWriteTargetsProtectedConfig(cwd, event.input)) return { block: true, reason: PROTECTED_AGENT_CONFIG_WRITE_MESSAGE };
               // PreToolUse runs after Aiden's own rules allowed the call, so a
               // hook can only tighten them; its updatedInput is not applied.
@@ -449,7 +482,7 @@ export function createDaemonChats(agentDir: string) {
               const outcome = await approvals.request({ streamId, toolCallId: event.toolCallId, toolName: event.toolName, summary: hookAsks ? `${daemonApprovalSummary(event.toolName, event.input)}\n\n${hookAskText(hooked).slice(0, HOOK_ASK_SUMMARY_CHARS)}` : daemonApprovalSummary(event.toolName, event.input), ...(reading ? { reading } : {}) }, entry.abort.signal, owner.documentId,
                 ({ approvalId, toolCallId, toolName, summary, reading: shown }) => send("chat:approval", { streamId, approvalId, toolCallId, toolName, summary, ...(shown ? { reading: shown } : {}) }));
               await assertAuthority();
-              if (outcome !== "allowed" || JSON.stringify(event.input) !== original || accessFor(agentDir, cwd) === "none") return { block: true, reason: "The tool request was denied, changed or expired." };
+              if (outcome !== "allowed" || JSON.stringify(event.input) !== original || accessForWorkspace(agentDir, workspace.id) === "none" || accessFor(agentDir, cwd) === "none") return { block: true, reason: "The tool request was denied, changed or expired." };
             }
             catch (error) { return { block: true, reason: error instanceof Error ? error.message : String(error) }; }
           });
@@ -501,7 +534,7 @@ export function createDaemonChats(agentDir: string) {
           : inner(requestModel, context, requestOptions);
         const { session } = await createAgentSession({ cwd, agentDir, settingsManager: sessionSettings, modelRuntime: runtime, model,
           thinkingLevel: params.thinkingLevel, resourceLoader: loader, sessionManager: manager,
-          tools: botAdmission ? botTools.map((tool) => tool.name) : workspace.folderPath ? [...codingTools.map((tool) => tool.name), ...additionalNames] : [],
+          tools: botAdmission ? botTools.map((tool) => tool.name) : hasWorkspaceAccess ? [...codingTools.map((tool) => tool.name), ...additionalNames] : [],
         });
         entry.session = session;
         // A hook's `continue: false` ends the run once the current tool batch finishes.
@@ -511,6 +544,8 @@ export function createDaemonChats(agentDir: string) {
           return hookStop !== undefined ? { action: "end" } : decision ?? undefined;
         };
         await session.bindExtensions({ mode: "rpc" });
+        if (agentsInstructions) agentsInstructions.bindSession(session);
+        else bindCliSessionAuthority(session, assertAuthority);
         await assertAuthority();
         unsubscribe = session.subscribe((event) => {
           watchdog.activity(event);

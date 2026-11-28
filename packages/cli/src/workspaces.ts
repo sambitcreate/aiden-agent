@@ -12,12 +12,35 @@ export type AccessTier = "full" | "ask" | "none";
 export interface CliWorkspace { id: string; name: string; folderPath: string; access: AccessTier; scratch?: true; createdAt?: number; updatedAt?: number; memoryEnabled?: boolean; managedWorktree?: import("../../../main/services/types.js").ManagedWorktree; }
 export const workspaceId = (folder: string) => `cli-${createHash("sha256").update(folder).digest("hex").slice(0, 24)}`;
 export const workspaceStore = (agentDir: string) => new JsonStore<CliWorkspace[]>(join(agentDir, "workspaces.json"), []);
+function assertValidAccessTier(tier: unknown): AccessTier {
+  if (tier !== "ask" && tier !== "full" && tier !== "none") throw new Error("Invalid workspace access tier.");
+  return tier;
+}
+function canonicalFolderMatches(folderPath: string): boolean {
+  if (!folderPath) return false;
+  try { return realpathSync(folderPath) === folderPath; }
+  catch { return false; }
+}
 export function accessFor(agentDir: string, cwd: string): AccessTier {
-  const canonical = realpathSync(cwd);
+  if (!cwd) return "none";
+  let canonical: string;
+  try { canonical = realpathSync(cwd); }
+  catch { return "none"; }
   const entries = readJson<CliWorkspace[]>(join(agentDir, "workspaces.json"), []);
-  const tier = entries.find((entry) => entry.folderPath === canonical)?.access;
-  if (tier !== undefined && !["ask", "full", "none"].includes(tier)) throw new Error("Invalid workspace access tier.");
-  return tier ?? "ask";
+  const entry = entries.find((item) => item.folderPath === canonical);
+  if (!entry) return "none";
+  const tier = assertValidAccessTier(entry.access);
+  if (tier === "none" || !canonicalFolderMatches(entry.folderPath)) return "none";
+  return tier;
+}
+export function accessForWorkspace(agentDir: string, workspaceId: string): AccessTier {
+  if (!workspaceId) return "none";
+  const entries = readJson<CliWorkspace[]>(join(agentDir, "workspaces.json"), []);
+  const entry = entries.find((item) => item.id === workspaceId);
+  if (!entry) return "none";
+  const tier = assertValidAccessTier(entry.access);
+  if (tier === "none" || !canonicalFolderMatches(entry.folderPath)) return "none";
+  return tier;
 }
 /**
  * Refuse work in a workspace whose folder is gone, as the desktop does,

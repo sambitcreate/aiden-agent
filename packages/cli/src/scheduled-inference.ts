@@ -6,6 +6,11 @@ import type { ScheduledTask } from "../../../main/services/types.js";
 import { assertScheduledMcpServerBindings } from "../../../main/services/schedule-mcp-binding.js";
 import { withoutMessageThreads } from "../../../main/services/pi-message-threads.js";
 import { daemonSettingsManager } from "./daemon-session-settings.ts";
+import {
+  assertCanonicalDirectoryIdentity,
+  captureCanonicalDirectoryIdentity,
+  createCliScheduledSessionInstructions,
+} from "./cli-agents-instructions.ts";
 import { createPromptCacheBreakpointsInlineExtension } from "./extensions/prompt-cache-breakpoints.ts";
 import { createCliModelRuntime } from "./providers.ts";
 import { createCliMcpPool } from "./mcp.ts";
@@ -66,8 +71,11 @@ export async function runScheduledInference(agentDir: string, cwd: string, task:
   combined.addEventListener("abort", abort, { once: true });
   const watchdog = createGenerationWatchdog((reason) => controller.abort(new Error(reason === "inactive"
     ? "Scheduled inference was inactive for five minutes." : "Scheduled inference reached its six-hour limit.")));
-  const check = async () => {
-    combined.throwIfAborted(); await assertAuthority();
+  let pinnedWorkspaceRoot: Awaited<ReturnType<typeof captureCanonicalDirectoryIdentity>> | undefined;
+  const check = async (requestSignal?: AbortSignal) => {
+    combined.throwIfAborted(); requestSignal?.throwIfAborted();
+    await assertAuthority();
+    if (pinnedWorkspaceRoot) await assertCanonicalDirectoryIdentity(pinnedWorkspaceRoot);
     const servers = await pool.listServers();
     const selected = (task.mcpServerIds ?? []).map((id) => {
       // A server switched off for the model fails the run instead of running without it.
@@ -76,9 +84,10 @@ export async function runScheduledInference(agentDir: string, cwd: string, task:
       return server;
     });
     assertScheduledMcpServerBindings(selected, task.mcpServerBindings ?? []);
-    combined.throwIfAborted(); return selected;
+    combined.throwIfAborted(); requestSignal?.throwIfAborted(); return selected;
   };
   try {
+    pinnedWorkspaceRoot = await captureCanonicalDirectoryIdentity(cwd);
     const runtime = await createCliModelRuntime(agentDir), found = runtime.getModel(task.providerId!, task.model!);
     if (!found) throw new Error("Scheduled provider/model is unavailable.");
     const model = withoutMessageThreads(found);
@@ -86,17 +95,26 @@ export async function runScheduledInference(agentDir: string, cwd: string, task:
     const tools: AgentTool[] = (await Promise.all(selected.map((server) => pool.agentTools(server, combined)))).flat();
     tools.push(...cliWorkspaceCodingTools(cwd, task.permission !== "full"));
     if (task.webSearchEnabled) { const tool = await createCliWebSearch(agentDir).toolForGeneration(); if (!tool) throw new Error("Scheduled Web Search is unavailable."); tools.push(tool); }
-    const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
-      extensionFactories: [createPromptCacheBreakpointsInlineExtension(() => undefined), { name: "aiden-schedule-authority", factory(pi) {
+    const agentsInstructions = await createCliScheduledSessionInstructions({
+      agentDir,
+      scheduleKey: task.id || cwd,
+      globalRoot: agentDir,
+      workspaceRoot: (task.permission as string) === "none" ? undefined : cwd,
+      revalidate: async (requestSignal) => { await check(requestSignal); },
+    }, combined);
+    const settingsManager = daemonSettingsManager(cwd, agentDir, { attended: false });
+    const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager, noContextFiles: true, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
+      extensionFactories: [agentsInstructions.extension, createPromptCacheBreakpointsInlineExtension(() => undefined), { name: "aiden-schedule-authority", factory(pi) {
         for (const tool of tools) pi.registerTool({ ...tool, label: tool.label ?? tool.name });
         pi.on("tool_call", async () => { try { if (++calls > 64) throw new Error("Scheduled tool budget exhausted."); await check(); } catch (error) { return { block: true, reason: String(error) }; } });
       } }],
     });
     await loader.reload();
-    const created = await createAgentSession({ cwd, agentDir, settingsManager: daemonSettingsManager(cwd, agentDir, { attended: false }), modelRuntime: runtime, model, sessionManager: SessionManager.inMemory(cwd), resourceLoader: loader,
+    const created = await createAgentSession({ cwd, agentDir, settingsManager, modelRuntime: runtime, model, sessionManager: SessionManager.inMemory(cwd), resourceLoader: loader,
       tools: tools.map(({ name }) => name),
     });
     session = created.session;
+    agentsInstructions.bindSession(session);
     removeEvents = session.subscribe((event) => {
       watchdog.activity(event);
       if (event.type === "turn_start" && ++turns > 24) controller.abort(new Error("Scheduled turn budget exhausted."));

@@ -2,12 +2,14 @@
 // accepted and refused turns, what a provider and the chat store actually saw,
 // what a client was told, and which resources stay held.
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { fork } from "node:child_process";
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { getCacheWarmingDelayMs, normalizeContext } from "@earendil-works/pi-ai";
 import { ModelRegistry } from "@earendil-works/pi-coding-agent";
@@ -469,7 +471,9 @@ test("access revoked during an approval wait wins over a later allow", async (t)
   await api.workspaceCommand(f.dir, ["access", f.workspace.id, "none"]);
   assert.equal(f.daemon.llmClient.approve(approval.approvalId, "allow", owner.documentId), true);
   await f.daemon.llmClient.waitForChatIdle("revoke-approval");
-  assert.doesNotMatch(toolResultSeen(f.requests[1]), /visible\.txt/u);
+  assert.equal(owner.of("chat:tool").filter((event) => event.phase === "result").length, 0);
+  assert.equal(f.requests.length, 1, "revalidation aborts before the next provider request");
+  assert.equal(owner.of("chat:error").length, 1);
 });
 
 test("a tool request too large for the phone is refused without a prompt", async (t) => {
@@ -1495,3 +1499,244 @@ test("CLI bridge runtimes send XHIGH thinkingLevel for Gemini 4 models through r
     thinkingLevel: "XHIGH",
   });
 });
+
+async function separatedWorkspaceFixture(t) {
+  const root = mkdtempSync(join(tmpdir(), "aiden-workspace-gate-"));
+  const agentDir = join(root, "agent");
+  const wsDir = join(root, "workspace");
+  const relocatedDir = join(root, "relocated");
+  mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+  mkdirSync(wsDir, { recursive: true, mode: 0o700 });
+  const steps = [], requests = [];
+  const server = createServer(async (request, response) => {
+    let body = ""; for await (const part of request) body += part;
+    requests.push(JSON.parse(body));
+    const step = steps.shift() ?? reply("Done");
+    if (step !== reject) response.writeHead(200, { "content-type": "text/event-stream" });
+    step(response);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const baseUrl = `http://127.0.0.1:${server.address().port}/v1`;
+  const testModel = { id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+  api.atomicJson(join(agentDir, "models.json"), {
+    providers: { "cli-test": { api: "openai-completions", baseUrl, apiKey: "test-only", models: [testModel] } },
+  });
+  const daemon = api.createDaemonChats(agentDir);
+  t.after(async () => {
+    await daemon.stop();
+    server.closeAllConnections(); server.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+  return { root, agentDir, wsDir, relocatedDir, daemon, steps, requests };
+}
+
+test("none workspaces omit workspace AGENTS.md, keep global AGENTS.md, block list_dir across symlink relocation, and run when deleted", async (t) => {
+  const { agentDir, wsDir, relocatedDir, daemon, steps, requests } = await separatedWorkspaceFixture(t);
+  const canary = "DOTENV_CANARY_NONE_WORKSPACE_9812";
+  writeFileSync(join(wsDir, ".env"), `API_KEY=${canary}\n`);
+  writeFileSync(join(wsDir, "visible.txt"), "workspace-secret-listing");
+  symlinkSync(".env", join(wsDir, "AGENTS.md"));
+  writeFileSync(join(agentDir, "AGENTS.md"), "Global rule: stay concise.");
+
+  const workspace = await api.workspaceCommand(agentDir, ["add", wsDir]);
+  await api.workspaceCommand(agentDir, ["access", workspace.id, "none"]);
+  assert.equal(api.accessFor(agentDir, wsDir), "none");
+  assert.equal(api.accessForWorkspace(agentDir, workspace.id), "none");
+
+  steps.push(reply("First answer"));
+  const first = await beginTurn({ daemon, workspace }, "none-turn-1");
+  await daemon.llmClient.waitForChatIdle("none-turn-1");
+  assert.equal(first.owner.of("chat:error").length, 0);
+  assert.equal(first.owner.of("chat:done")[0].content, "First answer");
+  assert.equal(requests.length, 1);
+  const firstPayload = JSON.stringify(requests[0]);
+  assert.doesNotMatch(firstPayload, new RegExp(canary, "u"));
+  assert.match(firstPayload, /Global rule: stay concise\./u);
+
+  renameSync(wsDir, relocatedDir);
+  symlinkSync(relocatedDir, wsDir);
+  assert.equal(api.accessFor(agentDir, wsDir), "none");
+  assert.equal(api.accessForWorkspace(agentDir, workspace.id), "none");
+
+  steps.push(callTool("list_dir", { path: "." }), reply("Second answer"));
+  const second = await beginTurn({ daemon, workspace }, "none-turn-2");
+  await daemon.llmClient.waitForChatIdle("none-turn-2");
+  assert.equal(second.owner.of("chat:approval").length, 0);
+  assert.equal(second.owner.of("chat:done")[0].content, "Second answer");
+  assert.doesNotMatch(JSON.stringify(requests), new RegExp(canary, "u"));
+  assert.doesNotMatch(JSON.stringify(requests), /workspace-secret-listing/u);
+
+  rmSync(wsDir, { recursive: true, force: true });
+  rmSync(relocatedDir, { recursive: true, force: true });
+  assert.equal(api.accessFor(agentDir, wsDir), "none");
+
+  steps.push(reply("Deleted folder answer"));
+  const third = await beginTurn({ daemon, workspace }, "none-turn-deleted");
+  await daemon.llmClient.waitForChatIdle("none-turn-deleted");
+  assert.equal(third.owner.of("chat:error").length, 0);
+  assert.equal(third.owner.of("chat:done")[0].content, "Deleted folder answer");
+});
+
+test("symlinked and hard-linked AGENTS.md fail closed in ask, full, and runScheduledInference while regular AGENTS.md loads", async (t) => {
+  const { agentDir, wsDir, daemon, steps, requests } = await separatedWorkspaceFixture(t);
+  const canary = "DOTENV_CANARY_LINKED_AGENTS_7731";
+  writeFileSync(join(wsDir, ".env"), `TOKEN=${canary}\n`);
+  symlinkSync(".env", join(wsDir, "AGENTS.md"));
+
+  const workspace = await api.workspaceCommand(agentDir, ["add", wsDir]);
+  const scheduledTask = {
+    id: "sched-agents",
+    name: "Check",
+    mode: "llm",
+    prompt: "Summarize status",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    permission: "full",
+    enabled: true,
+    workspaceId: workspace.id,
+    providerId: "cli-test",
+    model: "test",
+    createdAt: 1,
+    updatedAt: 1,
+  };
+
+  for (const tier of ["ask", "full"]) {
+    await api.workspaceCommand(agentDir, ["access", workspace.id, tier]);
+    const turn = await beginTurn({ daemon, workspace }, `symlink-${tier}`);
+    await daemon.llmClient.waitForChatIdle(`symlink-${tier}`);
+    assert.equal(turn.owner.of("chat:done").length, 0);
+    assert.equal(turn.owner.of("chat:error").length, 1);
+    assert.match(turn.owner.of("chat:error")[0].message, /regular file with exactly one link/u);
+    assert.equal(requests.length, 0, `no provider request sent for symlinked AGENTS.md in ${tier} mode`);
+  }
+
+  await assert.rejects(
+    api.runScheduledInference(agentDir, wsDir, scheduledTask, new AbortController().signal, async () => {}),
+    /regular file with exactly one link/u,
+  );
+  assert.equal(requests.length, 0, "no provider request sent for symlinked AGENTS.md in runScheduledInference");
+
+  unlinkSync(join(wsDir, "AGENTS.md"));
+  linkSync(join(wsDir, ".env"), join(wsDir, "AGENTS.md"));
+  const hardLinked = await beginTurn({ daemon, workspace }, "hardlink-full");
+  await daemon.llmClient.waitForChatIdle("hardlink-full");
+  assert.equal(hardLinked.owner.of("chat:error").length, 1);
+  assert.match(hardLinked.owner.of("chat:error")[0].message, /regular file with exactly one link/u);
+  await assert.rejects(
+    api.runScheduledInference(agentDir, wsDir, scheduledTask, new AbortController().signal, async () => {}),
+    /regular file with exactly one link/u,
+  );
+  assert.equal(requests.length, 0, "no provider request sent for hard-linked AGENTS.md");
+
+  unlinkSync(join(wsDir, "AGENTS.md"));
+  writeFileSync(join(wsDir, "AGENTS.md"), "Workspace rule: prefer pure functions.");
+  writeFileSync(join(agentDir, "AGENTS.md"), "Global rule: verify edge cases.");
+
+  for (const tier of ["ask", "full"]) {
+    await api.workspaceCommand(agentDir, ["access", workspace.id, tier]);
+    steps.push(reply(`Loaded ${tier}`));
+    const turn = await beginTurn({ daemon, workspace }, `regular-${tier}`);
+    await daemon.llmClient.waitForChatIdle(`regular-${tier}`);
+    assert.equal(turn.owner.of("chat:error").length, 0);
+    assert.equal(turn.owner.of("chat:done")[0].content, `Loaded ${tier}`);
+    const payload = JSON.stringify(requests.at(-1));
+    assert.match(payload, /Workspace rule: prefer pure functions\./u);
+    assert.match(payload, /Global rule: verify edge cases\./u);
+    assert.doesNotMatch(payload, new RegExp(canary, "u"));
+  }
+
+  steps.push(reply("Scheduled regular answer"));
+  const scheduledOutput = await api.runScheduledInference(agentDir, wsDir, scheduledTask, new AbortController().signal, async () => {});
+  assert.equal(scheduledOutput, "Scheduled regular answer");
+  const scheduledPayload = JSON.stringify(requests.at(-1));
+  assert.match(scheduledPayload, /Workspace rule: prefer pure functions\./u);
+  assert.match(scheduledPayload, /Global rule: verify edge cases\./u);
+  assert.doesNotMatch(scheduledPayload, new RegExp(canary, "u"));
+});
+
+test("workspace .aiden settings stay untrusted and subagent-worker ignores workspace AGENTS.md and .aiden prompts", async (t) => {
+  const { agentDir, wsDir, daemon, steps, requests } = await separatedWorkspaceFixture(t);
+  const dotenvCanary = "SUBAGENT_DOTENV_CANARY_4419";
+  const systemCanary = "UNTRUSTED_PROJECT_SYSTEM_CANARY_4419";
+  const appendCanary = "UNTRUSTED_PROJECT_APPEND_CANARY_4419";
+
+  mkdirSync(join(wsDir, ".aiden"), { recursive: true });
+  writeFileSync(join(wsDir, ".aiden", "settings.json"), JSON.stringify({ packages: ["npm:untrusted-workspace-pkg"] }));
+  writeFileSync(join(wsDir, ".aiden", "SYSTEM.md"), systemCanary);
+  writeFileSync(join(wsDir, ".aiden", "APPEND_SYSTEM.md"), appendCanary);
+  writeFileSync(join(wsDir, "AGENTS.md"), "Regular workspace instruction.");
+
+  assert.deepEqual(api.daemonSettingsManager(wsDir, agentDir, { attended: true }).getPackages(), []);
+  assert.deepEqual(api.subagentWorkerSettingsManager(wsDir, agentDir).getPackages(), []);
+
+  const workspace = await api.workspaceCommand(agentDir, ["add", wsDir]);
+  await api.workspaceCommand(agentDir, ["access", workspace.id, "full"]);
+  steps.push(reply("Checked"));
+  const turn = await beginTurn({ daemon, workspace }, "untrusted-project-settings");
+  await daemon.llmClient.waitForChatIdle("untrusted-project-settings");
+  assert.equal(turn.owner.of("chat:done")[0].content, "Checked");
+  const chatPayload = JSON.stringify(requests.at(-1));
+  assert.doesNotMatch(chatPayload, new RegExp(systemCanary, "u"));
+  assert.doesNotMatch(chatPayload, new RegExp(appendCanary, "u"));
+
+  unlinkSync(join(wsDir, "AGENTS.md"));
+  writeFileSync(join(wsDir, ".env"), `SECRET=${dotenvCanary}\n`);
+  symlinkSync(".env", join(wsDir, "AGENTS.md"));
+
+  steps.push(reply("Child finished"));
+  const workerEntry = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "app", "subagent-worker.js");
+  const child = fork(workerEntry, [], { cwd: wsDir, stdio: ["ignore", "ignore", "pipe", "ipc"] });
+  const events = [];
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  const done = new Promise((resolve, reject) => {
+    child.on("message", (msg) => {
+      events.push(msg);
+      if (msg?.type === "done") resolve();
+      if (msg?.type === "failure") reject(new Error(msg.message));
+    });
+    child.on("error", reject);
+    child.on("exit", (code) => { if (code && !events.some((item) => item?.type === "done")) reject(new Error(`Worker exited ${code}`)); });
+  });
+  child.send({
+    type: "start",
+    agentDir,
+    cwd: wsDir,
+    provider: "cli-test",
+    model: "test",
+    prompt: "Inspect",
+    systemPrompt: "Trusted parent system prompt.",
+    messages: [],
+    tools: [],
+  });
+  await done;
+  await exited;
+  const workerPayload = JSON.stringify(requests.at(-1));
+  assert.match(workerPayload, /Trusted parent system prompt\./u);
+  assert.doesNotMatch(workerPayload, new RegExp(dotenvCanary, "u"));
+  assert.doesNotMatch(workerPayload, new RegExp(systemCanary, "u"));
+  assert.doesNotMatch(workerPayload, new RegExp(appendCanary, "u"));
+});
+
+test("relocating an active workspace behind a symlink mid-turn blocks tools and aborts before the next provider request", async (t) => {
+  const { agentDir, wsDir, relocatedDir, daemon, steps, requests } = await separatedWorkspaceFixture(t);
+  writeFileSync(join(wsDir, "visible.txt"), "do-not-expose");
+  const workspace = await api.workspaceCommand(agentDir, ["add", wsDir]);
+  await api.workspaceCommand(agentDir, ["access", workspace.id, "ask"]);
+
+  steps.push(callTool("list_dir", { path: "." }), reply("Unreached"));
+  const { owner } = await beginTurn({ daemon, workspace }, "mid-turn-relocate");
+  const approval = await owner.next("chat:approval");
+
+  renameSync(wsDir, relocatedDir);
+  symlinkSync(relocatedDir, wsDir);
+  assert.equal(api.accessFor(agentDir, wsDir), "none");
+  assert.equal(api.accessForWorkspace(agentDir, workspace.id), "none");
+
+  assert.equal(daemon.llmClient.approve(approval.approvalId, "allow", owner.documentId), true);
+  await daemon.llmClient.waitForChatIdle("mid-turn-relocate");
+  assert.equal(owner.of("chat:tool").filter((event) => event.phase === "result").length, 0);
+  assert.equal(requests.length, 1, "revalidation aborts before sending a follow-up request");
+  assert.equal(owner.of("chat:error").length, 1);
+  assert.doesNotMatch(JSON.stringify(requests), /do-not-expose/u);
+});
+

@@ -54,7 +54,7 @@ export function profileKeepsLongPromptCache(agentDir: string): boolean {
 
 /** The settings a daemon AgentSession reads: Pi's own, with warming set by the profile and the run, and Codex's transport. */
 export function daemonSettingsManager(cwd: string, agentDir: string, warming: DaemonSessionWarming): SettingsManager {
-  const settings = SettingsManager.create(cwd, agentDir);
+  const settings = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
   // Read once per session, so a changed setting reaches the next turn.
   const mode = warming.attended && !warming.longRetention && profileWarmsCaches(agentDir) ? "streaming" : "off";
   settings.getCacheWarmingMode = () => mode;
