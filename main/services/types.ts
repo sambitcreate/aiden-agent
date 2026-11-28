@@ -1,243 +1,105 @@
-import type { McpExposure } from "../../renderer/shared/mcp-exposure.js";
-import type { AidenLiveSettingsFields } from "../../renderer/shared/aiden-live-settings.js";
-import type { ChatOwnerV1 } from "../../renderer/shared/chat-visibility.js";
+// Shared backend data types for the AI chat client. Renderer-safe wire shapes
+// live in `renderer/shared/ipc-*-contracts.ts`; main-only protocol, routine,
+// and persistence extensions are layered here so private fields never leak.
+
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { BotRoutineFailure } from "../../renderer/shared/bot-routine-failure.js";
 import type { BotRoutineSchedule } from "../../renderer/shared/bot-routine-schedule.js";
-import type { CustomModelOptions } from "../../renderer/shared/custom-model-options.js";
-import type { CompactionEngine, CompactionModelOverrides } from "../../renderer/shared/compaction.js";
-// Shared backend/renderer data types for the AI chat client.
-
-import type { AppearanceConfig } from "../../renderer/shared/appearance.js";
-import type { AnthropicThinkingLevel } from "../../renderer/shared/anthropic-thinking.js";
-import type { CodexThinkingLevel } from "../../renderer/shared/codex-thinking.js";
-import type { GenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
-import type { GenerationTimeline } from "../../renderer/shared/generation-timeline.js";
-import type { AssistantTurnStatsV1 } from "../../renderer/shared/assistant-turn-stats.js";
-import type { GoogleThinkingLevel } from "../../renderer/shared/google-thinking.js";
-import type { KeybindingOverridesV1 } from "../../renderer/shared/keybindings.js";
-import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
-import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
-import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
-import type { ChatHtmlArtifactV1, HtmlArtifactPlacementV1, ChatImagePlacementV1 } from "../../renderer/shared/chat-artifacts.js";
-import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
-import type { VisualSnapshotRefV1 } from "../../renderer/shared/visual-snapshots.js";
 import type { GrabbedElementContextV1 } from "../../renderer/shared/browser-element-grab.js";
-import type { ChatForkLineageV1 } from "../../renderer/shared/chat-copy-contract.js";
-import type { ChatStartedByV1 } from "../../renderer/shared/chat-started-by.js";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { ProviderArtwork } from "../../renderer/shared/provider-artwork.js";
-import type { WebSearchSettingsV2 } from "./web-search-provider-registry-core.js";
-import type { WebFetchSettingsV1 } from "../../renderer/shared/web-fetch-settings.js";
-import type { HiddenModelsByProvider } from "../../renderer/shared/model-visibility.js";
+import type { GenerationTimeline } from "../../renderer/shared/generation-timeline.js";
+import type {
+  ApprovalDecision,
+  ApprovalRequest,
+  Attachment,
+  AttachmentKind,
+  ChatCore,
+  ChatMessage as SharedChatMessage,
+  ChatMeta as SharedChatMeta,
+  ChatRole,
+  ChatStartParamsBase,
+  ModelCost,
+  ModelInfo,
+  ModelMetadataSource,
+  ScheduledRun as SharedScheduledRun,
+  ScheduledRunResult,
+  ScheduledTask as SharedScheduledTask,
+  ScheduledTaskExecutionProfile,
+  ScheduledTaskInput as SharedScheduledTaskInput,
+  ScheduledTaskMode,
+  ScheduledTaskPermission,
+  ScheduledTaskSettings,
+} from "../../renderer/shared/ipc-chat-schedule-contracts.js";
+import type {
+  Provider,
+  ProviderDeployment,
+  ProviderKind,
+  ProviderModelMetadata,
+  ProviderModelType,
+  StoredProvider,
+} from "../../renderer/shared/ipc-provider-contracts.js";
+import type {
+  AppSettings,
+  AssistantConfig,
+  AssistantSettingsPermission,
+  ChatTitleProviderId,
+  ComputerUseStatus,
+  ComputerUseStatusState,
+  DiscoveredSkill,
+  FoundationModelsConnectionState,
+  FoundationModelsConnectionStatus,
+  GeminiUsageScope,
+  McpServer,
+  McpTransport,
+  Profile,
+  Skill,
+  TelegramProfileSettings,
+  UsageDateRange,
+  UsageDaySummary,
+  UsageModelSummary,
+  UsageSummary,
+  UsageTokenBreakdown,
+  VoiceProvider,
+} from "../../renderer/shared/ipc-settings-usage-contracts.js";
+import type {
+  GitBranches,
+  GitHubPullRequestAvailability,
+  GitHubPullRequestCheck,
+  GitHubPullRequestChecksState,
+  GitHubPullRequestCheckStatus,
+  GitHubPullRequestReviewDecision,
+  GitHubPullRequestStatus,
+  GitHubPullRequestSummary,
+  GitInfo,
+  GitWorktree,
+  ManagedWorktree,
+  Workspace,
+  WorkspacePermission,
+} from "../../renderer/shared/ipc-workspace-git-contracts.js";
 
-export type ProviderKind = "openai" | "anthropic";
+export type {
+  ProviderKind,
+  ProviderDeployment,
+  ProviderModelType,
+  ProviderModelMetadata,
+  StoredProvider,
+  Provider,
+};
 
-export type ProviderDeployment = "local" | "hosted";
-
-export type ProviderModelType = "llm" | "embedding" | "reranker" | "image" | "audio" | "video";
-
-/** Metadata reported by the configured provider during explicit model discovery. */
-export interface ProviderModelMetadata {
-  overrides?: CustomModelOptions;
-  manuallyAdded?: boolean;
-  source: "lmstudio" | "ollama" | "provider";
-  name?: string;
-  type?: ProviderModelType;
-  vision?: boolean;
-  toolCall?: boolean;
-  reasoning?: boolean;
-  /** Distinct Aiden thinking choices supported by this native model. */
-  thinkingLevels?: GenerationThinkingLevel[];
-  /** False when Google's minimum thinking can only be hidden, not disabled. */
-  thinkingCanDisable?: boolean;
-  contextLength?: number;
-  parameterCount?: string;
-  format?: string;
-}
-
-/** A configured connection to an LLM backend (hosted or local). */
-export interface StoredProvider {
-  id: string;
-  kind: ProviderKind;
-  label: string;
-  /** Optional normalized artwork for custom providers. Never contains a filesystem path. */
-  artwork?: ProviderArtwork;
-  /** Base URL including the version segment, e.g. https://api.openai.com/v1 */
-  baseUrl: string;
-  /** Suggested / cached model ids for the picker. */
-  models: string[];
-  /** Provider-reported metadata captured alongside the last explicit discovery. */
-  modelMetadata?: Record<string, ProviderModelMetadata>;
-  /** User-authored model intent, portable independently of discovery cache. */
-  customModelOptions?: Record<string, CustomModelOptions & { manuallyAdded?: boolean }>;
-  defaultModel?: string;
-  /** Whether this provider requires an API key (local backends often don't). */
-  needsKey: boolean;
-  /**
-   * Where inference runs. When unset, Aiden infers from the base URL (loopback =
-   * local). Custom / Tailscale servers can override so loading UX and usage
-   * treat them as local even off localhost.
-   */
-  deployment?: ProviderDeployment;
-  /** Explicit opt-in for an existing llama-server native classifier endpoint. */
-  llamaCppClassifierEnabled?: boolean;
-  /** Legacy marker retained only for persisted custom-connection migration. */
-  isPreset?: boolean;
-  /**
-   * A provider supplied by Pi itself. Its endpoint, models, authentication,
-   * and stream transport are Pi-owned rather than renderer-configurable.
-   */
-  isBuiltin?: boolean;
-}
-
-/** Provider as exposed to the renderer — `hasKey` is derived, the key itself never leaves the backend. */
-export interface Provider extends StoredProvider {
-  hasKey: boolean;
-  /** True only when Aiden owns a stored credential it can remove. */
-  canLogout?: boolean;
-  /** Former custom IDs remapped during a safe provider-identity migration. */
-  legacyIds?: string[];
-  /** Built-in providers: the kind of credential Aiden stores (never the value). */
-  credentialType?: "api_key" | "oauth";
-  /** Built-in API-key providers: custom connectors may use this key on this device (Settings → Providers). */
-  connectorKeySharing?: boolean;
-  /** Pi-owned setup options. No credentials or provider environment values cross IPC. */
-  authMethods?: Array<{
-    type: "api_key" | "oauth";
-    label: string;
-    canLogin: boolean;
-  }>;
-}
-
-/**
- * How much the Pi agent is allowed to do inside a workspace folder.
- * - "full": file/shell tools run without prompting.
- * - "ask":  read-only tools run; writes and shell commands require approval.
- * - "none": file/shell tools are withheld entirely (chat + web/skills/MCP only).
- */
-export type WorkspacePermission = "full" | "ask" | "none";
-
-export interface ManagedWorktree {
-  /** Canonical repository root used to create the worktree. */
-  repositoryPath: string;
-  /** Canonical checkout root; the workspace may point at a nested path inside it. */
-  worktreePath: string;
-  branch: string;
-  /** Stable Git administrative identity; survives worktree moves and branch changes. */
-  worktreeGitDir?: string;
-  /** Aiden marker persisted inside the original Git administrative directory. */
-  ownershipToken?: string;
-  /** Filesystem identity of the original checkout root, used to reject path replacements. */
-  worktreeDevice?: number;
-  worktreeInode?: number;
-  /** HEAD the branch pointed to when Aiden created it; used for safe cleanup. */
-  createdFromHead: string;
-  /**
-   * Worktree-relative ignored paths Aiden provisioned at create time. This is
-   * the authoritative allowlist for snapshot/deletion classification; the
-   * `.worktreeinclude` file is never re-read for lifecycle decisions.
-   */
-  provisionedFiles?: string[];
-}
-
-/** A named working context: an optional folder + a permission level for its chats. */
-export interface Workspace {
-  id: string;
-  name: string;
-  /** Absolute path to the folder Pi operates in (undefined = no folder bound yet). */
-  folderPath?: string;
-  permission: WorkspacePermission;
-  /** Workspace-scoped durable memory. Omitted means enabled. */
-  memoryEnabled?: boolean;
-  /**
-   * Present only when the person chose Customize in Workspace settings: this
-   * workspace's own approval mode instead of the global one. Earlier releases
-   * ignore it and read `permission`, which is never wider.
-   */
-  approvalMode?: import("../../renderer/shared/approval-mode.js").ApprovalMode;
-  /** "Allowed in this workspace" grants from Mac cards; removable in Workspace settings. */
-  macGrants?: import("../../renderer/shared/approval-mode.js").WorkspaceMacGrants;
-  /**
-   * Skills (by canonical name) switched off for this workspace's chats. The
-   * model can't see or call them here; typing `$skill` still runs one.
-   * Omitted means every skill that is on in Settings is on here too.
-   */
-  disabledSkills?: string[];
-  /** Connector (MCP server) ids this workspace's chats can't use. Omitted means none. */
-  disabledMcpServerIds?: string[];
-  /** Present only for worktrees created and owned by Aiden. */
-  managedWorktree?: ManagedWorktree;
-  /**
-   * Set when the workspace was created by Scratch chat (a generated
-   * `~/aiden/<slug>` folder). Device-local; Remote projections leave it out.
-   */
-  scratch?: true;
-  /**
-   * Set on the hidden workspace behind a "No workspace" chat: one per chat, in
-   * Aiden's app-data `chats/` folder, using global settings. Never listed as a
-   * workspace row or choice. Device-local; Remote projections leave it out.
-   */
-  noWorkspace?: true;
-  createdAt: number;
-  updatedAt: number;
-}
-
-/** GitHub pull request and check status reported for a workspace branch. */
-export type GitHubPullRequestCheckStatus =
-  | "pending"
-  | "action-required"
-  | "success"
-  | "failure"
-  | "skipped"
-  | "neutral"
-  | "cancelled";
-
-export type GitHubPullRequestChecksState = "passing" | "failing" | "pending";
-
-export type GitHubPullRequestAvailability =
-  | "ready"
-  | "not-repo"
-  | "missing-tool"
-  | "unauthenticated"
-  | "no-pull-request"
-  | "not-github"
-  | "unsupported"
-  | "rate-limited"
-  | "error";
-
-export interface GitHubPullRequestCheck {
-  name: string;
-  status: GitHubPullRequestCheckStatus;
-  description?: string;
-  url?: string;
-}
-
-export type GitHubPullRequestReviewDecision = "approved" | "changes-requested" | "review-required";
-
-export interface GitHubPullRequestSummary {
-  number: number;
-  title: string;
-  url: string;
-  state: "open" | "closed" | "merged";
-  isDraft?: boolean;
-  headBranch: string;
-  baseBranch: string;
-  headSha?: string;
-  author?: string;
-  reviewDecision?: GitHubPullRequestReviewDecision | null;
-  mergeable?: boolean | null;
-  updatedAt?: number;
-  checksState?: GitHubPullRequestChecksState | null;
-  checks: GitHubPullRequestCheck[];
-}
-
-export interface GitHubPullRequestStatus {
-  availability: GitHubPullRequestAvailability;
-  message?: string;
-  /** Epoch ms when a "rate-limited" read may be retried. */
-  retryAt?: number;
-  pullRequest?: GitHubPullRequestSummary;
-}
+export type {
+  WorkspacePermission,
+  ManagedWorktree,
+  Workspace,
+  GitHubPullRequestCheckStatus,
+  GitHubPullRequestChecksState,
+  GitHubPullRequestAvailability,
+  GitHubPullRequestCheck,
+  GitHubPullRequestReviewDecision,
+  GitHubPullRequestSummary,
+  GitHubPullRequestStatus,
+  GitInfo,
+  GitBranches,
+  GitWorktree,
+};
 
 export interface GitHubPullRequestListStatus {
   availability: GitHubPullRequestAvailability;
@@ -284,191 +146,28 @@ export type GitHubPullRequestCreateResult =
   | { kind: "failed"; availability: GitHubPullRequestAvailability; message: string }
   | { kind: "unknown"; message: string };
 
-/** Result of inspecting a folder for git status. */
-export interface GitInfo {
-  isRepo: boolean;
-  branch?: string;
-  /** True when HEAD points directly to a commit rather than a local branch. */
-  detached?: boolean;
-  /** True when the repository has no first commit yet. */
-  unborn?: boolean;
-  /** Number of uncommitted (staged + unstaged + untracked) entries. */
-  uncommitted?: number;
-  upstream?: string;
-  ahead?: number;
-  behind?: number;
-  defaultBranch?: string;
-  hasRemote?: boolean;
-  /** Ahead/behind compare local tracking refs; Aiden never fetches implicitly. */
-  remoteState?: "local-ref";
-}
+export type {
+  ChatRole,
+  AttachmentKind,
+  Attachment,
+  ModelCost,
+  ModelMetadataSource,
+  ModelInfo,
+  ScheduledTaskMode,
+  ScheduledTaskPermission,
+  ScheduledTaskExecutionProfile,
+  ScheduledRunResult,
+  ScheduledTaskSettings,
+  ApprovalRequest,
+  ApprovalDecision,
+};
 
-/** Branch list for the composer's branch picker. */
-export interface GitBranches {
-  isRepo: boolean;
-  current?: string;
-  branches: string[];
-  remoteBranches: string[];
-  /** Uncommitted entry count on the current branch. */
-  uncommitted: number;
-  detached?: boolean;
-  unborn?: boolean;
-  upstream?: string;
-  ahead?: number;
-  behind?: number;
-  defaultBranch?: string;
-  hasRemote?: boolean;
-  remoteState?: "local-ref";
-}
-
-/** One checkout reported by `git worktree list --porcelain -z`. */
-export interface GitWorktree {
-  path: string;
-  head: string;
-  branch?: string;
-  bare: boolean;
-  detached: boolean;
-  current: boolean;
-}
-
-export type ChatRole = "user" | "assistant" | "system";
-
-export type AttachmentKind = "image" | "text";
-
-/**
- * A durable file attached to a chat message. Text files carry inlined `text`.
- * An image carries base64 `data`, a `sha256` naming its file in the chat image
- * store, or both: chat files on disk keep only the hash, and the chat store
- * fills `data` back in for main-process readers.
- */
-export interface Attachment {
-  id: string;
-  name: string;
-  mimeType: string;
-  kind: AttachmentKind;
-  size: number;
-  /** base64 (no data: prefix) for image attachments. */
-  data?: string;
-  /** SHA-256 (lowercase hex) of a stored image's bytes. */
-  sha256?: string;
-  /** Pixel size of a stored image, so a transcript reserves its box before the bytes load. */
-  width?: number;
-  height?: number;
-  /** Renderer only: private `aiden-attachment:` link to a stored image's bytes. */
-  url?: string;
-  /** UTF-8 contents for text/code attachments (truncated). */
-  text?: string;
-}
-
-export interface ChatMessage {
-  id: string;
-  role: ChatRole;
-  content: string;
-  createdAt: number;
-  /** Model that produced an assistant message. */
-  model?: string;
-  /** Deliberately exposed provider reasoning retained on an assistant message. */
-  reasoning?: string;
+export interface ChatMessage extends SharedChatMessage {
   /** Canonical Pi assistant protocol payload; raw errors and diagnostics are excluded. */
   pi?: Omit<AssistantMessage, "diagnostics" | "errorMessage">;
-  /** Closed, renderer-safe terminal provider outcome. */
-  providerFailure?: ProviderFailureV1;
-  /** Files presented with this user or assistant message. */
-  attachments?: Attachment[];
-  /** Browser elements grabbed from Aiden Browser for this user message; linked thumbnails live in `attachments`. */
-  grabbedElements?: GrabbedElementContextV1[];
-  /** Interactive HTML artifacts; bytes remain in the generative-ui store. */
-  appPanels?: import("../../renderer/shared/app-controls").AppControlPanel[];
-  htmlArtifacts?: ChatHtmlArtifactV1[];
-  /** Producing tool call per HTML artifact, so it renders at that point in the reply. */
-  htmlArtifactPlacements?: HtmlArtifactPlacementV1[];
-  /** Producing call (generate_image, display_image or share_image) per image attachment. */
-  imagePlacements?: ChatImagePlacementV1[];
-  /** Native (render_ui) visuals, drawn from Aiden's component catalog. */
-  uiVisuals?: ChatUiVisualV1[];
-  /** Snapshot image (a reserved attachment) per visual, for clients that cannot draw it. */
-  visualSnapshots?: VisualSnapshotRefV1[];
-  /** Safe display-only provenance for an explicitly invoked skill. */
-  skill?: SkillProvenanceV1;
-  /** A user-role follow-up notice (job ended, pull request news, check result), drawn as a card. */
-  notice?: import("../../renderer/shared/agent-notices.js").AgentNoticeV1;
-  /** User messages Aiden Live sent for the person ("By voice"); display-only. */
-  inputSource?: import("../../renderer/shared/chat-input-source.js").ChatInputSourceV1;
-  /** A user message the chat that started this one sent (Phase 5, D7); display-only, desktop only. */
-  fromLeadChat?: true;
-  /** Set when a UserPromptSubmit hook blocked this user message; it never reaches a model. */
-  hookBlocked?: import("./hook-blocked-prompt.js").HookBlockedPromptV1;
-  /** Renderer-safe tool milestones associated with this assistant response. */
-  timeline?: GenerationTimeline;
-  /** Content-free turn duration and provider-reported token totals for the footer. */
-  turnStats?: AssistantTurnStatsV1;
-  /** Bounded references to separately persisted renderer-safe child run records. */
-  subagents?: SubagentMessageReferenceV1;
 }
 
-/** models.dev list price in USD per 1M tokens; only finite, non-negative fields are kept. */
-export interface ModelCost {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-}
-
-export type ModelMetadataSource =
-  | "local"
-  | "provider"
-  | "models-dev"
-  | "fallback";
-
-/** Normalized model metadata after applying local and bundled-source precedence. */
-export interface ModelInfo {
-  detectedCapabilities?: CustomModelOptions;
-  maxImages?: number;
-  video?: boolean;
-  id: string;
-  name?: string;
-  /** Accepts image input (vision). */
-  vision?: boolean;
-  /** Supports tool/function calling. */
-  toolCall?: boolean;
-  /** Exposes reasoning / thinking. */
-  reasoning?: boolean;
-  /** Open-weight / open-source model. */
-  openWeights?: boolean;
-  /** Normalized capability classification; every value except `llm` is non-chat. */
-  modelType?: ProviderModelType;
-  parameterCount?: string;
-  format?: string;
-  contextLength?: number;
-  outputLimit?: number;
-  inputModalities?: string[];
-  /** Training knowledge cutoff (e.g. "2025-05"). */
-  knowledge?: string;
-  releaseDate?: string;
-  /** models.dev list price in USD per 1M tokens. Display-only; never affects limits or routing. */
-  cost?: ModelCost;
-  /** models.dev canonical model id for the matched row. Display-only. */
-  canonicalModelId?: string;
-  metadataSource: ModelMetadataSource;
-  /** True when any trusted metadata source identified the model. */
-  matched: boolean;
-}
-
-export interface ChatMeta {
-  id: string;
-  title: string;
-  /** Workspace this chat belongs to. */
-  workspaceId?: string;
-  /** Main-owned reusable bot identity; absent for ordinary and Assistant chats. */
-  botId?: string;
-  providerId?: string;
-  model?: string;
-  /**
-   * This chat's own reasoning effort for its model, set by an Agent Slider
-   * stop. Absent: the per-model saved level applies. Cleared when the model
-   * changes without a level. Never sent to Aiden Remote.
-   */
-  thinkingLevel?: GenerationThinkingLevel;
+export interface ChatMeta extends SharedChatMeta {
   /** Bounded last visible message text for list projections; never a full history. */
   preview?: string;
   /**
@@ -476,52 +175,13 @@ export interface ChatMeta {
    * projections. Legacy records derive a stable token until their next write.
    */
   summaryRevision?: string;
-  /**
-   * createdAt of the newest persisted assistant message with visible output.
-   * Drives honest unread markers; absent on legacy rows until their next write.
-   */
-  lastAssistantAt?: number;
-  lastAssistantSequence?: number;
-  lastAssistantMessageId?: string;
-  /**
-   * The message at `lastAssistantAt` ended its turn in failure, so an unread
-   * row says Failed instead of showing a new-reply dot. Absent when false.
-   */
-  lastAssistantFailed?: boolean;
-  /** Main-owned provenance for chats created by Fork; absent for ordinary chats and copies. */
-  forkedFrom?: ChatForkLineageV1;
-  /** Main-owned: the chat that started this one through `child_chats`; absent otherwise. */
-  startedBy?: ChatStartedByV1;
-  /** Main-owned feature owner; owned chats never appear in chat listings or Remote. */
-  owner?: ChatOwnerV1;
-  /** Temporary floating chat hidden from sidebar, Inbox, Memory, and Remote until saved or attached. */
-  ephemeral?: true;
-  /** This chat opens in design mode (narrow chat beside the canvas); absent when off. */
-  designMode?: true;
-  createdAt: number;
-  updatedAt: number;
 }
 
-export interface Chat extends ChatMeta {
+export interface Chat extends ChatCore<ChatMessage>, ChatMeta {
   /** Main-owned receipt for an idempotent first-message commit; never renderer-authored. */
   firstMessageCommit?: { turnId: string; fingerprint: string };
-  /**
-   * The user granted Computer Use for this chat ("Allow for this chat" on the
-   * access card). The global Computer Use beta setting remains authoritative.
-   */
-  computerUseAllowed?: boolean;
-  /**
-   * Set while a Computer Use access request waits on missing macOS
-   * permissions, so the chat can offer Continue after the user restarts Aiden.
-   */
-  computerUsePendingContinue?: boolean;
-  messages: ChatMessage[];
 }
 
-export type ScheduledTaskMode = "llm" | "script";
-export type ScheduledTaskPermission = "read-only" | "full";
-export type ScheduledTaskExecutionProfile = "assistant";
-export type ScheduledRunResult = "success" | "error" | "silent" | "blocked" | "skipped";
 /** Why a run was recorded without doing work. */
 export type ScheduledRunSkipReason =
   | "bot_paused"
@@ -539,14 +199,13 @@ export interface ScheduledMcpServerBinding {
   fingerprint: string;
 }
 
-export interface ScheduledTask {
-  id: string;
-  name: string;
-  enabled: boolean;
-  mode: ScheduledTaskMode;
-  cron: string;
-  timezone: string;
-  nextRunAt?: number;
+/** A Bot's own wake-up: when the Bot set it, for the "You set this wake-up at …" framing. */
+export interface BotWakeUpMarker {
+  generation?: string;
+  setAt: number;
+}
+
+export interface ScheduledTask extends SharedScheduledTask {
   /** A claimed Bot fire awaiting a durable run receipt and delivery handoff. */
   pendingRoutineFires?: Array<{
     fireTime: number;
@@ -565,40 +224,10 @@ export interface ScheduledTask {
   }>;
   /** When a Bot routine was last turned back on; failure streaks count only runs after it. */
   enabledAt?: number;
-  lastRunAt?: number;
-  workspaceId?: string;
-  providerId?: string;
-  model?: string;
   /** Main-owned provider-connection fingerprint. Renderer mutations cannot set this field. */
   providerFingerprint?: string;
-  prompt?: string;
-  script?: string;
-  permission: ScheduledTaskPermission;
-  /**
-   * Exact configured MCP server identities approved for unattended use.
-   * Undefined is retained only for legacy non-Assistant Full tasks that
-   * historically inherited every enabled MCP server.
-   */
-  mcpServerIds?: string[];
   /** Main-owned immutable connection fingerprints for Assistant-approved MCP scope. */
   mcpServerBindings?: ScheduledMcpServerBinding[];
-  /** Main-owned runtime profile. Renderer task mutations cannot set this field. */
-  executionProfile?: ScheduledTaskExecutionProfile;
-  /** Explicit Web Search authority. Missing legacy values are always treated as false. */
-  webSearchEnabled?: boolean;
-  chatId?: string;
-  /**
-   * Main-owned: the chat this task was made in, where its runs post. Set once
-   * at creation by the `schedule_task` tool; renderer and phone saves keep it
-   * and cannot set it. Cleared only by "Use its own chat" or by deleting that
-   * chat, after which runs go to the task's own chat (`chatId`).
-   */
-  originChatId?: string;
-  /**
-   * What starts this task instead of a cron schedule (a watch). A task with a
-   * trigger has an empty `cron` and no `nextRunAt`. Never on a Bot routine.
-   */
-  trigger?: import("../../renderer/shared/scheduled-task-trigger.js").ScheduledTaskTrigger;
   /**
    * Main-owned Bot that owns this routine. A Bot routine submits to that Bot's
    * conversation instead of a workspace chat and is hidden from the generic
@@ -611,30 +240,18 @@ export interface ScheduledTask {
   sourceProposalId?: string;
   /** Main-owned: a one-time routine the Bot set for itself with `wake_up`, not one the person made. Set once. */
   wakeUp?: BotWakeUpMarker;
-  notify: boolean;
-  lastResult?: ScheduledRunResult;
-  lastError?: string;
   /**
    * Main-owned: when repeated failed runs last paused this chat task. Only
    * failures after it count toward the next pause. Never on a Bot routine.
    */
   failurePausedAt?: number;
-  createdAt: number;
-  updatedAt: number;
 }
 
-export interface ScheduledRun {
-  id: string;
-  taskId: string;
-  startedAt: number;
-  finishedAt: number;
+export interface ScheduledRun extends SharedScheduledRun {
   /** Private host occurrence facts; old Remote projections must omit these. */
   routineTiming?: import("./bot-routines-port.js").BotRoutineTiming;
-  result: ScheduledRunResult;
   /** Present only when `result` is "skipped". */
   reason?: ScheduledRunSkipReason;
-  output: string;
-  error?: string;
   /** Why an otherwise indistinguishable failure happened. Bot routines only. */
   failure?: BotRoutineFailure;
   /** The reply claimed a step worked that failed (spec §5 S5). Names only, bounded. */
@@ -645,39 +262,17 @@ export interface ScheduledRun {
   byHand?: true;
   /** A `blocked` run that was stopped (cancelled or Aiden quitting), not refused. */
   cancelled?: true;
-  chatId?: string;
 }
 
-export interface ScheduledTaskInput {
-  id?: string;
-  name: string;
-  enabled?: boolean;
-  mode: ScheduledTaskMode;
-  cron: string;
-  timezone?: string;
-  workspaceId?: string;
-  providerId?: string;
-  model?: string;
+export interface ScheduledTaskInput extends SharedScheduledTaskInput {
   /** Main-owned provider-connection fingerprint. Renderer mutations cannot set this field. */
   providerFingerprint?: string;
-  prompt?: string;
-  script?: string;
-  permission?: ScheduledTaskPermission;
-  /** Exact configured MCP servers this task may invoke unattended. */
-  mcpServerIds?: string[];
   /** Main-owned immutable connection fingerprints. Renderer mutations cannot set this field. */
   mcpServerBindings?: ScheduledMcpServerBinding[];
   /** Main-owned runtime profile. Renderer task mutations cannot set this field. */
   executionProfile?: ScheduledTaskExecutionProfile;
-  /** Explicit Web Search authority. New tasks default to false. */
-  webSearchEnabled?: boolean;
   /** Main-owned: the chat a new task posts into. Only read when creating; saves of an existing task keep its binding. */
   originChatId?: string;
-  /**
-   * What starts the task instead of `cron`. Undefined keeps the saved trigger
-   * (older callers never send one); `null` removes it so the task runs on `cron`.
-   */
-  trigger?: import("../../renderer/shared/scheduled-task-trigger.js").ScheduledTaskTrigger | null;
   /** Main-owned Bot routine owner. Renderer schedule mutations cannot set this field. */
   botId?: string;
   /** Main-owned Bot routine schedule; when set, `cron` is derived from it. */
@@ -686,481 +281,35 @@ export interface ScheduledTaskInput {
   sourceProposalId?: string;
   /** Main-owned: the Bot set this one-time routine for itself (`wake_up`). Set once, at creation. */
   wakeUp?: BotWakeUpMarker;
-  notify?: boolean;
 }
 
-/** A Bot's own wake-up: when the Bot set it, for the "You set this wake-up at …" framing. */
-export interface BotWakeUpMarker {
-  generation?: string;
-  setAt: number;
-}
-
-export interface ScheduledTaskSettings {
-  enabled: boolean;
-  defaultMode: ScheduledTaskMode;
-  defaultPermission: ScheduledTaskPermission;
-  defaultMcpEnabled: boolean;
-  defaultNotify: boolean;
-  defaultTimezone: string;
-  /** "Let chats check back later": a workspace chat's agent may set check-backs. */
-  chatCheckBacks: boolean;
-  /** Keep this computer awake while Aiden works (on by default). Desktop-only; not sent to phones. */
-  keepAwakeWhileWorking: boolean;
-}
-
-export type McpTransport = "stdio" | "http";
-
-/** A user-configured MCP server connection. */
-export interface McpServer {
-  id: string;
-  name: string;
-  transport: McpTransport;
-  /** stdio */
-  command?: string;
-  args?: string[];
-  env?: Record<string, string>;
-  /** http / sse */
-  url?: string;
-  headers?: Record<string, string>;
-  /** Remote servers only: authenticate with OAuth (browser sign-in) instead of / in addition to headers. */
-  oauth?: boolean;
-  /** Explicit authorization-server metadata document for custom remote OAuth connections. */
-  authServerMetadataUrl?: string;
-  /**
-   * Custom remote OAuth servers without dynamic registration: a client the
-   * person registered with the provider. Sign-in uses it instead of registering.
-   */
-  oauthClientId?: string;
-  /**
-   * That client's secret. config.json holds only a keychain marker (see
-   * mcp-field-secrets-core.ts); the value never reaches the renderer.
-   */
-  oauthClientSecret?: string;
-  /** Built-in provider reference; requires separate device-local consent before use. */
-  authProvider?: string;
-  /** Optional bounded server description used for tool discovery. */
-  description?: string;
-  /** Set when this record came from the built-in preset catalog (see mcp-presets.ts). */
-  presetId?: string;
-  enabled: boolean;
-  /** How the model reaches this server's tools (default `auto`); see renderer/shared/mcp-exposure.ts. */
-  exposure?: McpExposure;
-  /** Raw remote tool names withheld from every model surface. */
-  hiddenTools?: string[];
-}
-
-/** An Agent Skill — instructions exposed to the model as a callable tool. */
-export interface Skill {
-  id: string;
-  name: string;
-  description: string;
-  instructions: string;
-  enabled: boolean;
-}
-
-/** An Agent Skill discovered on disk from a skill folder (read-only). */
-export interface DiscoveredSkill {
-  /** Omitted legacy metadata permits both invocation surfaces. */
-  modelInvocable?: boolean;
-  userInvocable?: boolean;
-  id: string;
-  name: string;
-  description: string;
-  instructions: string;
-  /** Where it was found. */
-  source: "workspace" | "global";
-  /** Absolute path to the SKILL.md file. */
-  path: string;
-}
-
-export type VoiceProvider = "openai" | "gemini" | "local";
-export type GeminiUsageScope = "transcription_only" | "models_and_transcription";
-
-export type ChatTitleProviderId = "automatic" | "apple-foundation-models" | "chat-model";
-
-export type FoundationModelsConnectionState =
-  | "ready"
-  | "unsupported_os"
-  | "device_not_eligible"
-  | "apple_intelligence_disabled"
-  | "model_preparing"
-  | "helper_unavailable"
-  | "unavailable"
-  | "error";
-
-export interface FoundationModelsConnectionStatus {
-  id: "apple-foundation-models";
-  label: "Apple Foundation Models";
-  state: FoundationModelsConnectionState;
-  detail: string;
-  local: true;
-  titleOnly: true;
-  retryable: boolean;
-}
-
-/** How much the Aiden assistant may do with app settings through its tools. */
-export type AssistantSettingsPermission = "full" | "ask" | "none";
-
-/** Aiden assistant window, hotkey, and proactive-watching settings. */
-export interface AssistantConfig {
-  /** Proactivity master switch. Off by default — nudging is opt-in. */
-  enabled: boolean;
-  hotkeyEnabled: boolean;
-  hotkeyAccelerator: string;
-  /**
-   * Required pin for proactivity. An unattended loop must never inherit
-   * whichever model the user happens to have selected, so the ticker refuses to
-   * run until both of these are set. Interactive Aiden chat still follows
-   * lastProviderId/lastModel.
-   */
-  providerId?: string;
-  model?: string;
-  watchUncommitted: boolean;
-  watchUntouchedProjects: boolean;
-  watchConfigChanges: boolean;
-  pollIntervalMinutes: number;
-  untouchedThresholdDays: number;
-  quietHoursEnabled: boolean;
-  /** "HH:MM" local time. */
-  quietHoursStart: string;
-  quietHoursEnd: string;
-  maxNudgesPerDay: number;
-  urgencyThreshold: number;
-  settingsPermission: AssistantSettingsPermission;
-}
-
-/** Persisted lightweight app settings. */
-export interface AppSettings extends AidenLiveSettingsFields {
-  /** App effects are separately authorized from workspace file access. */
-  appControlPolicy?: import("../../renderer/shared/app-controls.js").AppControlPolicy;
-  /** Explicit host-owner consent; older pairings cannot enable this. */
-  remoteAppControlsEnabled?: boolean;
-  compactionEngine?: CompactionEngine;
-  compactionModelOverrides?: CompactionModelOverrides;
-  /** Explicit opt-in to paid cache refreshes during active foreground runs. */
-  cacheWarmingEnabled?: boolean;
-  /**
-   * Explicit opt-in to hour-long prompt caches for chat requests on the
-   * providers in `prompt-cache-retention.ts`; side calls keep the default.
-   */
-  longPromptCacheRetention?: boolean;
-  /** Longest wait, in hours, for a usage limit to clear before a reply fails; 0 turns waiting off. Absent means 6. */
-  usageLimitWaitHours?: import("../../renderer/shared/usage-limits.js").UsageLimitWaitHours;
-  /**
-   * Settings → Approvals → Advanced: routine runs go ahead with Ask first steps and connected-app
-   * changes instead of waiting for the person. Never lowers Hand off to me rules,
-   * the password and money rules, or chat turns. Absent means off.
-   */
-  botRoutinesGoAhead?: boolean;
-  /**
-   * The global approval mode (Settings → Approvals). Absent on a fresh install:
-   * Auto once a usable model exists, else Ask. Written as "ask" on the first
-   * start of an install upgraded from before modes (deviation a).
-   */
-  approvalMode?: import("../../renderer/shared/approval-mode.js").ApprovalMode;
-  /**
-   * Written once, on the first start of a release with modes: "upgrade" for an
-   * install already in use (it was given Ask and sees the one-time "What
-   * changed" note), "fresh" otherwise.
-   */
-  approvalModeOrigin?: "fresh" | "upgrade";
-  /** The person dismissed the "What changed" note in Settings → Approvals. */
-  approvalChangesSeen?: boolean;
-  /** Advanced: the model the Auto judge uses. Absent: the chat's own model. */
-  approvalModel?: { providerId: string; model: string };
-  botMessaging?: boolean;
-  /** Approvals → Advanced: "Chats can start other chats". On unless false; only false is stored. */
-  childChats?: boolean;
-  /** Settings → Context & Limits: dollar limits per chat, Bot month and routine run. Absent amounts: no limit. */
-  spendingLimits?: import("../../renderer/shared/spending.js").SpendingLimitsSettings;
-  lastProviderId?: string;
-  lastModel?: string;
-  /**
-   * The reasoning effort picked with the new-chat model, so a new chat lands
-   * on the same Agent Slider stop. Machine-local like `lastModel`; cleared when
-   * the new-chat model changes without a level.
-   */
-  lastThinkingLevel?: GenerationThinkingLevel;
-  /**
-   * Read-only projection of the Agent Slider stored in the portable
-   * config.json (`PortableConfigShape.agentSlider`); settings.json never holds
-   * it. Absent until first seeded. Written only by `setAgentSlider`.
-   */
-  agentSlider?: import("../../renderer/shared/agent-slider.js").AgentSliderSettings;
-  /**
-   * Read-only: config.json holds an `agentSlider` that does not read as a
-   * slider (a malformed hand edit), so `agentSlider` is absent and the
-   * first-run seed refuses to replace it. Only `setAgentSlider` does.
-   */
-  agentSliderUnreadable?: true;
-  /** Most recently selected real project workspace ID in the main window (shared with Quick Chat). */
-  lastWorkspaceId?: string;
-  /** Presentation-only chat models hidden from Mac and paired mobile selection UI. */
-  hiddenModelsByProvider?: HiddenModelsByProvider;
-  /** Presentation-only model-picker pins as distinct `provider::model` values (at most 200). */
-  pinnedModels?: string[];
-  /**
-   * Presentation-only model history: distinct `provider::model` values, newest
-   * first (at most 5). Machine-local; never part of the portable config.
-   */
-  recentModels?: string[];
-  exaEnabled?: boolean;
-  /** Versioned Web Search routing/preferences; credentials stay main-owned. */
-  webSearch?: WebSearchSettingsV2;
-  /** Versioned web page reading (`web_fetch`) and extract mode; keys stay main-owned. */
-  webFetch?: WebFetchSettingsV1;
-  voiceProvider?: VoiceProvider;
-  voiceModel?: string;
-  /** Whether Google is exposed for voice only or for both chat models and voice. */
-  geminiUsageScope?: GeminiUsageScope;
-  /** Selected on-device speech model id (see local-speech-catalog). */
-  localVoiceModel?: string;
-  /** "auto" or a base language code; resolved per model at use (see renderer/shared/voice-language.ts). */
-  voiceLanguage?: string;
-  /** Translate speech to English when the active on-device model can. */
-  voiceTranslateToEnglish?: boolean;
-  /** Trim silence and segment long audio with Silero VAD before on-device decode (default on). */
-  voiceTrimSilence?: boolean;
-  /** Load the on-device model at launch and when one is chosen, before the first dictation (default on). */
-  localVoicePreload?: boolean;
-  shortcutEnabled?: boolean;
-  shortcutAccelerator?: string;
-  /** Global hotkey that toggles dictation into the focused app (pill + auto-paste). */
-  dictationEnabled?: boolean;
-  dictationAccelerator?: string;
-  /** Hold the dictation shortcut to record; release to transcribe. */
-  dictationHoldToTalk?: boolean;
-  /** Refines a release-capable shortcut: `hold` (push-to-talk) or `hybrid` (tap toggles, hold talks). */
-  dictationActivationMode?: import("../../renderer/shared/dictation-preferences.js").DictationActivationMode;
-  /** Vocabulary and replacement rules applied to finished dictation transcripts. */
-  dictationDictionary?: import("../../renderer/shared/dictation-dictionary.js").DictationDictionaryEntry[];
-  /** Minutes an idle on-device voice model stays loaded; 0 keeps it loaded. */
-  localVoiceIdleUnloadMinutes?: number;
-  /** End dictation shortly after silence. */
-  dictationSilenceStop?: boolean;
-  /** Polish the transcript with the current chat model before paste. */
-  dictationCleanup?: boolean;
-  /** Play start/stop/done cues from the dictation pill. */
-  dictationSounds?: boolean;
-  /** Versioned command overrides. Legacy global fields remain migration fallbacks. */
-  keybindings?: KeybindingOverridesV1;
-  /** Background chat-title generation policy. Defaults to automatic. */
-  chatTitleProviderId?: ChatTitleProviderId;
-  /** Paired light/dark palettes and global appearance preferences. */
-  appearance?: AppearanceConfig;
-  /** Last explicit native-Google thinking level, keyed by exact model id. */
-  googleThinkingByModel?: Record<string, GoogleThinkingLevel>;
-  /** Last explicit ChatGPT/Codex reasoning effort, keyed by exact model id. */
-  codexThinkingByModel?: Record<string, CodexThinkingLevel>;
-  /** Last explicit Anthropic/Claude thinking effort, keyed by exact model id. */
-  anthropicThinkingByModel?: Record<string, AnthropicThinkingLevel>;
-  providerThinkingByModel?: Record<string, Record<string, GenerationThinkingLevel>>;
-  /** Per-subagent model and effort defaults; parsed leniently, absent means children inherit. */
-  subagentModels?: import("./subagents/subagent-model-selection.js").SubagentModelSettings;
-  /** Presentation-only Pi thinking visibility for models running on a local deployment. */
-  showLocalModelReasoning?: boolean;
-  /** Global skill discovery/invocation gate. Omitted means enabled. */
-  skillsEnabled?: boolean;
-  /** Global durable-memory gate. Omitted means enabled. */
-  memoryEnabled?: boolean;
-  /** Global opt-in for the external cua-driver Computer Use beta. */
-  computerUseEnabled?: boolean;
-  /** "Always allow" Computer Use in every chat without the per-chat access card. */
-  computerUseAlwaysAllow?: boolean;
-  /** Aiden Live (voice and on-screen actions). Omitted means enabled; false refuses every Live start. */
-  aidenLiveEnabled?: boolean;
-  /** Show the idle Live button in the window corner. Omitted means shown; active sessions always show it. */
-  aidenLiveButtonVisible?: boolean;
-  /** Default persistence mode for new chats started from the floating Quick Chat starter. Omitted means "ephemeral". */
-  quickChatDefaultPersistence?: import("../../renderer/shared/quick-chat.js").QuickChatDefaultPersistence;
-  /** Keep the floating Quick Chat mini-modal open when clicking outside. Omitted means true (stays pinned). */
-  quickChatKeepOpenOnBlur?: boolean;
-  /** Settings → Bots → Bubbles → Allow bubbles. Omitted means on; off hides every head and the bubble button. */
-  botBubblesEnabled?: boolean;
-  /** Settings → Bots → Bubbles → Float over other apps (macOS only). Omitted means on. */
-  botBubblesFloatOverApps?: boolean;
-  /** On-device Form Fill Specialist; gated on Computer Use plus a verified local model package. Default off. */
-  formFillSpecialistEnabled?: boolean;
-  /** Global scheduler gate. Turning it off pauses jobs without deleting them. */
-  scheduledTasksEnabled?: boolean;
-  scheduledDefaultMode?: ScheduledTaskMode;
-  scheduledDefaultPermission?: ScheduledTaskPermission;
-  scheduledDefaultMcpEnabled?: boolean;
-  scheduledDefaultNotify?: boolean;
-  scheduledDefaultTimezone?: string;
-  /** Workspace chats may promise to check back later (`check_back`). Omitted means on. */
-  chatCheckBacks?: boolean;
-  /** Settings → Scheduled tasks → While you're away. Omitted means on; only `false` is stored. */
-  keepAwakeWhileWorking?: boolean;
-  /** Aiden assistant window, hotkey, and proactivity settings. */
-  assistant?: AssistantConfig;
-  /** Device-local display name used by the private usage profile. */
-  profileName?: string;
-  /** Main-owned first-run progress. Secrets and prompt drafts are never stored here. */
-  onboarding?: import("../../renderer/shared/onboarding.js").OnboardingState;
-  /** Telegram remote-control enable flag; gates long-poll polling. */
-  telegramEnabled?: boolean;
-  /** Paired Telegram owner chat id; undefined until first /start pairs. */
-  telegramAllowedUserId?: number;
-  /** Provider for Telegram turns; falls back to lastProviderId when unset. */
-  telegramProviderId?: string;
-  /** Model for Telegram turns; falls back to provider default when unset. */
-  telegramModel?: string;
-  /** Explicit reasoning effort for Telegram-originated turns. */
-  telegramThinkingLevel?: GenerationThinkingLevel;
-  /** Stream bounded answer previews into one edited Telegram message. */
-  telegramDraftPreviews?: boolean;
-  /** Technical activity projected into Telegram during a turn. */
-  telegramActivity?: "quiet" | "thinking" | "tools" | "verbose";
-  /** Native Rich Markdown or legacy HTML assistant answer delivery. */
-  telegramRendering?: "rich" | "html";
-  /** Automatic voice reply policy; explicit telegram_voice actions remain available. */
-  telegramVoiceMode?: "hidden" | "mirror" | "always";
-  /**
-   * Explicit folder workspace authorized for Telegram project automation.
-   * Omitted keeps Telegram turns assistant-only.
-   */
-  telegramWorkspaceId?: string;
-  /** Named Telegram bot profiles; the legacy root fields remain profiles.default. */
-  telegramProfiles?: Record<string, TelegramProfileSettings>;
-  /** Profile currently edited by Settings and used as the default direct-delivery target. */
-  telegramActiveProfile?: string;
-  /** Provision and route private-chat topics to explicit Aiden workspace targets. */
-  telegramThreadedMode?: boolean;
-  /** Versioned Text to Speech (Read aloud) preferences; credentials stay encrypted. */
-  tts?: import("../../renderer/shared/tts.js").TtsSettingsV1;
-}
-
-export interface TelegramProfileSettings {
-  enabled?: boolean;
-  allowedUserId?: number;
-  providerId?: string;
-  model?: string;
-  thinkingLevel?: GenerationThinkingLevel;
-  draftPreviews?: boolean;
-  activity?: "quiet" | "thinking" | "tools" | "verbose";
-  rendering?: "rich" | "html";
-  voiceMode?: "hidden" | "mirror" | "always";
-  workspaceId?: string;
-  threadedMode?: boolean;
-}
-
-export type ComputerUseStatusState =
-  | "disabled"
-  | "ready"
-  | "permission_required"
-  | "production_build_required"
-  | "unsupported"
-  | "unavailable"
-  | "incompatible"
-  | "error";
-
-export interface ComputerUseStatus {
-  enabled: boolean;
-  beta: true;
-  state: ComputerUseStatusState;
-  detail: string;
-  ready: boolean;
-  available: boolean;
-  retryable: boolean;
-  canRequestPermissions: boolean;
-  driverVersion?: string;
-  permissions: {
-    accessibility: boolean | null;
-    screenRecording: boolean | null;
-  };
-}
-
-export interface Profile {
-  name: string;
-}
-
-/** Date windows available in the private, device-local usage profile. */
-export type UsageDateRange = "7d" | "30d" | "90d" | "1y" | "all";
-
-/** Token counts reported by a model provider. Reasoning is a subset of output. */
-export interface UsageTokenBreakdown {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  /** Anthropic's one-hour cache writes, already included in cacheWrite. */
-  cacheWrite1h?: number;
-  reasoning: number;
-  total: number;
-}
-
-export interface UsageDaySummary {
-  date: string;
-  requests: number;
-  reportedTokenRequests: number;
-  unmeteredRequests: number;
-  tokens: UsageTokenBreakdown;
-  hostedCostUsd: number;
-}
-
-export interface UsageModelSummary {
-  providerId: string;
-  providerLabel: string;
-  modelId: string;
-  modelLabel: string;
-  local: boolean;
-  requests: number;
-  reportedTokenRequests: number;
-  unmeteredRequests: number;
-  tokens: UsageTokenBreakdown;
-  hostedCostUsd: number;
-}
-
-/** Privacy-safe aggregate returned to the renderer. No chat or workspace content is persisted. */
-export interface UsageSummary {
-  range: UsageDateRange;
-  startDate: string;
-  endDate: string;
-  totals: {
-    requests: number;
-    completedRequests: number;
-    failedRequests: number;
-    cancelledRequests: number;
-    reportedTokenRequests: number;
-    unmeteredRequests: number;
-    localRequests: number;
-    costedRequests: number;
-    unpricedHostedRequests: number;
-    hostedCostUsd: number;
-    activeDays: number;
-    currentStreak: number;
-    longestStreak: number;
-    tokens: UsageTokenBreakdown;
-  };
-  days: UsageDaySummary[];
-  models: UsageModelSummary[];
-}
+export type {
+  McpTransport,
+  McpServer,
+  Skill,
+  DiscoveredSkill,
+  VoiceProvider,
+  GeminiUsageScope,
+  ChatTitleProviderId,
+  FoundationModelsConnectionState,
+  FoundationModelsConnectionStatus,
+  AssistantSettingsPermission,
+  AssistantConfig,
+  AppSettings,
+  TelegramProfileSettings,
+  ComputerUseStatusState,
+  ComputerUseStatus,
+  Profile,
+  UsageDateRange,
+  UsageTokenBreakdown,
+  UsageDaySummary,
+  UsageModelSummary,
+  UsageSummary,
+};
 
 /** Params for a streaming generation request. */
-export interface ChatStartParams {
-  chatId: string;
-  workspaceId?: string;
-  providerId: string;
-  model: string;
-  /**
-   * Selects the system prompt and tool set. Absent means the normal workspace
-   * chat. The unattended Assistant modes are main-only: parseParams never
-   * produces them, so a renderer cannot request background capabilities or the
-   * [SILENT] prompt.
-   */
-  mode?: "assistant" | "assistant-unattended" | "assistant-automation";
-  /** Small main-validated enum; provider/model support is enforced at runtime. */
-  thinkingLevel?: GenerationThinkingLevel;
-  /** Host-owned /visualize instruction for this attended turn. */
-  visualize?: boolean;
-  /** Settings → Appearance → Inline visuals; automatic when absent. */
-  inlineVisuals?: import("../../renderer/shared/appearance.js").InlineVisualsMode;
-  /**
-   * A desktop design-mode message: the frames the person had selected and the
-   * canvas region's size on their screen. Absent from phones and other turns.
-   */
-  designView?: import("../../renderer/shared/design-canvas/canvas-summary.js").DesignViewState;
+export interface ChatStartParams
+  extends ChatStartParamsBase<"assistant" | "assistant-unattended" | "assistant-automation"> {
   messages: Array<{
     role: ChatRole;
     content: string;
@@ -1168,17 +317,6 @@ export interface ChatStartParams {
     grabbedElements?: GrabbedElementContextV1[];
   }>;
 }
-
-/** A pending request for the user to approve a mutating tool call ("ask" mode). */
-export interface ApprovalRequest {
-  streamId: string;
-  approvalId: string;
-  toolName: string;
-  /** Human-readable summary of what Pi wants to do, e.g. "Run: npm test". */
-  summary: string;
-}
-
-export type ApprovalDecision = "allow" | "deny";
 
 /** Notification payloads pushed from backend during generation. */
 export interface ChatDelta {

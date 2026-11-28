@@ -7,6 +7,12 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { assertPathInside } from "../shared/path-containment.js";
+import type {
+  WorkspaceFileDocument,
+  WorkspaceFileEntry as SharedWorkspaceFileEntry,
+  WorkspaceFileIndex as SharedWorkspaceFileIndex,
+  WorkspaceFileKind,
+} from "../../renderer/shared/ipc-workspace-git-contracts.js";
 import { listConfinedWorkspaceDirectory, type WorkspaceDirectoryIdentities } from "./managed-worktree-file-io.js";
 import { mapWorkspaceMetadata, WORKSPACE_METADATA_CONCURRENCY } from "./workspace-metadata.js";
 import { readRegularFile, type RegularFileIdentity } from "./regular-file-read.js";
@@ -28,38 +34,17 @@ const SKIP_DIRECTORIES = new Set([
   "release",
 ]);
 
-export type WorkspaceFileKind = "directory" | "file" | "symlink";
+export type { WorkspaceFileDocument, WorkspaceFileKind };
 
-export interface WorkspaceFileEntry {
-  path: string;
-  name: string;
-  parentPath: string;
-  depth: number;
-  kind: WorkspaceFileKind;
-  symbolic?: boolean;
+export interface WorkspaceFileEntry extends SharedWorkspaceFileEntry {
   filesystemDevice?: string;
   filesystemInode?: string;
-  size?: number;
-  modifiedAt?: number;
 }
 
-export interface WorkspaceFileIndex {
-  entries: WorkspaceFileEntry[];
-  truncated: boolean;
-  skippedDirectories: number;
-}
+export type WorkspaceFileIndex = SharedWorkspaceFileIndex<WorkspaceFileEntry>;
 
 export function decodeWorkspaceFileText(buffer: Buffer, suppliedPath: string): string {
   return decodeText(buffer, suppliedPath);
-}
-
-export interface WorkspaceFileDocument {
-  path: string;
-  content: string;
-  size: number;
-  modifiedAt: number;
-  version: string;
-  warning?: string;
 }
 
 export type WorkspaceFileErrorCode = "changed_on_disk" | "io_error";
