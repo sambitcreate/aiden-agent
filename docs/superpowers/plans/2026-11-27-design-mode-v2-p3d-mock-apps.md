@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Revision 2 (2026-11-27).** This revision applies review-p3d-plan (Gemini 4 Neon high: 8 blockers, 8 majors, 4 minors). All 20 were checked against the code after merging 3c at `1e27c2319`. Nineteen are fixed as suggested or by an equivalent mechanism, and one is taken in part (#4's inspector point). "Applied review decisions" at the end lists each.
+
 > **Revision 1 (2026-11-27).** First draft, written against 3c's head `b7a0ec93c` (PR #968). Nothing is built yet.
 
 **Goal:** A workspace with no runnable web app can still design live. When the person wants to design something there, Aiden asks once, on a card main draws, whether to add a small Vite + React app (the *mock app*) in `design-app/`. On Allow, main writes the mock app from a template bundled with Aiden, installs it from the npm registry, starts it and places `/` on the chat's page. Each design is then a route in the mock app, shown live like any app frame. For a React project that isn't a web app (`react-nonweb`, such as an Electron app), the mock app reuses the project's own components through aliases and stubs, and its `DESIGN.md` is drafted from the project's own CSS variables and fonts. 3d also removes the v1 HTML-mockup path from every flag-on turn, and the v1 tokens offer everywhere. All of this is behind `AIDEN_EXPERIMENTAL_DESIGN_LIVE`, except the tokens offer's removal (S114).
@@ -72,7 +74,7 @@ With the flag off:
 
 The tokens offer's deletion is the one change that reaches flag-off turns, because the spec deletes its modules in 3d (§11 item 2, S6, S37). S114 explains why the rest of the v1 HTML path stays for flag-off turns until Phase 7.
 
-## What exists today (checked against 3c's head `b7a0ec93c`)
+## What exists today (checked against 3c's head `55748a308`)
 
 Line numbers drift as 3c takes review fixes. Task 0 rechecks them with `rg -n`, and named symbols win over numbers.
 
@@ -115,6 +117,28 @@ Line numbers drift as 3c takes review fixes. Task 0 rechecks them with `rg -n`, 
 | Fixture practice | E2E fixtures symlink `node_modules` to the repo root's, so detection sees an install and nothing reaches the network | spec §7, `tests/fixtures/design-live-app/`, `tests/fixtures/design-live-routes/` |
 | Product text | `PRODUCT.md:71` promises the tokens offer ("offers in chat to write a tokens file and a specimen page") | `PRODUCT.md:71` |
 | Dependabot | No `.github/dependabot.yml`, so nothing bumps the template's lockfile behind Aiden's back | `.github/` |
+| fsevents | `vite` 8.3.5 has `optionalDependencies: {fsevents: "~2.3.3"}`; `fsevents` 2.3.3 is `optional`, `os: ["darwin"]`, `hasInstallScript: true` in the lockfile, and its published package ships a prebuilt `fsevents.node` (its own scripts are only `clean`, `build`, `test` and `prepublishOnly`). `lightningcss` and `rolldown` take their native code from optional platform packages | `package-lock.json`; `node_modules/fsevents/` |
+| Workspace excludes | `findCandidates` applies `patterns.exclude` to **every** found folder, the fixed ones included, so `"!design-app"` would hide a mock app; `parseWorkspacePattern` gives `null` for `**/x`, braces and more than three segments | `app-detect.ts:314-316`; `app-server-core.ts:581-589` |
+| Framework-only route plumbing | `discoverRoutes` and `routeForWrittenFile` take `framework`; `routeWalks` caches by framework and `detectionShape` hashes `[root, framework]`; `writtenRouteData` keeps `{appRoot, framework}`; `pageFileContext` passes only `framework` to `routeFiles` | `app-routes.ts:278-286`, `:321-326`; `app-server-main.ts:338`, `:402-422`, `:1563`, `:1699`; `written-pages.ts:341-385`; `main/handlers/design-canvas.ts:1059-1060` |
+| Written-route turn | `createWrittenRouteTurn` loads `{snapshot, config}` once per turn and keeps it | `written-pages.ts:410-425` |
+| Route placement nesting | In both the tool loop and ACP's `onFileWrite`, `placeWrittenRoute` runs only inside `if (placeWrittenPage && …)` | `llm-client.ts:6426-6433`, `:6912-6919` |
+| Fallback `/` | `placeWrittenPagesOnCanvas` returns early with no pages, rules or routes, and places `fallbackRoute` only on a page with no frames | `written-pages.ts:753`, `:800` |
+| Tool wait | `waitForAttempt` arms `settleMs` (90 s) and extends to the card's time only when a status in `snapshot.apps` reaches `consent` | `app-tool.ts:180-200` |
+| Person IPC | `person()` checks the flag, the chat and the folder, throws on refusal, and doesn't check `designMode` or any page | `main/handlers/design-app.ts:65-80` |
+| Consent keys | `closeAll(prefix)` closes cards and clears declines whose key starts with `${workspaceId}\0` | `app-consent.ts:134-137` |
+| DESIGN.md roots cache | `createDesignAppRoots` caches detection keyed on the root `package.json` and `pnpm-workspace.yaml` only | `design-md/locate.ts:154-192` |
+| Reader | `lintContent(content)` exists; `export` reads only a located file | `design-md/reader.ts:360`, `:368` |
+| Draft | `designMdDraftFor` returns the text only, with no counts or sources | `design-md/draft.ts:118-126` |
+| Section patching | `withDesignModeSection` replaces a stored section on a non-live turn only when it holds `DESIGN_MD_PROMPT_BULLET` or `LIVE_APP_PROMPT_MARKER`; llm-client passes `live: designMdOn \|\| liveAppsOn`; `DESIGN_MD_PROMPT_BULLET` says "ahead of design/tokens.css" | `design-md/turn.ts:183-188`; `llm-client.ts:3450-3455`; `canvas-tools.ts:259` |
+| Source walk | `fromStack` (app-root-relative, `/@fs/` refused) runs before `stamp`, which reads `data-aiden-src` as `path:line` with no base | `app-frames/react-source-walk.ts:105-112`, `:144-152`, `:212-219` |
+| Credential rule | `isProtectedCredentialPath` | `main/services/model-file-policy.ts:243` |
+| Create-only writer | `writeConfinedFile` writes a `Buffer` with `O_CREAT \| O_EXCL \| O_NOFOLLOW` into a confined folder | `app-page-files.ts:208-225`, `:340` |
+| Scanner tests | `design-system.test.ts` mostly tests `style-scan.ts` (all but its `designSystemOfferLine` cases), and `design-system-offers.test.ts:21` is the only disk test of `findWorkspaceDesignSystem` | `main/services/design-canvas/design-system.test.ts`, `design-system-offers.test.ts:21-36` |
+| Startup cleanup | `cleanUpRetiredModelScoring()` runs from `main/index.ts`; `design-canvas/main.ts` promises no I/O at construction | `main/index.ts:203`, `:2528`; `design-canvas/main.ts:1-3` |
+| Tests that pin today | The no-web-app chip menu has only Connect running server… (E2E and renderer); `design_md_drafted {source: "mock"}` is dropped | `tests/e2e/design-app-status.spec.ts:320-327`, `renderer/design/design-app-chip.test.tsx:138-142`, `main/services/analytics/analytics-feature-reports.test.ts:270` |
+| Approval module | `main/services/approval-gate/workspace-tool-approval.ts` | — |
+| Packaging blocks | `build.extraResources` is shared by macOS and Linux; `build.mac.extraResources` is macOS-only; Linux unpacks to `resources/`, macOS to `Contents/Resources/` | `package.json:457`, `:504`; `scripts/verify-linux-package.mjs:266-271`, `:310`; `scripts/verify-macos-package.mjs:213` |
+| Space sync | `cua-space-e2e.sh` skips untracked `.npmrc` files | `scripts/cua-space-e2e.sh:131` |
 
 ## Decisions
 
@@ -125,8 +149,8 @@ All are **proposed**. They become spec amendments S102–S116 in Task 12. Each f
 - **Why not `ask_user_question`.** The spec says Aiden asks "through the question card". But main can't check an `ask_user_question` answer, so a prompt injection, or Aiden misreading the reply, could scaffold and reach the npm registry with no real yes. The yes that permits files and network must be a card main draws and answers, as 2b's launch consent is (S2).
 - **One card, not two.** The scaffold card is a new `DesignAppConsentRequest` kind, `scaffold`, drawn by `DesignAppConsentCard`. It carries everything 2b's launch card shows:
   - the question, from S103's offer: "This is an Electron app, so it can't run on the canvas. Make React mocks of its screens in design-app/ to iterate on?" (Tauri and React Native say so), or "This folder has no web app. Add a small React app in design-app/ to design in?";
-  - the folder, and that it adds a `.aiden/canvas.json` entry;
-  - the install command (`npm ci`), the packages it downloads with their versions, and "Downloads these from the npm registry. The packages' install scripts don't run.";
+  - the folder, the files it writes (`files`: the template's paths, at most 40 shown, then "and N more"), and that it adds a `.aiden/canvas.json` entry;
+  - the install command (`npm ci`), the packages it downloads with their versions, and "Downloads these from the npm registry with your npm settings. The packages' install scripts don't run.";
   - the run command (`npm run dev`) and the script text (`vite`);
   - `DESIGN_APP_CONSENT_SCOPE`.
 
@@ -134,6 +158,8 @@ All are **proposed**. They become spec amendments S102–S116 in Task 12. Each f
 - **Who can raise it.** Aiden, through `design_app {action: "scaffold"}`, and the person, through the chip's **Add design app…** (S112). The live skill tells Aiden not to ask first with `ask_user_question`: the card is the question.
 - **Declines** follow 2b. Not now answers `consent-declined`. In this run, Aiden's later `scaffold` calls for that workspace get `consent-declined` with no card, and the person's chip item always asks again. The memory isn't persisted, so a restart may ask Aiden's request once more.
 - **Unanswered.** A card nobody answers in 2 minutes closes (`consent-unanswered`, 2b's rule). Nothing was written.
+- **The key.** One scaffold card per workspace, keyed `${workspaceId}\0\0scaffold`. An app root is never empty, so the key can't collide with a launch key (`${workspaceId}\0${appRoot}…`), and `closeAll(`${workspaceId}\0`)` on workspace removal closes it and clears its decline.
+- **The tool's wait.** `waitForAttempt` only stretches its 90 s timer when an app status reaches `consent`, and before Allow there is no app. So `scaffold` gets its own wait. It waits for the card on `consentMs + graceMs` (as a launch card does). After Allow, it moves to 2b's `settleMs` from the moment the write finishes and the app's status appears. `DesignAppServers.scaffold` reports both moments through an `onPhase` callback (`card`, `writing`, `app`). An aborted turn (`signal`) ends the wait only, never the card's own answer or the install.
 - **Surface.** It needs a live desktop window owner (S26). A Remote or windowless owner gets `consent-unavailable` and nothing is written.
 
 ### S103 — Who gets an offer, and who never does (proposed)
@@ -143,16 +169,17 @@ All are **proposed**. They become spec amendments S102–S116 in Task 12. Each f
 | Detection | Answer |
 |---|---|
 | `truncated: true` | `refused: truncated` (a web app may be among the unread candidates) |
+| any `web` candidate that isn't a mock app, or any configured or url root that isn't one | `refused: has-web-app` |
 | a mock app already exists (S104's marker) | `existing {folder}`: no scaffold. The tool answers with that root, and `start` takes 2b's own path (its S2 card if it isn't approved yet) |
-| any `web` candidate, or any configured or url root | `refused: has-web-app` |
 | any candidate with reason `workspace-runner` | `refused: workspace-runner` |
 | any candidate with reason `unknown-framework` | `refused: unknown-framework` |
 | any candidate with reason `no-dev-script` | `refused: no-dev-script` |
 | any candidate with reason `invalid-package-json` | `refused: invalid-package-json` |
 | `.aiden/canvas.json` with an unsupported `version` | `refused: unsupported-config` (the entry couldn't be written, S39) |
 | any `react-nonweb` candidate | `react-nonweb {source, shell?, reactNative?, folder}`, with `source` the shallowest such root |
-| otherwise (`none` with `desktop`, `no-web-framework` or `no-package-json`, or no candidates) | `starter {folder}` |
+| otherwise (`none` with `desktop` or `no-web-framework`; a Deno-only root, which detection lists as `no-package-json`; or no candidates at all, as in a Python repository) | `starter {folder}` |
 
+- **Real apps first.** Non-mock web roots are checked before the marker, so a leftover `design-app/` beside a real `apps/web` gives `has-web-app`, not `existing`.
 - **Never for `workspace-runner` or `unknown-framework`** (S21). Both mean the workspace probably has a web app design mode can't identify, and a second app would hide it. `no-dev-script` and `invalid-package-json` are fixable in the person's own app, so they refuse too. Each refusal has a fixed message saying what to fix ("This workspace's dev script hands off to a workspace runner. Name the app in .aiden/canvas.json, or start it yourself and use Connect running server…").
 - **A desktop app without React** (Electron with Vue, say) gets the starter, not React mocks of its screens, because there are no React components to reuse.
 - **Monorepos with several non-web React roots** get one mock app at the workspace root. Its `source` is the shallowest `react-nonweb` root; Aiden can add aliases to the others (S109).
@@ -164,6 +191,8 @@ All are **proposed**. They become spec amendments S102–S116 in Task 12. Each f
 - **The marker grants nothing.** It only decides reuse and the label. A mock app Aiden didn't write in this run still goes through 2b's S2 consent before it starts, so a repo that plants the marker gains nothing.
 - **The choice.** The first of `design-app`, `design-app-2` … `design-app-9` that either doesn't exist (then scaffold there) or is a mock app (then `existing`). A path that exists and isn't a mock app (a folder, a file or a link) is skipped. All nine taken gives `refused: no-free-folder`. `design/` is never considered.
 - **Workspace patterns.** If the root's `workspaces` or `pnpm-workspace.yaml` patterns would match the chosen folder, the answer is `refused: in-workspaces`. The mock would join the person's workspace install, and npm would run `npm ci` from their root. The message names the folder and suggests excluding it (`"!design-app"`).
+  - **Conservative matching.** `parseWorkspacePattern` can't read `**` paths, braces or deep patterns. `mockFolderCovered(folder, patterns)` treats any include pattern it can't parse, or one starting with `**` or `*`, as covering the folder unless an exclude names that folder exactly. A false refusal costs the person one line in `workspaces`; a false pass would hand `npm ci` the person's whole workspace.
+  - **The remedy must work.** `findCandidates` today applies `patterns.exclude` to every folder, so `"!design-app"` would also hide the mock from detection. 3d applies excludes only to folders found through the include patterns. A fixed folder (`web`, `frontend`, `site`, `apps/*`, `packages/*` and the mock folders) is still found when an exclude names it.
 - **Checked twice.** S103 and S104 run when the card is offered and again inside the write, under the workspace admission (S107).
 
 ### S105 — The template (proposed)
@@ -176,7 +205,7 @@ All are **proposed**. They become spec amendments S102–S116 in Task 12. Each f
 | `package-lock.json` | lockfile v3, every entry with `resolved` on `https://registry.npmjs.org/` and a `sha512-` `integrity`, the platform packages of `rolldown` and `lightningcss` included |
 | `.npmrc` | `ignore-scripts=true`, `audit=false`, `fund=false`, `update-notifier=false` (S106) |
 | `.gitignore` | `node_modules/`, `dist/`, `.vite/` |
-| `vite.config.js` | Self-contained: no local imports, so 2b's fingerprint covers all Node-side config. It reads `aiden.mock.json` as data and validates it (S109). It sets `plugins: [react()]`, `resolve.dedupe: ["react", "react-dom"]`, `css.postcss: {}` (an inline config, so no `postcss.config.*` above the folder is loaded and run), `envDir` and `cacheDir` inside the folder, `server.fs.allow` (the workspace root and the realpath of the mock's own `node_modules`), and the `react/jsx-dev-runtime` alias to the shim (S111). Host and port come from 2b's flags |
+| `vite.config.js` | Self-contained: no local imports, so 2b's fingerprint covers all Node-side config. It reads `aiden.mock.json` as data and validates it (S109). It sets `plugins: [react()]`, `resolve.dedupe: ["react", "react-dom"]`, `css.postcss: {}` (an inline config, so no `postcss.config.*` above the folder is loaded and run), `envDir` and `cacheDir` inside the folder, `server.fs.allow` and `server.fs.deny` as S109 says (the mock's own folder, its `node_modules` realpath and the validated alias folders only, never the workspace root), and the `react/jsx-dev-runtime` alias to the shim (S111). Host and port come from 2b's flags |
 | `aiden.mock.json` | `{"version": 1, "kind": "starter", "source": null, "aliases": {}, "stubs": {}, "globals": []}`, rewritten for `react-nonweb` |
 | `index.html` | One `#root`, `src/main.tsx` |
 | `src/main.tsx` | Imports `./stubs/preload`, `./theme.css` and `./styles.css`, then mounts `App` |
@@ -192,29 +221,29 @@ All are **proposed**. They become spec amendments S102–S116 in Task 12. Each f
 - **No Tailwind** (open question 2). The template stays at four direct dependencies. When a `react-nonweb` project's CSS needs Tailwind to compile, Aiden adds `tailwindcss` and `@tailwindcss/vite` with `run_command` (its normal approval). The edited `vite.config.js` then asks again through S2's `changed` card.
 - **Always npm.** The lockfile makes the mock its own install root with npm, whatever the workspace uses (open question 11). npm comes with Node, so there's no second tool to find.
 - **Upgrades** come only with an Aiden release, like the other pinned runtimes in AGENTS.md. `scripts/design-app-template-lock.mjs` (dev-only, `npm run design-app-template:lock`) regenerates the lockfile in a temporary copy with `npm install --package-lock-only --ignore-scripts --no-audit --no-fund`. That is a builder's dependency bump, the same network as any `npm install` on a developer machine. Nothing runs it at runtime, in tests or in CI.
-- **Packaging.** Both `extraResources` blocks gain `{"from": "resources/design-app-template", "to": "design-app-template", "filter": ["**/*"]}`. `designAppTemplateDir()` resolves it like `applicationIconPath`.
+- **Packaging.** Only the shared `build.extraResources` block (macOS and Linux, beside `generative-ui`) gains `{"from": "resources/design-app-template", "to": "design-app-template", "filter": ["**/*", ".npmrc", ".gitignore"]}`; `build.mac.extraResources` is macOS-only and isn't touched. The dotfiles are named in the filter, and Task 11's package checks require them, because a packed template without `.npmrc` would run install scripts. `assertLinuxBuildConfiguration` checks the entry. `designAppTemplateDir()` resolves it like `applicationIconPath`. `.npmrc` must be tracked in git before any Space run, since `cua-space-e2e.sh` skips untracked `.npmrc` files.
 
 ### S106 — The network, the install and pinning (proposed)
 
 This is AGENTS.md's manual-only network posture, applied to mock apps:
 - **Never without the Allow.** Startup, restoring chats, onboarding, detection, the snapshot, the chip, the offer, listing and refusals read files only. The template is read from the app bundle. Nothing contacts the network before the person chooses **Add design app** on the S102 card.
 - **What reaches the network.** Only `npm ci`, run as 2b's install job in the mock's folder, under 2b's launch environment (S28's scrub, `COREPACK_ENABLE_DOWNLOAD_PROMPT=0`). Its `.npmrc` turns off the audit and fund calls and npm's update check, so npm fetches only the tarballs the lockfile names. The dev server itself is the app's own code (S5) and makes no registry call.
-- **Which registry.** The person's own npm configuration (a mirror or proxy in `~/.npmrc` still applies). The template's `.npmrc` sets no `registry`. npm swaps the lockfile's `registry.npmjs.org` host for a configured registry by default, and every package's `sha512` integrity still has to match, so a mirror can't change the bytes.
-- **No install scripts.** `ignore-scripts=true`. No direct or transitive dependency in the template has an install script (Task 2 checks this against the lockfile's `hasInstallScript`). `npm run dev` still runs, because npm runs a script that is named explicitly. The card says that install scripts don't run, in place of 2b's `DESIGN_APP_INSTALL_NOTE`.
+- **Which registry.** The person's own npm configuration (a mirror, proxy or token in `~/.npmrc` still applies; the project `.npmrc` only adds the four switches). A mirror missing a public package, or serving a re-packed tarball, fails `npm ci` with a 404 or an integrity error, which S112 shows. The template's `.npmrc` sets no `registry`. npm swaps the lockfile's `registry.npmjs.org` host for a configured registry by default, and every package's `sha512` integrity still has to match, so a mirror can't change the bytes.
+- **No install scripts.** `ignore-scripts=true`, with one known package that declares one: `fsevents` 2.3.3, Vite's optional, macOS-only watcher. Its published package already holds a prebuilt `fsevents.node`, and its declared script only rebuilds that from source, so skipping it changes nothing. On Linux it isn't installed at all. The alternative, dropping optional dependencies, isn't possible: Rolldown's and LightningCSS's native code are optional platform packages. Task 2's test names the allowlist exactly (`{"node_modules/fsevents"}`, optional, `os: ["darwin"]`), so a Vite bump that brings another script-bearing package fails the test and needs a decision. Probe 4 checks on the Mac that `npm ci` with scripts off gives a dev server whose file watching sees an edit. `npm run dev` still runs, because npm runs a script that is named explicitly. The card says that install scripts don't run, in place of 2b's `DESIGN_APP_INSTALL_NOTE`.
 - **Reinstalls.** The yes covers the first install and every reinstall of the same fingerprint, exactly as 2b's consent covers a web app (S8, S27, S47): Retry, or a start after a failed install. A changed `package.json`, lockfile, `.npmrc` or `vite.config.js` asks again with S2's `changed` card.
 - **Pinning.** Exact versions with no ranges. Task 2's tests check:
   - the template's four direct dependencies equal the root lockfile's resolved versions, so the E2E (on Aiden's own `node_modules`) runs what people install;
   - every lockfile entry has an `https://registry.npmjs.org/` tarball and `sha512` integrity, with no git, file, link or http source;
-  - no entry has `hasInstallScript`.
+  - the only entries with `hasInstallScript` are the allowlist (`fsevents`, optional and darwin-only).
 
 ### S107 — Writing the mock app (proposed)
 
 `writeMockApp(workspaceRoot, folder, files, options)` in `mock-app.ts`:
 - **The template is read bounded:** at most 64 files, 1 MiB in total and 256 KiB each, regular files only, no links (a refused read is `scaffold-failed {step: "template"}`).
 - **The folder is created** with a non-recursive `mkdir` after `lstat`ing every segment from the workspace's realpath (3c's `confinedTarget` rule). Subfolders are created one level at a time.
-- **Each file is written create-only** with `writeConfinedWorkspaceText(…, {expectedSha256: null, followLinks: false})`, or its byte equivalent. Task 0 confirms that `null` means the file must not exist. If it doesn't, the writer gets a `wx` option.
-- **Verified before approval.** Each file is re-read with no-follow reads, and its SHA-256 must equal what was written. Only then does main run `readLaunchSurface`, and call `approveShown` with what the card showed (`installShown: true`). A file changed in between fails the verification (`scaffold-failed {step: "verify"}`), and the next start asks with 2b's card.
-- **Rollback.** On any failure before approval, main removes the files it created whose bytes are still what it wrote, then the folders it created if they're empty. A file that changed is left, and the answer says so. Nothing outside the folder is touched.
+- **Each file is written create-only** as bytes with 3c's `writeConfinedFile(…, {create: true})` (`O_CREAT | O_EXCL | O_NOFOLLOW`, in a folder `confinedTarget` checked), after its parent folders were created one level at a time. `writeConfinedWorkspaceText` isn't used: it takes text and spawns the native mutator once per file.
+- **Verified before approval.** Each file is re-read with 3c's `readRegularFileBytes` (`O_NOFOLLOW`, regular files only), and its SHA-256 must equal what was written. Only then does main run `readLaunchSurface`, and call `approveShown` with what the card showed (`installShown: true`). A file changed in between fails the verification (`scaffold-failed {step: "verify"}`), and the next start asks with 2b's card.
+- **Rollback.** On any failure before approval, main re-reads each file it created with `readRegularFileBytes`, so a link swapped in is never followed, and removes those whose bytes are still what it wrote (for S110's replaced `DESIGN.md` and `theme.css`, the bytes it wrote last), then the folders it created if they're empty. A file that changed is left, and the answer says so. Nothing outside the folder is touched.
 - **`.aiden/canvas.json`.** After the files, `saveCanvasConfigApp(root, {root: folder, script: "dev"})`. `unknown-version` can't happen (S103 refused it), and any other failure leaves the scaffold in place and says the entry wasn't saved, because detection alone makes the mock the `single` target (S108). The spec's `mock: true` field isn't written: the marker in `package.json` is the one source, and a field nothing reads would mislead.
 - **Under one admission.** The whole write holds a `workspaceMutationGate` admission (2b). A folder-path change or `none` permission mid-write aborts and rolls back.
 
@@ -222,7 +251,14 @@ This is AGENTS.md's manual-only network posture, applied to mock apps:
 
 - **Detection.** `FIXED_FOLDERS` gains `design-app` and `design-app-2` … `design-app-9`. A mock app is an ordinary Vite + React app, so R4 classifies it `web` with framework `vite` and script `dev`. Its own lockfile makes it its own npm install root. With it present, `designTarget` is `single` for a `react-nonweb` or empty workspace, so the design-mode toggle starts it like any web app.
 - **The flag.** `DetectedApp.mock?: true` comes from the marker (S104). It's carried on `DesignAppCandidate.mock` and `DesignAppStatus.mock`. The chip labels it "Design app · :5173". Nothing trusts it for safety.
-- **Routes.** `routeConventionsOf(app)` returns `["tanstack"]` for a mock app and `conventionsFor(framework)` otherwise, at the three call sites (`app-routes.ts:286`, `:326`, `app-page-files.ts:53`). With no `routeTree.gen.ts`, 3b walks `src/routes/**` with TanStack's flat-file rules. So:
+- **Routes.** `routeConventionsOf(app)` returns `["tanstack"]` for a mock app and `conventionsFor(framework)` otherwise. Every route path takes a `RouteApp = {framework?, mock?: true}` in place of a bare `framework`, so the mock flag reaches each of them:
+  - `discoverRoutes` and `routeForWrittenFile` (`app-routes.ts`);
+  - `routeFiles` (`app-page-files.ts`);
+  - `DesignAppServers`' `routeWalks` cache, whose entry and key gain `mock`, and `detectionShape`, which hashes `[root, framework, mock]` so a marker appearing or going clears the walks;
+  - `writtenRouteData`'s `owners` (`written-pages.ts`), which keep `mock` from the snapshot's candidates and apps;
+  - `pageFileContext` (`main/handlers/design-canvas.ts`), which reads `mock` with `framework`.
+
+  Task 4 tests the written-route and page-file paths with a `{framework: "vite", mock: true}` app, since a missed site there would turn off placement or make ⌘D refuse with `config-router`. With no `routeTree.gen.ts`, 3b walks `src/routes/**` with TanStack's flat-file rules. So:
   - discovery lists every page;
   - a route file Aiden writes lands by itself (S83);
   - 3c's ⌘D copies `settings.tsx` to `settings-v2.tsx`. The files have no `createFileRoute` call, so there's no literal to rewrite (S101);
@@ -234,12 +270,14 @@ This is AGENTS.md's manual-only network posture, applied to mock apps:
 
 - **`aiden.mock.json`**, version 1: `{kind, source, aliases: {name: workspaceRelativePath}, stubs: {specifier: "src/stubs/<file>"}, globals: string[]}`. It's data, read by `vite.config.js`. It isn't in 2b's fingerprint, so Aiden can refine it without a new card. The config validates it before use, and refuses to start on a bad file (Vite prints why):
   - alias names match `^@?[a-z0-9][a-z0-9._/-]{0,63}$`, at most 20;
-  - alias targets resolve (realpath) inside the workspace root and outside `.git`;
+  - alias targets are folders that resolve (realpath) inside the workspace root, outside the mock's own folder, and outside `.git`, `.aiden`, `node_modules` and hidden folders;
+  - no alias target, and no folder between it and the workspace root, is a protected credential path by the same rule as `isProtectedCredentialPath` (`main/services/model-file-policy.ts`). The template can't import Aiden's module, so `vite.config.js` carries a copy of its patterns, and Task 2 checks the copy against the real function over a table of paths;
   - stub specifiers match the npm name rule plus subpaths, at most 40;
   - stub targets resolve inside the mock's `src/stubs/`;
   - globals are JavaScript identifiers, at most 20.
+- **What the dev server may serve.** `server.fs.allow` is the mock's own folder, the realpath of its `node_modules`, and each validated alias target folder, and nothing else. A starter mock serves nothing outside `design-app/`. The workspace root is never on the list. `server.fs.deny` adds, to Vite's defaults (`.env`, `.env.*`, `*.{crt,pem}`, `**/.git/**`), the same credential patterns: `**/.npmrc`, `**/.netrc`, `**/.git-credentials`, `**/.aiden/**`, `**/.ssh/**`, `**/.aws/**`, `**/.gnupg/**`, `**/*.{key,p8,p12,pfx,jks,keystore,ppk,mobileprovision}`, `**/id_rsa*`, `**/id_ed25519*`, `**/id_ecdsa*`, `**/credentials.json` and `**/.env*`. So an alias to a UI folder still can't hand out a key file inside it. The deny list covers `/@fs/` requests and aliased paths alike, and the mock's own `.npmrc` is denied too.
 - **Main's first pass**, all pure in `mock-app-core.ts`, from bounded no-follow reads:
-  - **`guessUiRoot(folders)`**: the first of `src/renderer`, `renderer`, `app/renderer`, `src/web`, `src/ui`, `src` (relative to `source`) that holds a `.tsx` or `.jsx` file within 2 levels. It becomes `@app`. With none, there's no alias, and the answer says so.
+  - **`guessUiRoot(folders)`**: the first of `src/renderer`, `renderer`, `app/renderer`, `src/web`, `src/ui`, `src` (relative to `source`) that holds a `.tsx` or `.jsx` file within 2 levels and passes the alias rules above. It becomes `@app`. With none, there's no alias, and the answer says so.
   - **Stubs**: `electron` and `@electron/remote` go to `src/stubs/electron.ts` for an Electron shell, and `@tauri-apps/api` and its subpaths to `src/stubs/tauri.ts` for Tauri. React Native gets none: its components don't render in React DOM, so the skill says to hand-build mocks in React (§6.8: "hand-built in React when a component can't render outside the app").
   - **`exposedGlobals(tokens)`**: the first string argument of each `contextBridge.exposeInMainWorld(` call. It's found with 3b's `scanTsTokens` in at most 8 files named `preload*.{ts,js,mjs,cjs}` within 4 levels of `source`, each 256 KiB at most, skipping `node_modules` and hidden folders.
 - **What the stubs do.** `src/stubs/preload.ts` installs a deep no-op proxy on `window[name]` for each global. Any property is a function returning `Promise.resolve(mockData[path])`. `electron.ts` and `tauri.ts` export the same proxy as the default and the common named exports. Aiden fills `mockData` so real components render with data.
@@ -253,20 +291,20 @@ This is AGENTS.md's manual-only network posture, applied to mock apps:
 
 - **The starter** `DESIGN.md` has neutral colours (with `light` and `dark` groups), a system font stack, a type scale, a radius and a spacing scale, and the prose sections the 0.4.0 linter knows. It lints with zero errors and zero warnings through DM's worker (Task 2).
 - **`theme.css` is the `css-vars` export, not `css-tailwind`.** It's plain `:root` custom properties, because the template has no Tailwind (S105), and `@theme` would do nothing without it. The spec's §6.9 "css-tailwind" is amended. Task 2 checks that the committed `src/theme.css` equals the real exporter's `css-vars` output for the committed `DESIGN.md`.
-- **For `react-nonweb`**, after the files are written, main:
-  1. runs `designMdDraftFor(workspaceRoot, source)` (DM's scanner over the project's own style files);
-  2. if the draft has any colour or font, writes it over the template's `DESIGN.md` (create-only is replaced by an `expectedSha256` of the template's bytes);
-  3. lints it and exports `css-vars` through `designMdReader` into `src/theme.css`;
-  4. keeps the starter pair and says why when the draft has no tokens, the lint has errors, or the worker is unavailable or times out (S44).
-
-  These writes happen before the fingerprint is approved, so step 3's output is covered by S107's verification.
+- **For `react-nonweb`**, main builds the pair **in memory before writing anything**, so a failure can never leave a drafted `DESIGN.md` beside the starter `theme.css`:
+  1. `designMdDraftResultFor(workspaceRoot, source)` (new in `draft.ts`, beside `designMdDraftFor`) returns `{content, colors, fonts, sources}`. It confines `source` with 3b's `confinedRoot` (no links, inside the workspace realpath) before DM's scanner reads it;
+  2. with any colour or font, `designMdReader.lintContent(content)` must give no errors, and a new `designMdReader.exportContent(content, "css-vars")` (the worker's export over text, with the same limits as `export`) must give non-empty CSS;
+  3. only then are the drafted `DESIGN.md` and `src/theme.css` put in the file map, in place of the template's, before S107 writes anything. They're written create-only like every other file, and verified and rolled back with them;
+  4. otherwise the starter pair is written, and the answer says why: no tokens, lint errors, or the worker was unavailable or timed out (S44).
+- **DESIGN.md's roots see the mock.** `createDesignAppRoots` caches detection on the root `package.json` and `pnpm-workspace.yaml` only, and scaffolding touches neither. It gains `invalidate(workspaceRoot)`, which `scaffold` calls on success, so `design_system`, the canvas note and DM's offer see `design-app/DESIGN.md` at once and stop offering a draft for `.`.
 - **Analytics.** `design_md_drafted {source: "mock"}` once, when a drafted (not starter) `DESIGN.md` was written.
 - **No draft offer.** A mock app always has a `DESIGN.md`, so DM's offer never fires for it.
 
 ### S111 — `data-aiden-src` stamps (proposed)
 
 - **How.** `vite.config.js` aliases `react/jsx-dev-runtime` to `src/aiden/jsx-dev-runtime.ts`, except for the shim's own import of the real runtime. The shim re-exports React's runtime. For a string `type`, it adds `data-aiden-src` from `jsxDEV`'s `source` argument (`fileName`, made workspace-relative, `:lineNumber`) unless the props already have one. That covers aliased project components too, because Vite compiles them with the same runtime.
-- **Value.** A POSIX path relative to the workspace (`src/renderer/components/Button.tsx:14`), at most 256 characters, with no absolute or `..` paths (dropped otherwise). The workspace root is passed to the shim through `define` in `vite.config.js`.
+- **Value.** `ws:` plus a POSIX path relative to the workspace and a line (`ws:src/renderer/components/Button.tsx:14`, or `ws:design-app/src/routes/index.tsx:9`), at most 256 characters, with no absolute or `..` paths (dropped otherwise). `vite.config.js` passes the workspace root to the shim through `define`, after `fs.realpathSync`, and compares it with `fileName`'s realpath form, so a workspace under a linked folder (`/var` → `/private/var` on macOS) still matches.
+- **Two bases, told apart.** 3a's `react-source-walk.ts` tries `fromStack` first, which gives app-root-relative paths for files inside the mock and refuses `/@fs/` files (the aliased project files). `stamp` then reads `data-aiden-src`. The `ws:` prefix marks a stamp as workspace-relative, so Phase 4 never reads `src/routes/index.tsx` (app-relative) and `design-app/src/routes/index.tsx` (workspace-relative) as different files. An unprefixed stamp keeps v1's meaning (the page's own path). 3d changes `stamp` only to return `{path, line, base: "workspace"}` for a `ws:` value; Phase 4 resolves it.
 - **Probe first** (Task 0, probe 2). It checks that `@vitejs/plugin-react` 6.0.3 in development passes a `source` object to `jsxDEV`. If it doesn't, the plugin's `transform` hook adds the attribute using Vite's `transformWithOxc` JSX output, and if that's also unavailable, S111 is deferred to Phase 4, which already has `_debugStack` (S64). The probe result goes in As built.
 - **Consumers.** Phase 4's Inspect reads the stamps. Phase 4 must accept stamped paths that resolve inside the **workspace** for mock apps (aliased project files sit outside the mock's root), which amends S11's "inside the app root" for mock apps only. 3d ships stamps and has no reader.
 
@@ -288,7 +326,8 @@ This is AGENTS.md's manual-only network posture, applied to mock apps:
 
 ### S113 — Iterations are routes, and `/` is placed (proposed)
 
-- **After the start succeeds**, main places the mock's `/` as an app frame, once, through 3b's placement on the page S84 resolves. For Aiden's call, that's the turn's page. For the person's item, it's the page on screen, checked by main. It reuses 3b's `fallbackRoute` path, so a `/` already on that page is focused, not duplicated.
+- **After the start succeeds**, main places the mock's `/` as an app frame, once, on the page S84 resolves. For Aiden's call, that's the turn's page. For the person's item, it's the page on screen, checked by main. 3b's `fallbackRoute` can't do this: `placeWrittenPagesOnCanvas` returns early with no pages or routes, and places the fallback only on a page with no frames at all. So `placeMockHome` (new, in `app-page-actions`' main-side neighbour `main/services/design-canvas/mock-home.ts`) follows `designCanvas:placeAppRoute`'s steps (`main/handlers/design-canvas.ts`, S87): `store.update` with `beforeWrite` re-checking the chat, place `/` beside the page's frames, a broadcast `step`, `sendFocus`. It answers `placed` or `already`, and `already` focuses the existing `/` frame. `design_app_frame_added` is reported only for `placed`.
+- **A pending placement survives one retry.** When the install fails, the placement is kept for that workspace and root in memory, with its page and chat. The next attempt that reaches `running` in this run (Retry, Aiden's `start`, or the toggle) places it, if that chat is still in design mode. A restart forgets it, and entry's single-app `/` fallback (S83) covers an empty page then.
 - **The tool's answer** waits like `start` (S31: the card, then up to 90 s). It returns `{status: "scaffolded", root, kind, phase, placed, aliases, stubs, globals, designMd: "drafted" | "starter", styleSources}`. If the start is still going after 90 s, it answers with the phase, and the `/` placement happens when the app reaches `running`, if design mode is still on for that chat.
 - **Iterations.** Each design is a route file in `src/routes/` (S108). A variant is `<name>-v2.tsx`, by Aiden or by ⌘D. Nothing new is needed: 3b places written route files, and 3c handles ⌘D and Trash.
 
@@ -298,23 +337,32 @@ This is AGENTS.md's manual-only network posture, applied to mock apps:
   - Delete `design-system.ts`, `design-system-offers.ts`, both tests and their two registry entries, the `designSystemOffers` singleton, and the `v1` input and branch of `createDesignNoteOffers`. The status line becomes the DESIGN.md sentence with the flag on, and the plain line with it off.
   - `offer-log.ts` stays for DM. Its test that reads a `design-system-offers.json`-shaped log keeps its oracle, with the title no longer naming the deleted class.
   - `style-scan.ts` stays (S37).
-  - A delete-only startup step removes `userData/design-system-offers.json` and its `.key` once (no migration, pre-1.0).
+  - The scanner's own tests stay. `design-system.test.ts` mostly tests `style-scan.ts` (`detectDesignSystem`, `parseDesignColor`, the name rules, `designSystemFileRank`, the injection filters and the size bounds), and `design-system-offers.test.ts`'s first case is the only disk test of `findWorkspaceDesignSystem` (vendored code, `design/` and `.env.css` excluded). Those move into a new `main/services/design-canvas/design-md/style-scan.test.ts`, registered in `test:design-mode` and the `core-git` lane. Only the `designSystemOfferLine` and `DesignSystemOffers` cases are deleted.
+  - `cleanUpRetiredDesignSystemOffers()` (new, `main/services/design-canvas/retired-design-system-offers.ts`, delete-only, modelled on `cleanUpRetiredModelScoring`) removes `userData/design-system-offers.json` and its `.key`. `main/index.ts` calls it beside `cleanUpRetiredModelScoring()`, so `design-canvas/main.ts` keeps its no-I/O construction.
   - The flag-off skill's `HTML_METHOD` loses the sentence that promises the note ("When it is missing and their files set up colours or fonts, a design-mode note lists them once: …"). The rest of that bullet stays.
 - **With the flag on, no turn teaches HTML mockups.**
   - The live skill drops `HTML_METHOD`. Its craft guidance (the checklist, flows and diagrams, comments) becomes a shared `CRAFT` block. Its "No web app" section becomes "No web app: a design app" (Task 8 has the text).
-  - `LIVE_DESIGN_MODE_PROMPT_SECTION`'s "With no web app, screens are workspace HTML files under design/" becomes "With no web app, ask for a design app with design_app scaffold; its pages are routes like any app's."
-  - A flag-on turn without `design_app` (a read-only workspace, or a platform without background jobs) gets a new `LIMITED_DESIGN_MODE_PROMPT_SECTION`. It's the v1 section without the `design/` HTML bullets, plus: "Live apps can't run in this chat, so design with notes, shapes, flows and images. Existing design/ pages still show as frames." It carries its own marker, so a stored copy is replaced the way S86's is.
-  - `designModePromptSection(designMd, mode)` takes `"v1" | "live" | "limited"`.
-- **With the flag on, written `design/` pages don't land by themselves.** `placeWrittenPageFrames`, the command scanner and entry skip `design/` HTML when `designLiveEnabled()` is on. Their files aren't noted in the written timeline, and entry places only routes (and `/`). Existing `file` frames, the watcher's reloads, Add ▸ File, `canvas_place_frame {kind: "file"}` and `canvas_inspect` all keep working.
+  - `AIDEN_DESIGN_SKILL_LIVE.description` drops "or as workspace HTML files".
+  - `LIVE_DESIGN_MODE_PROMPT_SECTION` loses **every** `design/` HTML bullet it inherits from the v1 section, not only "With no web app…": the HTML-pages bullet, "For a design/ page, pick the design width", and "Each page you write is checked the same way". In their place: "With no web app, ask for a design app with design_app scaffold; its pages are routes like any app's." and "canvas_inspect checks an HTML file frame the person placed; it doesn't draw app frames (canvas_read with snapshot: true shows those)."
+  - A flag-on turn without `design_app` (a read-only workspace, or a platform without background jobs) gets a new `LIMITED_DESIGN_MODE_PROMPT_SECTION`. It's the v1 section without those `design/` HTML bullets, plus: "Live apps can't run in this chat, so design with notes, shapes, flows and images. Existing design/ pages still show as frames." It starts with its own `LIMITED_APP_PROMPT_MARKER`.
+  - `DESIGN_MD_PROMPT_BULLET` says "ahead of design/tokens.css". A flag-on `LIVE_DESIGN_MD_PROMPT_BULLET` drops that clause. The flag-off section never had the bullet, so the old one is deleted.
+  - `designModePromptSection(designMd, mode)` takes `"v1" | "live" | "limited"`, and its callers change with it: `llm-client.ts`, `skill.test.ts`, `design-md/turn.test.ts` and `prompt-prefix-stability.test.ts`.
+  - **Replacing a stored section.** `withDesignModeSection` (`design-md/turn.ts`) also treats a stored section holding `LIMITED_APP_PROMPT_MARKER` as one to replace, and `llm-client.ts` passes `live: designLive` (the flag), not `designMdOn || liveAppsOn`. So a flag-on turn whose tools exclude both `design_system` and `design_app` still swaps a stored v1 section for the limited one, and a flag-off turn swaps either flag-on section back to v1.
+- **With the flag on, written `design/` pages don't land by themselves.** The wiring is in `llm-client.ts`, not only `written-pages.ts`:
+  - in both the tool loop and ACP's `onFileWrite`, `placeWrittenRoute` is nested inside `if (placeWrittenPage && …)`. 3d splits the two checks, so route placement runs whether or not page placement exists;
+  - with the flag on, `placeWrittenPage` and the command scanner (`createDesignPageScanner`) aren't built, and `recentWrittenPages.note` isn't called for `design/` pages;
+  - entry's `pagesWrittenInChat` gains `includeHtmlPages` (default `true`), which `entry.ts` passes as `!live`, so entry places only routes (and `/`).
+
+  Existing `file` frames, the watcher's reloads, Add ▸ File, `canvas_place_frame {kind: "file"}` and `canvas_inspect` all keep working. The automatic check report for a `design/` page Aiden edits (`writtenPageInspector`) stays too: it places nothing, and it helps when the person asks Aiden to fix an HTML page they placed.
 - **With the flag off, the v1 HTML method stays until Phase 7.** Flag-off is the shipped product (v1 is on by default). Deleting its only way to design before Phase 7 turns the replacement on would regress main between 3d and 7. Phase 7, which retires the flag, deletes `HTML_METHOD`, `DESIGN_MODE_PROMPT_SECTION`'s HTML bullets and the `design/` auto-placement, and §8's Phase 7 row is amended to say so.
 
 ### S115 — Analytics (proposed)
 
 - **New event** `design_app_scaffolded {kind: "react-nonweb" | "starter", outcome: "added" | "declined" | "failed"}`. It's sent once per card that was answered, from main: `added` after S107 approved the files, `declined` on Not now, and `failed` when an answered Allow ended in `scaffold-failed`. A refusal before any card, a toolchain problem, an unanswered card and `existing` send nothing. It carries no folder, name, alias, path or count.
 - **Widened:** `design_md_drafted.source` gains `mock` (S110).
-- **New call site:** `design_app_frame_added` call site 7, the scaffold's `/` placement (S113), with `source: aiden` or `person`, after commit, never for a reused frame.
+- **New call site:** `design_app_frame_added` call site 7, the scaffold's `/` placement (S113), with `source: aiden` or `person` and `device_bucket: "laptop"`, after commit, only when `placeMockHome` answers `placed`.
 - `design_app_started` is unchanged. The mock's start reports `framework: vite`, `manager: npm`.
-- Each change goes in `analytics-events.ts`, `docs/analytics.md` and a registry test (Task 6). The Settings "What's sent" sheet renders from the registry.
+- Each change goes in `analytics-events.ts`, `docs/analytics.md` and a registry test (Task 6). `analytics-feature-reports.test.ts` today asserts `design_md_drafted {source: "mock"}` is dropped; Task 6 turns that case into "accepted", and adds `design_app_scaffolded` accept and drop cases there. The Settings "What's sent" sheet renders from the registry.
 
 ### S116 — Gates and surfaces (proposed)
 
@@ -325,8 +373,10 @@ This is AGENTS.md's manual-only network posture, applied to mock apps:
   - a writable workspace (not `none` or `read-only`);
   - a live desktop window owner (S26).
 
-  The tool counts toward S31's 4 starts per turn, and checks `stillAvailable` after every await, as `start` does.
-- **Approval.** `design_app` stays in `REVIEWED_CARDLESS_TOOLS`. Its per-call approval card is skipped because S102's card is the consent, and hooks and Settings → Approvals rules still apply (S31). `workspace-tool-approval.ts`'s reviewed reason gains "scaffold asks on its own card".
+  The tool counts toward S31's 4 starts per turn, checks `stillAvailable` before acting and after every await, and is cancelled mid-wait only through the turn's `signal`, as `start` is.
+- **The person's IPC.** `designApp:scaffold` throws on a refusal, like every other `designApp:*` handler (`person()`), and resolves with `DesignAppScaffoldResult` otherwise; the chip shows the thrown message. `DesignAppChat` gains `designMode?: boolean`, and the handler refuses a chat that isn't in design mode. A new `pageOnScreen(chatId, pageId)` dependency, wired in `design-canvas-main.ts` from `designCanvasViews` and the store (as `placeAppRoute` checks its page), refuses a page that isn't the chat's page on screen. The chip gets `pageId` and the canvas's `flush` from `design-canvas.tsx`, and flushes the pending save before it calls.
+- **Same-turn routes.** `createWrittenRouteTurn` loads the snapshot once per turn, so routes written after a mid-turn scaffold would be missed. It gains `reset()`, which the `design_app` tool calls through a new `onScaffolded` dependency when `scaffold` answers `scaffolded` or `existing`.
+- **Approval.** `design_app` stays in `REVIEWED_CARDLESS_TOOLS`. Its per-call approval card is skipped because S102's card is the consent, and hooks and Settings → Approvals rules still apply (S31). `main/services/approval-gate/workspace-tool-approval.ts`'s reviewed reason gains "scaffold asks on its own card".
 - **Desktop only.** Remote, phones, Telegram and `aiden serve` don't get `design_app` today (S7, S26), so none can scaffold. The mock's files are ordinary workspace files, which Remote file views show like any others. No Remote contract changes (Task 11).
 - **The CLI** bundles `main/services` and `renderer/shared`. The new pure modules must build there (Task 11), and the template isn't bundled.
 
@@ -370,7 +420,11 @@ export type DesignAppConsentRequest =
       scripts: Array<{ name: "dev"; text: string }>;
       /** Direct dependencies with exact versions, from the template. */
       packages: Array<{ name: string; version: string }>;
+      /** Paths relative to the folder, sorted; at most 40 shown, then "and N more". */
+      files: readonly string[];
     };
+// The scaffold card's DesignAppConsent key is `${workspaceId}\0\0scaffold`, so
+// closeAll(`${workspaceId}\0`) on forgetWorkspace closes it and no app root collides.
 
 export type DesignAppProblem =
   | /* …unchanged… */
@@ -379,7 +433,7 @@ export type DesignAppProblem =
 
 export const DESIGN_APP_CHANNELS = {
   // …
-  /** (chatId, {pageId}) → DesignAppStatus | {error}. */
+  /** (chatId, {pageId}) → DesignAppScaffoldResult; throws on a refusal, like every designApp:* handler. */
   scaffold: "designApp:scaffold",
 } as const;
 export function mockRefusalMessage(why: MockRefusal, folder?: string): string;
@@ -420,12 +474,43 @@ export async function writeMockApp(
   files: ReadonlyMap<string, Buffer>,
   options: { admission: WorkspaceAdmission; signal?: AbortSignal },
 ): Promise<{ ok: true; written: string[] } | { ok: false; step: "write" | "verify"; kept: string[] }>;
+/** In memory only: the scaffold puts the pair in the file map before writeMockApp runs (S110). */
 export async function draftMockDesignMd(
   workspaceRoot: string,
-  folder: string,
   source: string,
   deps: { reader: DesignMdReader; signal?: AbortSignal },
-): Promise<{ designMd: "drafted" | "starter"; styleSources: string[]; reason?: string }>;
+): Promise<
+  | { designMd: "drafted"; files: { "DESIGN.md": Buffer; "src/theme.css": Buffer }; styleSources: string[] }
+  | { designMd: "starter"; styleSources: string[]; reason: "no-tokens" | "lint" | "export" | "unavailable" | "timeout" }
+>;
+```
+
+```ts
+// main/services/design-canvas/design-md/draft.ts (addition)
+export async function designMdDraftResultFor(
+  workspaceRoot: string,
+  source: string,
+): Promise<{ content: string; colors: number; fonts: number; sources: string[] }>;
+
+// main/services/design-canvas/design-md/reader.ts (addition)
+interface DesignMdReader {
+  exportContent(content: string, format: "css-vars", signal?: AbortSignal): Promise<string>;
+}
+
+// main/services/design-canvas/design-md/locate.ts (addition)
+interface DesignAppRoots { invalidate(workspaceRoot: string): void }
+
+// main/services/design-canvas/written-pages.ts (additions)
+interface WrittenRouteTurn { reset(): void }
+export function pagesWrittenInChat(messages: ChatMessage[], options: { isRouteFile?: …; includeHtmlPages?: boolean }): …;
+
+// main/services/design-canvas/mock-home.ts (new)
+export async function placeMockHome(input: {
+  chatId: string; pageId: string; appRoot: string; by: "person" | "aiden";
+}, deps: MockHomeDeps): Promise<"placed" | "already" | "refused">;
+
+// main/services/design-canvas/retired-design-system-offers.ts (new, delete-only)
+export async function cleanUpRetiredDesignSystemOffers(userDataDir?: string): Promise<void>;
 ```
 
 ```ts
@@ -437,13 +522,16 @@ export interface DesignAppScaffoldInput {
   owner: DesignAppOwner;
   /** The person's: the page on screen, checked by main. Aiden's: the turn's page resolver (S84). */
   page: { pageId: string } | { resolve: () => Promise<string | undefined> };
+  /** The tool's wait follows these: "card" waits consentMs + graceMs, "writing" and "app" wait settleMs (S102). */
+  onPhase?: (phase: "card" | "writing" | "app") => void;
+  /** Ends only the caller's wait; an answered card's write and install go on. */
   signal?: AbortSignal;
 }
 class DesignAppServers {
   scaffold(input: DesignAppScaffoldInput): Promise<DesignAppScaffoldResult>;
 }
 export type DesignAppScaffoldResult =
-  | { status: "scaffolded"; root: string; kind: DesignMockKind; app: DesignAppStatus; placed: "placed" | "already" | "pending" | "none";
+  | { status: "scaffolded"; root: string; kind: DesignMockKind; app: DesignAppStatus; placed: "placed" | "already" | "pending" | "none"; // pending: kept for one retry (S113)
       aliases: Record<string, string>; stubs: Record<string, string>; globals: string[]; designMd: "drafted" | "starter"; styleSources: string[] }
   | { status: "existing"; root: string; app: DesignAppStatus }
   | { status: "problem"; problem: DesignAppProblem };
@@ -451,7 +539,9 @@ export type DesignAppScaffoldResult =
 
 ```ts
 // main/services/design-canvas/app-server/app-routes-core.ts
-export function routeConventionsOf(app: { framework?: FrameworkId; mock?: true }): readonly RouteConvention[];
+export type RouteApp = { framework?: FrameworkId; mock?: true };
+export function routeConventionsOf(app: RouteApp): readonly RouteConvention[];
+// discoverRoutes, routeForWrittenFile and routeFiles take a RouteApp in place of the framework (S108).
 
 // main/services/design-canvas/canvas-tools.ts
 export type DesignPromptMode = "v1" | "live" | "limited";
@@ -524,13 +614,13 @@ export function createDesignNoteOffers(input: {
 
 ### Task 0: Baseline and probes
 
-- [ ] Confirm the branch is `t3/design-mode-v2-p3d` on `origin/t3/design-mode-v2-p3c` (`b7a0ec93c` or later). Merge newer 3c commits (no rebase), and grep for conflict markers.
+- [ ] Confirm the branch is `t3/design-mode-v2-p3d` on `origin/t3/design-mode-v2-p3c` (`55748a308` or later). Merge newer 3c commits (no rebase), and grep for conflict markers.
 - [ ] Run `npm ci`, `npm run build:native:c`, `npm run build:vcc`, and `npm ci` in `packages/cli`.
 - [ ] Recheck each "What exists today" row with `rg -n`, and update the table if anything moved.
-- [ ] **Probe 1 (create-only writes).** Call `writeConfinedWorkspaceText` with `expectedSha256: null` on an existing file in a temp workspace. Record whether it refuses. If it overwrites, S107 adds a `createOnly` option to it (with a test in `coding-tools`' own suite).
+- [ ] **Probe 1 (create-only writes).** Settled by review: S107 uses 3c's `writeConfinedFile(…, {create: true})`, which opens with `O_CREAT | O_EXCL | O_NOFOLLOW`. Confirm that's still its behaviour at the merged head (it has its own suite), and record it.
 - [ ] **Probe 2 (JSX source).** In a scratch Vite 8.3.5 app on the repo's `node_modules`, alias `react/jsx-dev-runtime` to a shim that records its fifth argument. Load a page in the Space (`npm run test:e2e:space -- --run bash -c "…"`) and record whether `source.fileName` and `lineNumber` arrive. Record the outcome and S111's branch in As built.
 - [ ] **Probe 3 (PostCSS isolation).** Put a `postcss.config.js` that writes a marker file in the scratch app's parent, set `css.postcss: {}` in its config, load a CSS file, and confirm no marker appears.
-- [ ] **Probe 4 (the lockfile across platforms).** Run `npm run design-app-template:lock` on the Mac, then `npm ci` from that lockfile in the Space (linux-arm64). Confirm `rolldown`'s and `lightningcss`'s Linux bindings install and `npm run dev` serves `/`. This is a builder's probe with network access, never a test. Record the result. If the Linux bindings are missing, the lock script adds `--os`/`--cpu` passes and S105 notes it.
+- [ ] **Probe 4 (the lockfile across platforms).** Run `npm run design-app-template:lock` on the Mac, then `npm ci` from that lockfile in the Space (linux-arm64). Confirm `rolldown`'s and `lightningcss`'s Linux bindings install and `npm run dev` serves `/`. This is a builder's probe with network access, never a test. Record the result. If the Linux bindings are missing, the lock script adds `--os`/`--cpu` passes and S105 notes it. On the Mac, with the template's `.npmrc` (`ignore-scripts=true`), confirm `node_modules/fsevents/fsevents.node` is present after `npm ci`, and that an edit to `src/routes/index.tsx` reaches the open page through HMR (S106's allowlist).
 - [ ] Run `npm run test:design-mode` and `npx tsc --noEmit -p .`. Expected: PASS. Record any failures as pre-existing.
 
 ### Task 1: The shared contract
@@ -558,14 +648,15 @@ export function createDesignNoteOffers(input: {
 **Files:**
 - Create: `resources/design-app-template/` (S105's table)
 - Create: `scripts/design-app-template-lock.mjs` and the `design-app-template:lock` script in `package.json` (not in any test chain)
-- Modify: both `build.extraResources` blocks in `package.json`
+- Modify: the shared `build.extraResources` block in `package.json` only (S105), and `assertLinuxBuildConfiguration` in `scripts/verify-linux-package.mjs`
 - Create: `main/services/design-canvas/app-server/design-app-template.test.ts` (`core-git`)
+- `git add` the template's `.npmrc` and `.gitignore` before any Space run: `cua-space-e2e.sh` skips untracked `.npmrc` files.
 - Create: `tests/fixtures/design-app-template-config/` (small workspaces for the config's validation)
 
 - [ ] **Step 1: Write the failing tests** in `design-app-template.test.ts`:
   - `"the template's direct dependencies are the versions Aiden's lockfile resolves"`: read `resources/design-app-template/package.json` and the root `package-lock.json`, and compare `react`, `react-dom`, `vite` and `@vitejs/plugin-react`, each an exact version with no range.
   - `"every package in the template lockfile comes from the registry with sha512 integrity"`.
-  - `"no package in the template lockfile has an install script"`.
+  - `"only the allowlisted optional darwin package has an install script"`: the set of lockfile entries with `hasInstallScript` equals `{"node_modules/fsevents"}`, and that entry is `optional: true` with `os: ["darwin"]`. A Vite bump that adds another fails here.
   - `"the template's .npmrc turns off install scripts, audit, fund and the update check, and sets no registry"`: parse it as `key=value` lines.
   - `"the starter DESIGN.md lints clean"`: run it through DM's worker (`runDesignMdWorker`): zero errors and zero warnings.
   - `"theme.css is the css-vars export of the starter DESIGN.md"`: the worker's export equals the committed file byte for byte.
@@ -573,6 +664,11 @@ export function createDesignNoteOffers(input: {
   - **Config validation**, through Vite's `loadConfigFromFile` on each fixture workspace, so the real config runs:
     - `"an alias inside the workspace resolves"`;
     - `"an alias to /etc, to .git or through a link out of the workspace refuses"`;
+    - `"an alias to .aiden, node_modules, a hidden folder or the mock itself refuses"`;
+    - `"an alias to a protected credential path refuses"`: `.ssh`, `.aws`, a folder holding only `.env` files named as the alias, and so on;
+    - `"the config's credential rule agrees with isProtectedCredentialPath"`: a hand-written table of paths (credential and ordinary), each run through the config's exported check and `model-file-policy.ts`'s function. Every path the real function protects, the config refuses;
+    - `"server.fs.allow is the mock, its node_modules and the alias folders only"`, read from the loaded config, for a starter (no aliases) and an Electron fixture;
+    - `"server.fs.deny names the credential globs"`: a request through a dev server the test starts (on Aiden's `node_modules`, loopback, no network) for `/@fs/<alias folder>/.npmrc` and `/@fs/<alias folder>/.env` answers 403, and a normal source file in the alias folder answers 200;
     - `"a stub outside src/stubs refuses"`;
     - `"a bad alias name or a non-identifier global refuses"`;
     - `"a missing aiden.mock.json is the starter"`.
@@ -596,7 +692,9 @@ export function createDesignNoteOffers(input: {
     - A web candidate, a configured root and a url root each give `has-web-app`.
     - Truncated gives `truncated`, an unsupported canvas.json `version` gives `unsupported-config`, and `read-only` and `none` give `read-only`.
   - `"the folder is design-app, else the next free one; a mock app is reused; design/ never"`: states `{design-app: taken}` give `design-app-2`, `{design-app: mock}` gives `existing design-app`, all nine taken gives `no-free-folder`, and no input yields `design`.
-  - `"a workspace pattern covering the folder refuses"`: `["*"]`, `["design-*"]` and `["design-app"]` refuse, `["packages/*"]` doesn't, and `["*", "!design-app"]` doesn't.
+  - `"a workspace pattern covering the folder refuses"`: `["*"]`, `["design-*"]`, `["design-app"]`, `["**"]`, `["**/*"]` and `["{apps,design-app}"]` refuse (the last three through `mockFolderCovered`'s conservative rule), `["packages/*"]` doesn't, and `["*", "!design-app"]` doesn't.
+  - `"real web apps come before an existing mock"`: `apps/web` plus a marked `design-app` gives `has-web-app`; a marked `design-app` alone gives `existing`.
+  - `"guessUiRoot skips folders an alias couldn't name"`: a `.ssh`, `node_modules` or hidden folder with JSX is passed over.
   - `"isMockPackage needs aiden.designApp exactly 1"`: `1` is true; `"1"`, `2`, `true`, a missing field and an array are false.
   - `"guessUiRoot takes the first folder with JSX"`.
   - `"exposedGlobals reads exposeInMainWorld's first string argument"`: `contextBridge.exposeInMainWorld("api", {...})` and `exposeInMainWorld('electron', …)` count. A non-string first argument, a template literal, a call in a comment and `foo.exposeInMainWorldX(` don't. The list is deduplicated and capped at 20.
@@ -608,10 +706,12 @@ export function createDesignNoteOffers(input: {
 ### Task 4: Detection and routes see mock apps
 
 **Files:**
-- Modify: `main/services/design-canvas/app-server/app-detect.ts` (the `design-app*` folders, `mock` from the marker)
+- Modify: `main/services/design-canvas/app-server/app-detect.ts` (the `design-app*` folders, `mock` from the marker, excludes applied to include-found folders only)
 - Modify: `main/services/design-canvas/app-server/app-server-core.ts` (`DetectedApp.mock`)
 - Modify: `main/services/design-canvas/app-server/app-routes-core.ts` (`routeConventionsOf`), `app-routes.ts`, `app-page-files.ts` (use it)
-- Modify: `main/services/design-canvas/app-server/app-server-main.ts` (`mock` on candidates and statuses; the snapshot's `mock` offer with the flag on)
+- Modify: `main/services/design-canvas/app-server/app-server-main.ts` (`mock` on candidates and statuses; the snapshot's `mock` offer with the flag on; `routeWalks` keyed on `RouteApp`; `detectionShape` with `mock`)
+- Modify: `main/services/design-canvas/written-pages.ts` (`WrittenRouteData.owners` carry `mock`; `writtenRouteData` passes the `RouteApp`)
+- Modify: `main/handlers/design-canvas.ts` (`pageFileContext` passes the `RouteApp` to `routeFiles`)
 - Create: `tests/fixtures/design-mock-routes/` (a mock app built from the template with `src/routes/{index,settings,settings-v2,billing.index,$slug,_layout}.tsx` and a `node_modules` symlink made by the test)
 - Test: `app-detect.test.ts`, `app-routes.test.ts`, `app-page-files.test.ts`, `app-server-main.test.ts`, and `main/services/design-canvas/app-server/mock-route-path.test.ts` (new, `core-git`)
 
@@ -620,9 +720,13 @@ export function createDesignNoteOffers(input: {
     - `"a design-app folder is a candidate, and the marker makes it a mock"`;
     - `"design-app-3 is found too, design is not"`;
     - `"an Electron root with a mock app gives the mock as the single web target"` (`designTarget` is `single` on `design-app`);
-    - `"a linked design-app is skipped"`.
+    - `"a linked design-app is skipped"`;
+    - `"workspaces [\"*\", \"!design-app\"] still finds the mock"`: `kind: "web"`, `mock: true`, while `"!packages/old"` still drops an include-found folder.
   - `app-routes.test.ts`: `"a mock app's routes come from src/routes with the flat rule"`, on the fixture: `/`, `/settings`, `/settings-v2` and `/billing`, with `$slug` and `_layout` not listed.
   - `app-page-files.test.ts`: `"⌘D on a mock route copies settings.tsx to settings-v3.tsx"`, with `-v2` taken. `"Trash finds the single owner of /settings"`.
+  - `written-pages.test.ts`: `"a route written into a mock app is placed"`, through `writtenRouteData` and `routeForWrittenFile` with a `{framework: "vite", mock: true}` candidate (today's code finds no conventions for `vite`).
+  - `main/handlers/design-canvas.test.ts`: `"⌘D's page-file context knows a mock app's routes"`, through `pageFileContext` and `routeFiles`.
+  - `app-server-main.test.ts`: `"adding the marker changes the detection shape and re-walks routes"`.
   - `mock-route-path.test.ts`: `"the template's routePath agrees with main's rule on every concrete route"`. It imports `resources/design-app-template/src/aiden/route-path.ts` and `routeFromFile("tanstack", …)`, over a hand-written table and every file in `tests/fixtures/design-live-routes/src/routes/`. Where main's rule gives a concrete route, both must give the same one. Where it doesn't, `routePath` must give `null`.
   - `app-server-main.test.ts`:
     - `"with the flag on, a react-nonweb workspace's snapshot offers react-nonweb mocks"`;
@@ -637,8 +741,8 @@ export function createDesignNoteOffers(input: {
 
 **Files:**
 - Create: `main/services/design-canvas/app-server/mock-app.ts`
-- Modify: `main/services/coding-tools.ts`, only if Probe 1 needs `createOnly`
-- Test: `main/services/design-canvas/app-server/mock-app.test.ts` (new, `core-git`)
+- Modify: `main/services/design-canvas/design-md/draft.ts` (`designMdDraftResultFor`), `reader.ts` and its worker (`exportContent`), `locate.ts` (`invalidate`)
+- Test: `main/services/design-canvas/app-server/mock-app.test.ts` (new, `core-git`), and the existing `draft`, `reader` and `locate` suites
 
 - [ ] **Step 1: Write the failing tests** (temp workspaces, the real template folder):
   - `"a starter scaffold writes the template's files exactly and adds the canvas.json entry"`. Every written file's bytes equal the template's, `aiden.mock.json` is the starter, and canvas.json gains `{root: "design-app", script: "dev"}` with existing entries and unknown fields kept.
@@ -651,9 +755,14 @@ export function createDesignNoteOffers(input: {
   - `"the drafted DESIGN.md replaces the starter when the project has tokens, and theme.css is its css-vars export"`, through the real worker.
   - `"a project with no tokens keeps the starter pair"`.
   - `"a worker that times out keeps the starter pair and says why"`, with a fake reader.
+  - `"a draft whose export fails writes neither drafted file"`: a fake reader whose `exportContent` rejects. Both written files equal the template's.
+  - `"a draft source that is a link out of the workspace is refused"` (`designMdDraftResultFor`'s confinement).
+  - `"rollback reads with O_NOFOLLOW"`: a written file swapped for a link to an outside file before rollback is left alone, and the outside file is untouched.
+  - `reader` suite: `"exportContent gives the same CSS as export on the same text"`, through the real worker.
+  - `locate` suite: `"invalidate makes the next roots call see a new design-app/DESIGN.md"`.
   - `"a folder path change mid-write aborts and rolls back"`, with a fake admission.
 - [ ] **Step 2: Run.** Expected: FAIL.
-- [ ] **Step 3: Implement** per S107, S109 and S110.
+- [ ] **Step 3: Implement** per S107, S109 and S110, writing with `writeConfinedFile(…, {create: true})` and verifying with `readRegularFileBytes`.
 - [ ] **Step 4: Run.** Expected: PASS. Register and run `npm run test:ci-policy`. Commit `feat(design): write a mock app confined, create-only and verified (3d)`.
 
 ### Task 6: Scaffolding in DesignAppServers, and analytics
@@ -663,8 +772,9 @@ export function createDesignNoteOffers(input: {
 - Modify: `main/services/design-canvas/app-server/app-consent.ts` (the `scaffold` request kind, one card per workspace)
 - Modify: `main/services/design-canvas/app-server/app-records.ts` (only if `approveShown` needs the `scaffold` reason)
 - Modify: `main/services/design-canvas/main.ts` (the template dir and placement deps)
+- Create: `main/services/design-canvas/mock-home.ts` (`placeMockHome`, S113) and `mock-home.test.ts` (`core-git`)
 - Modify: `main/services/analytics/analytics-events.ts`, `docs/analytics.md`
-- Test: `app-server-main.test.ts`, `app-consent.test.ts`, `main/services/analytics/analytics-events.test.ts` (or the registry's existing test)
+- Test: `app-server-main.test.ts`, `app-consent.test.ts`, `mock-home.test.ts`, `main/services/analytics/analytics-feature-reports.test.ts`, and the registry's existing test
 
 - [ ] **Step 1: Write the failing tests** (fake `backgroundJobs`, fake toolchain, temp workspaces):
   - `"no install job starts before Allow"`: a scaffold waits on the card. Before the answer, the fake jobs list is empty, and no file exists.
@@ -676,8 +786,14 @@ export function createDesignNoteOffers(input: {
   - `"node-missing answers before any card"`, and the snapshot's `mock.problem` carries it.
   - `"a failed install keeps the files, and Retry reinstalls"` (S47).
   - `"the running mock's / is placed once on the resolved page and reported as call site 7"`: the `onAppFrameAdded` spy is called once. A second scaffold call answers `existing`, and nothing is reported.
+  - `mock-home.test.ts`: `"/ lands on a page that already has notes and frames"`; `"an existing / frame is focused, not duplicated, and not reported"`; `"a chat that left design mode before the write places nothing"`.
+  - `"a pending / survives a failed install and lands on the Retry that reaches running"`; `"a restart forgets it"`.
+  - `"the scaffold card's key closes on forgetWorkspace"`: `closeAll` with the workspace prefix answers the open card as unanswered.
+  - `"a scaffold invalidates the DESIGN.md roots"`: the roots spy sees `invalidate(workspaceRoot)` after `scaffolded`, and the next roots call lists `design-app`.
+  - `"a packaged build ignores AIDEN_E2E_DESIGN_APP_NODE_MODULES"`: with `isPackaged: true`, the knob makes no link and the install job runs.
+  - `"onPhase reports card, then writing, then app"` and `"an abort during the card ends the wait, and an Allow after it still writes and installs"`.
   - `"flag off: scaffold is unavailable"`.
-  - Analytics: `"design_app_scaffolded accepts only kind and outcome"` and `"design_md_drafted accepts source mock"`, using the registry's own validation.
+  - Analytics: `"design_app_scaffolded accepts only kind and outcome"` and `"design_md_drafted accepts source mock"`, using the registry's own validation. In `analytics-feature-reports.test.ts`, the existing case that expects `source: "mock"` to be dropped now expects it kept, and `design_app_scaffolded` gets an accept case and a drop case (an extra `folder` property).
 - [ ] **Step 2: Run.** Expected: FAIL.
 - [ ] **Step 3: Implement** per S102, S106, S112, S113 and S115.
 - [ ] **Step 4: Run.** Expected: PASS. Commit `feat(design): scaffold a mock app after the person's Allow (3d)`.
@@ -686,9 +802,12 @@ export function createDesignNoteOffers(input: {
 
 **Files:**
 - Modify: `main/services/design-canvas/app-server/app-tool.ts` (the `scaffold` action and its answer, fenced like `routes`)
-- Modify: `main/services/workspace-tool-approval.ts` (the reviewed reason's text)
-- Modify: `main/handlers/design-app.ts` (`designApp:scaffold`, through `rendererDocumentOwner` and `chatRunsDesignApps`, with the page on screen checked like S87)
+- Modify: `main/services/approval-gate/workspace-tool-approval.ts` (the reviewed reason's text)
+- Modify: `main/handlers/design-app.ts` (`designApp:scaffold`, through `rendererDocumentOwner` and `chatRunsDesignApps`; `DesignAppChat.designMode`; the `pageOnScreen` dependency)
+- Modify: `main/handlers/design-canvas-main.ts` (wires `pageOnScreen` from `designCanvasViews` and the store)
+- Modify: `main/services/llm-client.ts` (the tool's `onScaffolded` resets the turn's `createWrittenRouteTurn`)
 - Modify: `renderer/lib/ipc.ts` (`designAppApi.scaffold`)
+- Modify: `renderer/design/design-canvas.tsx` (passes `pageId` and `flush` to the chip)
 - Modify: `renderer/design/design-app-chip.tsx` (**Add design app…**, the refusal row, the toolchain problem with Retry)
 - Modify: `renderer/design/design-app-consent.tsx` (the `scaffold` card)
 - Test: `app-tool.test.ts`, `main/handlers/design-app.test.ts`, `renderer/design/design-app-chip.test.tsx`, `renderer/design/design-app-consent.test.tsx`
@@ -698,13 +817,18 @@ export function createDesignNoteOffers(input: {
     - `"scaffold answers the root, kind, placement, aliases and draft"`;
     - `"scaffold counts toward four starts a turn"`;
     - `"scaffold refuses with the refusal's message"`;
-    - `"scaffold after stillAvailable turns false stops waiting, not the install"`.
+    - `"scaffold after the turn's signal aborts stops waiting, not the install"`, and `"scaffold with stillAvailable false before acting does nothing"`;
+    - `"scaffold's wait outlives 90 s while the card is open"`: a fake clock, the scaffold reporting `card` and answering at 110 s; the tool answers `scaffolded`, not the timeout;
+    - `"a route written after scaffold in the same turn is placed"`: a file write before the scaffold loads an empty owner list; `onScaffolded` resets it, and the later `design-app/src/routes/settings.tsx` write is placed.
   - `design-app.test.ts`:
     - `"designApp:scaffold needs an attended design-mode chat with a writable folder"`;
     - `"a page id that isn't on screen is refused"`;
+    - `"a chat not in design mode is refused"`;
+    - `"refusals throw, and success resolves with the scaffold result"`;
     - `"flag off answers unavailable"`.
   - `design-app-chip.test.tsx`:
-    - `"no web app: Add design app… raises the card"`;
+    - `"no web app: Add design app… raises the card"`: the existing `target: "none"` case gains `mock: {offer: "starter"}`, and the menu is Add design app… then Connect running server…;
+    - `"the chip flushes the canvas before it asks"`: the `flush` spy runs before `scaffold`, which gets the page id;
     - `"a refused offer shows its message as a disabled row"`;
     - `"node-missing shows the install text with Retry"`;
     - `"once the mock runs, the chip reads Design app · :5173"`.
@@ -719,15 +843,22 @@ export function createDesignNoteOffers(input: {
 ### Task 8: Remove the v1 mockup path
 
 **Files:**
-- Delete: `main/services/design-canvas/design-system.ts`, `design-system.test.ts`, `design-system-offers.ts`, `design-system-offers.test.ts`, and their two entries in `scripts/ci-test-registry.json` and in `test:design-mode`
+- Delete: `main/services/design-canvas/design-system.ts`, `design-system-offers.ts`, and the `designSystemOfferLine` and `DesignSystemOffers` cases
+- Move: the rest of `design-system.test.ts` and `design-system-offers.test.ts`'s `findWorkspaceDesignSystem` case into `main/services/design-canvas/design-md/style-scan.test.ts` (new). The two old files are deleted after the move, their entries in `scripts/ci-test-registry.json` and `test:design-mode` are replaced by the new file's (`core-git`), and the moved cases keep their titles and assertions
+- Create: `main/services/design-canvas/retired-design-system-offers.ts` and its test (`core-git`); call it from `main/index.ts` beside `cleanUpRetiredModelScoring()`
 - Modify: `main/services/design-canvas/design-md/turn-wiring.ts` (`createDesignNoteOffers` without `v1` and `folderPath`), `turn-wiring.test.ts`
-- Modify: `main/services/llm-client.ts` (drop `designSystemOffers`; `designPromptMode` from the flag and `liveAppsOn`)
-- Modify: `main/services/design-canvas/main.ts` (drop the singleton; add the delete-only removal of `design-system-offers.json` and `.key` at design-canvas init)
+- Modify: `main/services/llm-client.ts`:
+  - drop `designSystemOffers`; `designPromptMode` from the flag and `liveAppsOn`;
+  - split `placeWrittenRoute` out of `if (placeWrittenPage && …)` in the tool loop and in ACP's `onFileWrite`;
+  - with the flag on, build no `placeWrittenPage` and no `createDesignPageScanner`, and note no `design/` page in `recentWrittenPages` (the `writtenPageInspector` stays, S114);
+  - `withDesignModeSection(…, {live: designLive})`
+- Modify: `main/services/design-canvas/design-md/turn.ts` (`LIMITED_APP_PROMPT_MARKER` counts as a section to replace)
+- Modify: `main/services/design-canvas/main.ts` (drop the singleton; no I/O added)
 - Modify: `main/services/design-canvas/offer-log.test.ts` (the one test title)
-- Modify: `main/services/design-canvas/skill.ts` (`CRAFT`, flag-off `HTML_METHOD` minus one sentence, the live "No web app: a design app" section)
-- Modify: `main/services/design-canvas/canvas-tools.ts` (the live bullet, `LIMITED_DESIGN_MODE_PROMPT_SECTION` and its marker, `designModePromptSection(designMd, mode)`), and every `withDesignModeSection` caller
-- Modify: `main/services/design-canvas/written-pages.ts`, `entry.ts` (no `design/` auto-placement with the flag on)
-- Test: `skill.test.ts`, `canvas-tools.test.ts`, `turn-wiring.test.ts`, `written-pages.test.ts`, `entry`'s suite, and the llm-client design-mode suites that build the section
+- Modify: `main/services/design-canvas/skill.ts` (`CRAFT`, flag-off `HTML_METHOD` minus one sentence, the live "No web app: a design app" section, `AIDEN_DESIGN_SKILL_LIVE.description`)
+- Modify: `main/services/design-canvas/canvas-tools.ts` (every `design/` HTML bullet out of the live and limited sections, `LIMITED_DESIGN_MODE_PROMPT_SECTION` and its marker, `LIVE_DESIGN_MD_PROMPT_BULLET`, `designModePromptSection(designMd, mode)`), and every `withDesignModeSection` caller
+- Modify: `main/services/design-canvas/written-pages.ts` (`pagesWrittenInChat`'s `includeHtmlPages`), `entry.ts` (passes `!live`)
+- Test: `skill.test.ts` (its `designModePromptSection` callers at the boolean argument), `canvas-tools.test.ts`, `design-md/turn.test.ts`, `prompt-prefix-stability.test.ts`, `turn-wiring.test.ts`, `written-pages.test.ts` (which also covers `entry.ts`), `style-scan.test.ts`, and the llm-client design-mode suites that build the section
 
 The live skill's new section reads:
 
@@ -747,10 +878,14 @@ The live skill's new section reads:
     - `"each prompt mode is static"`: two calls give the same text;
     - `"live and limited never say to write design/ HTML"`;
     - `"v1 is today's section"`;
-    - `"a stored limited section is replaced on a live turn and the other way round"`.
+    - `"a stored limited section is replaced on a live turn and the other way round"`;
+    - `"a flag-off turn replaces a stored limited section with v1"` and `"a flag-on turn with neither design_system nor design_app replaces a stored v1 section with limited"` (`design-md/turn.test.ts`, through `withDesignModeSection`);
+    - `"the live DESIGN.md bullet doesn't name design/tokens.css"`.
   - `turn-wiring.test.ts`: `"flag off the status line is the plain line"`, `"flag on it carries the DESIGN.md sentence"`.
-  - `written-pages.test.ts` / entry: `"flag on: a written design/ page isn't placed or noted; an existing file frame still reloads"`, and `"flag off: today's placement"`.
-  - A startup-cleanup case: `"the old offers log and key are removed once and nothing else in userData is touched"`.
+  - `written-pages.test.ts` (it covers `entry.ts` too): `"flag on: a written design/ page isn't placed or noted; an existing file frame still reloads"`, and `"flag off: today's placement"`. Entry: `"flag on, pagesWrittenInChat leaves out design/ pages and keeps routes"`.
+  - The llm-client tool-loop suite: `"a route write is placed when no page placer exists"`, for the tool loop and ACP's `onFileWrite`.
+  - `retired-design-system-offers.test.ts`: `"the old offers log and key are removed, a missing file is fine, and nothing else in userData is touched"`.
+  - `style-scan.test.ts`: the moved cases pass unchanged against `design-md/style-scan.ts`.
 - [ ] **Step 2: Run.** Expected: FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** the suites above, then `npm run test:design-mode`. Expected: PASS. Run `npm run test:ci-policy`. Commit `refactor(design): remove the v1 tokens offer and, with live apps, the HTML mockup path (3d)`.
@@ -762,7 +897,9 @@ The live skill's new section reads:
 - Test: `main/services/design-canvas/app-server/design-app-template.test.ts`
 
 - [ ] **Step 1: Write the failing tests** (the shim as a module, with a fake `jsxDEV`):
-  - `"a host element gets data-aiden-src with the workspace path and line"`;
+  - `"a host element gets data-aiden-src with ws:, the workspace path and line"`;
+  - `"a workspace under a linked folder still matches"`: the config's realpath'd root against a `/private/var`-style `fileName`;
+  - `react-source-walk.test.ts`: `"a ws: stamp is read as workspace-relative, an unprefixed one as before"`;
   - `"a component element, an element that has one already, and a source outside the workspace are left alone"`;
   - `"the value is capped at 256 characters and never absolute or with .."`.
 - [ ] **Step 2: Run.** Expected: FAIL.
@@ -780,7 +917,9 @@ The live skill's new section reads:
   - `resources/design-app-template/`, `tests/fixtures/design-mock-`;
   - `main/services/design-canvas/app-server/mock-app`, `main/services/design-canvas/app-server/app-detect`, `main/services/design-canvas/app-server/app-tool`, `main/services/design-canvas/app-server/app-server-main`;
   - `main/services/design-canvas/skill`, `main/services/design-canvas/canvas-tools`, `main/services/design-canvas/written-pages`;
-  - `renderer/design/design-app-chip`, `renderer/design/design-app-consent`, `renderer/shared/design-app`, `tests/e2e/design-live-helpers.ts`.
+  - `renderer/design/design-app-chip`, `renderer/design/design-app-consent`, `renderer/shared/design-app`, `tests/e2e/design-live-helpers.ts`;
+  - `main/services/design-canvas/app-server/app-routes`, `main/services/design-canvas/app-server/app-page-files`, `main/services/design-canvas/entry`, `main/services/design-canvas/mock-home`, `main/services/design-canvas/design-md/draft`, `main/handlers/design-app`, `main/handlers/design-canvas`.
+- Modify: `tests/e2e/design-app-status.spec.ts:320-327`: the no-web-app chip's menu is now `["Add design app…", "Connect running server…"]` with the flag on.
 
 - [ ] **Step 1: Write the spec.** Each test seeds its own workspace copy. The fake model drives Aiden. Cases:
   - **A. Electron project, Allow.** The fake model calls `design_app scaffold`. The card asks the Electron question and lists `react`, `react-dom`, `vite` and `@vitejs/plugin-react` with versions. Press Add design app (focus, Enter). `design-app/` exists with `aiden.mock.json` holding `@app` → `src/renderer` and `api`. The chip reads "Design app". A live `/` frame shows the starter heading, and its `<h1>` has `data-aiden-src` starting `design-app/src/routes/index.tsx:` (read through the frame, unless Task 9 was deferred).
@@ -790,7 +929,7 @@ The live skill's new section reads:
   - **E. Refusal.** A fixture whose root script is `turbo run dev` gives no card. The tool answers `workspace-runner`, and the chip shows its message.
   - **F. Flag off.** No chip and no `scaffold`. Aiden's design/ HTML page still lands (today's v1 behaviour).
   - **G. Flag on, an existing design/ page.** It shows as a `file` frame added by the person, and reloads on save. A new `design/` file written by the fake model doesn't land by itself.
-- [ ] **Step 2: Run** in the Space: `npm run test:e2e:space -- tests/e2e/design-mock-app.spec.ts`, then the 3a–3c live specs and the flag-on and flag-off v1 design suites.
+- [ ] **Step 2: Run** in the Space, with the template's `.npmrc` tracked: `npm run test:e2e:space -- tests/e2e/design-mock-app.spec.ts`, then `design-app-status.spec.ts`, the 3a–3c live specs and the flag-on and flag-off v1 design suites.
 - [ ] **Step 3: Screenshots** in light and dark (`shoot`), for the PR body:
   - the Electron scaffold card;
   - the starter card;
@@ -803,9 +942,9 @@ The live skill's new section reads:
 
 ### Task 11: Packaging, the CLI and the native-clients guard
 
-- [ ] Extend `scripts/verify-macos-package.mjs` and `scripts/verify-linux-package.mjs` (beside `verifyPackagedDesignMdLinter`). Each checks that `Resources/design-app-template/package.json`, `package-lock.json`, `.npmrc`, `vite.config.js` and `src/aiden/route-path.ts` are packed as regular files, and that the packed `package.json` carries the marker. Extend `scripts/verify-macos-package.test.mjs` with the missing-template case.
+- [ ] Extend `scripts/verify-macos-package.mjs` and `scripts/verify-linux-package.mjs` (beside `verifyPackagedDesignMdLinter`). macOS checks `Contents/Resources/design-app-template/…` and Linux `resources/design-app-template/…` (its lowercase unpacked layout): `package.json`, `package-lock.json`, `.npmrc`, `.gitignore`, `vite.config.js` and `src/aiden/route-path.ts` packed as regular files, with the packed `.npmrc` holding `ignore-scripts=true`, and that the packed `package.json` carries the marker. Extend `scripts/verify-macos-package.test.mjs` with the missing-template case.
 - [ ] Run a local unsigned `--dir` build and the macOS check. Record it in As built.
-- [ ] Run `npm run cli:build` and `cd packages/cli && npm test`. Expected: PASS.
+- [ ] Run `npm run cli:build` and `cd packages/cli && npm test`. Expected: PASS. The CLI bundle doesn't import `design-canvas` today; if that's still so, record that 3d's modules aren't in it.
 - [ ] Check that no Aiden Remote contract changed: `git diff origin/t3/design-mode-v2-p3c -- main/services/remote* main/services/aiden-remote* ios android` is empty, and the canvas JSON gains no stored field. Record this in As built.
 
 ### Task 12: Docs, memory and spec amendments
@@ -830,6 +969,8 @@ The live skill's new section reads:
 - Modify: `.memory/design-mode.md`. Add a "v2 Phase 3d" section: the template and its pins, the lock script, the card as the consent, the folder rule, the marker, the route convention, the config's validation, Probe 2's outcome, the v1 removal's split between the flag states, and E2E gotchas.
 - Modify: this plan's As built.
 
+- [ ] Fix the known stale lines: `docs/design-mode.md:49` (the chip menu "has only Connect running server…"), `:109` (routes and `design/` pages together), `:112` (a workspace without a web app keeps `design/` HTML pages), `:116` (Privacy), `docs/analytics.md:55` (`design_md_drafted` gains `mock`) and `:57` (`design_app_frame_added` call site 7).
+- [ ] Confirm `renderer/components/onboarding-feature-gallery.tsx:127-134` needs no change: design apps stay behind the experimental flag, and the gallery shows only shipped features.
 - [ ] Search for stale claims: `rg -n "tokens.css|specimen.html|tokens offer|design/\*\.html|mockup|design-app" docs README.md PRODUCT.md main/services/design-canvas/skill.ts`. Fix any that 3d makes stale.
 - [ ] Commit `docs(design): design apps and the v1 mockup removal (3d)`.
 
@@ -844,11 +985,11 @@ The live skill's new section reads:
 | S106 | Network only through `npm ci` after the Allow; the person's npm registry settings; sha512 integrity; no install scripts, audit, fund or update check; reinstalls under 2b's consent | §6.8, §6.2.3 |
 | S107 | Confined, create-only, bounded writes, verified before the fingerprint is approved; rollback of unchanged files only; the canvas.json entry is `{root, script}` with no `mock` field | §6.8 |
 | S108 | Detection sees `design-app*` folders; `mock` from the marker; mock routes use TanStack's flat-file rules, so 3b's placement and 3c's ⌘D and Trash work; concrete routes only | §6.3.6, §6.8 |
-| S109 | `aiden.mock.json` (aliases, stubs, globals) as validated data; main's first pass: UI root, shell stubs, `exposeInMainWorld` globals; one React | §6.8 |
-| S110 | `theme.css` is the `css-vars` export (amends `css-tailwind`); a clean-linting starter; react-nonweb drafts from the project's style files at scaffold, else the starter | §6.9 |
-| S111 | `data-aiden-src` from a JSX dev-runtime shim (probe first); workspace-relative `path:line`; Phase 4 accepts workspace paths for mock apps | §11 item 5, S11 |
+| S109 | `aiden.mock.json` (aliases, stubs, globals) as validated data; alias targets refuse `.git`, `.aiden`, hidden folders and protected credential paths; `server.fs.allow` is the mock, its `node_modules` and the alias folders, with an explicit credential `fs.deny`; main's first pass: UI root, shell stubs, `exposeInMainWorld` globals; one React | §6.8 |
+| S110 | `theme.css` is the `css-vars` export (amends `css-tailwind`); a clean-linting starter; react-nonweb drafts from the project's style files at scaffold, lint and export in memory before anything is written, else the starter; DESIGN.md's roots are invalidated after a scaffold | §6.9 |
+| S111 | `data-aiden-src` from a JSX dev-runtime shim (probe first); `ws:`-prefixed workspace-relative `path:line` from a realpath'd root; `_debugStack` paths stay app-relative; Phase 4 resolves each by its base | §11 item 5, S11 |
 | S112 | Toolchain before the card; install failures keep the files, with fixed network or auth hints from npm's codes; the chip's Add design app…, refusal row and problem | §6.8, §6.2.5 |
-| S113 | `/` placed once on the resolved page after the start; iterations are `src/routes/` files; the tool waits like `start` | §6.8 |
+| S113 | `/` placed once on the resolved page after the start, whatever else is on it, an existing `/` focused; a pending placement survives one Retry in the run; iterations are `src/routes/` files; the tool waits for the card, then like `start` | §6.8 |
 | S114 | The tokens offer is deleted in both flag states; flag on, no prompt or skill teaches `design/` HTML and written pages don't auto-place; flag off keeps v1's HTML method until Phase 7 deletes it | §5.4, §8 |
 | S115 | `design_app_scaffolded {kind, outcome}`; `design_md_drafted` source `mock`; `design_app_frame_added` call site 7 | §6.10 |
 | S116 | The gates; `design_app` stays cardless because scaffold has its own card; desktop only; no Remote contract change | §6.2.4, §6.8 |
@@ -883,12 +1024,14 @@ Then run `npm run test` once before the PR. CI must be green on the exact head. 
 | 6 | **The person deletes `design-app/`.** | Detection drops it. The stale canvas.json entry is ignored, because `configuredRoots` needs a web candidate. The next offer can scaffold again. |
 | 7 | **The person commits `design-app/`.** | It's their choice. `.gitignore` keeps `node_modules` and caches out, and the README says what the folder is. |
 | 8 | **The marker is planted in a hostile repo.** | It grants nothing: S2's card still guards the start (S104). |
-| 9 | **Aiden edits `aiden.mock.json` to read outside the workspace.** | The config refuses (Task 2's validation cases). The dev server only listens on loopback, and Vite's default `fs.deny` for `.env*`, certificates and `.git` still applies. |
+| 9 | **Aiden edits `aiden.mock.json` to read outside the workspace, or a credential inside it.** | The config refuses targets outside the workspace and protected credential paths (Task 2). `server.fs.allow` is only the mock, its `node_modules` and the validated alias folders, never the workspace root, and an explicit `fs.deny` adds `.npmrc`, `.netrc`, keys, `.ssh`, `.aws`, `.aiden` and `.env*` to Vite's defaults. The dev server only listens on loopback. |
 | 10 | **An HTML page the person asks Aiden to tweak, with the flag on.** | Its frame still works. The live skill no longer teaches the tweaks block, so Aiden reads the page's own block if it has one. This is accepted until Phase 7, and noted in docs. |
 | 11 | **The flag-off skill changes by one sentence.** | It's intentional (S114), and the change is called out in the PR. Flag-off prompt caching pays one miss per chat once. |
 | 12 | **`npm ci` is slow on a cold cache.** | The chip shows Installing… with logs. The tool's 90 s wait answers with the phase, and `/` is placed once it's running (S113). |
 | 13 | **The source arg isn't passed to `jsxDEV`.** | Probe 2, with S111's fallback or deferral to Phase 4's `_debugStack` path (S64). |
 | 14 | **A workspace with a `design-app` that the person later turns into a real app.** | Without the marker it's just a web candidate, so S103 finds `has-web-app` and offers nothing. |
+| 15 | **A Vite bump brings another package with an install script.** | Task 2's allowlist test fails, and the bump needs a decision: allowlist it with a reason, or pin around it. `ignore-scripts=true` means it wouldn't run either way. |
+| 16 | **A corporate mirror serves a re-packed tarball.** | Its `sha512` doesn't match the lockfile, and `npm ci` fails with an integrity error. S112 shows it with the network hint; Aiden can't fix a mirror, and the docs say so. |
 
 ## Open questions
 
@@ -896,7 +1039,7 @@ Each has the answer this plan uses. The owner may override.
 1. **Ask with `ask_user_question`, as the spec words it, or a main card?** *A main-owned card that is also the launch consent* (S102). Main can't verify a chat answer, and the yes gates network access.
 2. **Tailwind in the template?** *No.* Four dependencies. Aiden adds Tailwind with an approved `run_command` when a project needs it (S105).
 3. **`theme.css` as `css-tailwind` (the spec) or `css-vars`?** *`css-vars`*, because the template has no Tailwind (S110).
-4. **Delete the tokens offer for flag-off users now, or at Phase 7?** *Now*, as the spec's §11 item 2 and S6 say. The flag-off skill drops the one sentence that promised it (S114).
+4. **Delete the tokens offer for flag-off users now, or at Phase 7?** *Now*, as the spec's §11 item 2 and S6 say. The flag-off skill drops the one sentence that promised it (S114). **Needs the owner's confirmation before Task 8.** The review points out that flag-off people then have neither the tokens offer nor DM's DESIGN.md draft offer until Phase 7, and `PRODUCT.md:71` documents the offer today. If the owner prefers, Task 8 keeps `design-system-offers.ts` for flag-off turns only and S114's deletion moves to Phase 7; nothing else in 3d depends on it.
 5. **Keep v1's HTML mockups for flag-off turns until Phase 7?** *Yes.* Flag-off is the shipped product, and its only way to design must last until the flag turns on (S114).
 6. **Can the person start the flow without Aiden?** *Yes*, with the chip's Add design app… (S112).
 7. **Count declines in analytics?** *Yes*, as `outcome: declined`. Unanswered cards are not counted (S115).
@@ -905,6 +1048,33 @@ Each has the answer this plan uses. The owner may override.
 10. **Remember a decline across restarts?** *No.* Memory only, like 2b's declines. The person's chip item always asks (S102).
 11. **One mock app per workspace in a monorepo with several non-web React roots?** *Yes.* The source is the shallowest, and Aiden adds aliases for the others (S103).
 12. **If the JSX source probe fails?** *A transform-based stamp if Vite exposes one, else defer the stamps to Phase 4* (S111).
+
+## Applied review decisions (review-p3d-plan, 2026-11-27)
+
+| # | Finding | Decision |
+|---|---|---|
+| 1 | `fsevents` 2.3.3 has `hasInstallScript` | Fixed: S106 keeps `ignore-scripts=true` with an exact allowlist (`node_modules/fsevents`, optional, darwin); Task 2's test names it; Probe 4 checks the prebuilt binary and HMR on the Mac. |
+| 2 | `mock` isn't carried through route plumbing | Fixed: `RouteApp` through `discoverRoutes`, `routeForWrittenFile`, `routeFiles`, `routeWalks`, `detectionShape`, `writtenRouteData` and `pageFileContext` (S108, Task 4 tests). |
+| 3 | Excludes drop fixed folders | Fixed: excludes apply only to include-found folders (S104, Task 4 test). |
+| 4 | `placeWrittenRoute` nested in the page check; v1 wiring is in llm-client | Fixed, except the inspector: routes are split out, page placement, the command scanner and the timeline note are off with the flag on, `pagesWrittenInChat` gains `includeHtmlPages`. **Pushed back in part:** `writtenPageInspector` stays, since it places nothing and checks HTML pages the person still places by hand (S114). |
+| 5 | Deleting the scanner's only tests | Fixed: moved to `design-md/style-scan.test.ts`, registered (Task 8). |
+| 6 | `fs.allow` is the whole workspace; credentials | Fixed: allow is the mock, its `node_modules` and alias folders; explicit credential `fs.deny`; alias targets checked against a copy of `isProtectedCredentialPath`'s rules, tested against the real function (S109, Task 2). |
+| 7 | The tool's 90 s wait vs the card | Fixed: `onPhase` gives the card `consentMs + graceMs`, then `settleMs`; a fake-clock test (S102, Task 7). |
+| 8 | Packaging block, dotfiles, Linux path | Fixed: shared block only, dotfile filter, `assertLinuxBuildConfiguration`, per-platform paths (S105, Task 11). |
+| 9 | `fallbackRoute` can't place `/` | Fixed: `placeMockHome` modelled on `placeAppRoute`, `placed \| already`, one retry (S113, Task 6). |
+| 10 | IPC and chip plumbing | Fixed: throws like the other handlers, `designMode`, `pageOnScreen`, chip `pageId` and `flush` (S116, Task 7). |
+| 11 | Draft result, stale roots, two-file write | Fixed: `designMdDraftResultFor`, `exportContent`, in-memory pair, `invalidate` (S110, Task 5). |
+| 12 | Written-route turn cache | Fixed: `reset()` through `onScaffolded` (S116, Task 7). |
+| 13 | Prompt wiring gaps | Fixed: `LIMITED_APP_PROMPT_MARKER`, `live: designLive`, live DESIGN.md bullet, every `design/` bullet, skill description, test callers (S114, Task 8). |
+| 14 | Tests that pin today | Fixed: `design-app-status.spec.ts`, `analytics-feature-reports.test.ts`, `design-app-chip.test.tsx` in Tasks 10, 6 and 7. |
+| 15 | Card files, consent key, row order | Fixed: `files`, `${workspaceId}\0\0scaffold`, real apps before `existing` (S102, S103). |
+| 16 | Stamp path bases | Fixed: realpath'd root, `ws:` prefix, Phase 4 resolves by base (S111, Task 9). |
+| 17 | Cleanup in `design-canvas/main.ts` | Fixed: `cleanUpRetiredDesignSystemOffers()` from `main/index.ts` (S114). Not added to onboarding reset: the file is gone after the first launch. |
+| 18 | Paths, write helper, wording, packaged knob | Fixed: approval path, `writeConfinedFile` and `readRegularFileBytes`, `signal` wording, the packaged-knob test (S107, S116, Tasks 6 and 7). |
+| 19 | Globs, Deno wording, user npmrc, Space sync | Fixed: `mockFolderCovered`, S103's starter row, S106's registry note, `.npmrc` tracked (S103, S104, S106, Task 2). |
+| 20 | Spec-map prefixes, stale doc lines | Fixed: Task 10's prefixes, Task 12's lines and the gallery check. |
+
+Open question 4 is flagged for the owner, as the review asks; the plan's default is unchanged.
 
 ## As built
 

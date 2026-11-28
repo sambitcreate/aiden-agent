@@ -510,3 +510,17 @@ Branch `t3/design-mode-v2-p3c`, stacked on 3b, behind `AIDEN_EXPERIMENTAL_DESIGN
 ## v2 Phase 3d: mock apps (2026-11-27, planned)
 
 Branch `t3/design-mode-v2-p3d`, stacked on 3c (PR #968), behind `AIDEN_EXPERIMENTAL_DESIGN_LIVE`. Plan: `docs/superpowers/plans/2026-11-27-design-mode-v2-p3d-mock-apps.md`; proposed decisions S102–S116, not yet in the spec's amendment list. Key calls: the ask is a main-owned `scaffold` consent card (not `ask_user_question`, which main can't verify) whose Allow is also the S2 launch consent; template in `resources/design-app-template/` with four exact pins equal to the root lockfile, a committed registry lockfile, `.npmrc` with `ignore-scripts`/no audit/fund/update check and no `registry`; always npm; no Tailwind; `theme.css` is the `css-vars` export; mock routes use TanStack's flat-file rules; `aiden.mock.json` holds aliases/stubs/globals as data validated by a self-contained `vite.config.js`; the tokens offer is deleted in both flag states, while flag-off keeps v1's HTML method until Phase 7.
+
+Revision 2 after review-p3d-plan (Gemini 4 Neon high, 20 findings: 19 fixed, #4 in part). Facts the review surfaced that matter when building:
+- Vite 8.3.5 pulls optional darwin `fsevents` 2.3.3 with `hasInstallScript`. It ships a prebuilt binary, so `ignore-scripts` plus an exact allowlist is safe. Don't use `--omit=optional`: Rolldown and LightningCSS need their optional platform packages.
+- `server.fs.allow` must never be the workspace root. It is the mock, its `node_modules` and the alias folders, with an explicit credential `fs.deny`.
+- Route plumbing passes only `framework`, so `mock` has to travel through `discoverRoutes`, `routeForWrittenFile`, `routeFiles`, `routeWalks`, `detectionShape`, `writtenRouteData` and `pageFileContext`.
+- In llm-client, `placeWrittenRoute` is nested inside the `placeWrittenPage` check.
+- `app-detect` applies excludes to the fixed folders too.
+- `waitForAttempt` arms 90 s before any app entry exists.
+- `fallbackRoute` can't place `/` on a non-empty page.
+- `createWrittenRouteTurn` caches its data for the whole turn.
+- `createDesignAppRoots` keys only on the root manifests.
+- `design-system.test.ts` is mostly `style-scan.ts`'s tests. Move them, don't delete them.
+
+Open question 4 (deleting the tokens offer for flag-off turns now) needs the owner's confirmation before Task 8.
