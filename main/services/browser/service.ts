@@ -43,6 +43,7 @@ import {
   BUILT_IN_BROWSER_PROFILES,
   DEFAULT_BROWSER_SETTINGS,
   resolveBrowserAgentAccess,
+  chatBrowserState,
   isBrowserLinkOpening,
 } from "../../../renderer/shared/browser.js";
 import {
@@ -123,6 +124,7 @@ import { projectDiagnosticError } from "../diagnostics-contract.js";
 import { writeDiagnosticEvent } from "../diagnostic-journal.js";
 
 type CommandContext = {
+  presentationChatId?: string;
   owner?: RendererDocumentOwner;
   signal?: AbortSignal;
   source: "user" | "agent";
@@ -545,7 +547,7 @@ export class BrowserService {
       }
     }
   }
-  getState(workspaceId: string): BrowserState {
+  getState(workspaceId: string, presentationChatId?: string): BrowserState {
     const workspace = this.workspace(workspaceId);
     workspace.state.profiles = this.profiles;
     workspace.state.defaults = this.defaults;
@@ -554,7 +556,8 @@ export class BrowserService {
       this.defaults.agentAccess,
       workspace.state.agentAccessOverride,
     );
-    return redactBrowserData(clone(workspace.state));
+    const state = presentationChatId ? chatBrowserState(workspace.state, presentationChatId) : workspace.state;
+    return redactBrowserData(clone(state));
   }
   /** Bot state reads cannot reveal a page whose held-field coverage was lost. */
   getBotState(workspaceId: string): BrowserState {
@@ -566,11 +569,13 @@ export class BrowserService {
     });
     return state;
   }
-  getApprovalTarget(workspaceId: string, tabId?: string): BrowserApprovalTarget {
+  getApprovalTarget(workspaceId: string, tabId?: string, presentationChatId?: string): BrowserApprovalTarget {
     this.mainWindow(workspaceId);
     const selected = tabId ?? this.workspace(workspaceId).state.activeTabId;
     if (!selected) throw new Error("Open a browser tab before reviewing this action.");
     const tab = this.tab(workspaceId, selected);
+    if (presentationChatId && tab.state.presentationChatId && tab.state.presentationChatId !== presentationChatId)
+      throw new Error("This browser tab belongs to another chat.");
     return { workspaceId, tabId: selected, url: tab.state.url,
       documentRevision: `${tab.navigationSequence}:${tab.committedNavigation}`, controlRevision: tab.queue.epoch };
   }
@@ -1135,7 +1140,7 @@ export class BrowserService {
         return { action: "deny" };
       }
       const workspaceId = tab.state.workspaceId;
-      void this.create(workspaceId, url, tab.state.profileId, true).catch(() => {
+      void this.create(workspaceId, url, tab.state.profileId, true, tab.state.presentationChatId, true).catch(() => {
         // At the tab limit (or with no owner window) load it in place, as before.
         tab.navigationCommand = undefined;
         void wc.loadURL(url).catch(() => {});
@@ -1214,6 +1219,8 @@ export class BrowserService {
     url = "about:blank",
     profileId = this.defaults.profileId,
     show = true,
+    presentationChatId?: string,
+    preserveForeground = false,
   ): Promise<LiveTab> {
     const workspace = this.workspace(workspaceId);
     this.mainWindow(workspaceId);
@@ -1246,6 +1253,7 @@ export class BrowserService {
       view.webContents.setUserAgent(browserSession.getUserAgent());
       const state: BrowserTab = {
         id: `browser-${randomUUID()}`,
+        ...(presentationChatId ? { presentationChatId } : {}),
         workspaceId,
         profileId,
         url: browserDisplayUrl(normalized),
@@ -1284,13 +1292,13 @@ export class BrowserService {
       };
       this.tabs.set(state.id, tab);
       workspace.state.tabs.push(state);
-      if (show) this.activateTab(tab);
+      if (show) this.activateTab(tab, preserveForeground);
       view.setBounds({ x: 0, y: 0, width: state.viewport.width, height: state.viewport.height });
       this.hide(tab);
       this.observe(tab);
       view.webContents.setZoomFactor(state.zoom);
       this.emit(workspaceId);
-      if (show && !tab.state.floating) this.emit(workspaceId, { type: "show", workspaceId, tabId: state.id });
+      if (show && !tab.state.floating) this.emit(workspaceId, { type: "show", workspaceId, tabId: state.id, presentationChatId });
       try { this.beginPreviewNavigation(tab, normalized); } catch (error) { this.close(tab); throw error; }
       tab.initialLoad = view.webContents
         .loadURL(normalized)
@@ -1431,7 +1439,7 @@ export class BrowserService {
       if (workspace.state.activeTabId === tab.state.id) {
         workspace.state.activeTabId = workspace.state.tabs[workspace.state.tabs.length - 1]?.id ?? null;
         const replacement = workspace.state.activeTabId ? this.tabs.get(workspace.state.activeTabId) : undefined;
-        if (tab.state.floating && replacement) this.floating(replacement, true, false);
+        if (tab.state.floating && replacement && tab.state.presentationChatId === replacement.state.presentationChatId) this.floating(replacement, true, false);
       }
       this.emit(tab.state.workspaceId);
     }
@@ -2036,12 +2044,21 @@ export class BrowserService {
   private validDefaults(input: Partial<BrowserDefaults>): BrowserDefaults {
     return validBrowserDefaults(this.defaults, input, (profileId) => this.profile(profileId));
   }
-  private activateTab(tab: LiveTab): void {
+  private activateTab(tab: LiveTab, preserveForeground = false): void {
     const workspace = this.workspace(tab.state.workspaceId);
     const previous = workspace.state.activeTabId ? this.tabs.get(workspace.state.activeTabId) : undefined;
+    const chatId = tab.state.presentationChatId;
+    if (chatId) {
+      for (const page of workspace.state.tabs) {
+        if (page.presentationChatId === chatId) page.selectedInChat = page.id === tab.state.id;
+      }
+      // The show event tells the initiating chat which page to reveal. A
+      // background chat cannot replace another chat's visible native guest.
+      if (preserveForeground && previous?.visible && previous.state.presentationChatId !== chatId) return;
+    }
     if (previous && previous !== tab) {
       if (previous.grab) void this.stopGrab(previous, "cancelled");
-      if (previous.state.floating) {
+      if (previous.state.floating && previous.state.presentationChatId === chatId) {
         this.floating(previous, false, false);
         this.floating(tab, true, false);
       } else if (previous.visible) this.hide(previous);
@@ -2809,7 +2826,7 @@ export class BrowserService {
             result.tabId = command.tabId;
             if (show) await this.command(workspaceId, { action: "select", tabId: command.tabId }, context);
           } else {
-            created = await this.create(workspaceId, reservation.url, undefined, show);
+            created = await this.create(workspaceId, reservation.url, undefined, show, context.presentationChatId, true);
             result.tabId = created.state.id;
             if (command.readiness !== "none") await browserDeadline(created.initialLoad!, command.timeoutMs ?? 15000, acquisitionSignal);
           }
@@ -2837,18 +2854,18 @@ export class BrowserService {
       case "open_link": {
         const url = browserUrl(command.url);
         const existing = this.workspace(workspaceId).state.tabs.find((candidate) =>
-          sameBrowserPage(candidate.url, url),
+          candidate.presentationChatId === context.presentationChatId && sameBrowserPage(candidate.url, url),
         );
         const live = existing ? this.tabs.get(existing.id) : undefined;
         if (live) {
-          this.activateTab(live);
+          this.activateTab(live, true);
           this.emit(workspaceId);
           // `select` only emits `show` for agents; a user's link click must bring the panel forward.
           if (!live.state.floating)
-            this.emit(workspaceId, { type: "show", workspaceId, tabId: live.state.id });
+            this.emit(workspaceId, { type: "show", workspaceId, tabId: live.state.id, presentationChatId: live.state.presentationChatId });
           result.tabId = live.state.id;
         } else {
-          const created = await this.create(workspaceId, url, undefined, true);
+          const created = await this.create(workspaceId, url, undefined, true, context.presentationChatId, true);
           result.tabId = created.state.id;
         }
         break;
@@ -2861,6 +2878,8 @@ export class BrowserService {
           typeof input.show === "boolean"
             ? input.show
             : context.source === "user" || this.defaults.autoShow,
+          context.presentationChatId,
+          true,
         );
         result.tabId = created.state.id;
         break;
@@ -2987,6 +3006,14 @@ export class BrowserService {
         // browser chrome must not interrupt automation or invalidate pending approval.
         if (command.action === "annotate" && !command.enabled && !tab.picking) break;
         if (command.action === "grab" && !command.enabled && !tab.grab) break;
+        if (command.action === "restore_selection") {
+          if (workspace.state.activeTabId === command.previousTabId &&
+            (!tab.state.presentationChatId || tab.state.presentationChatId === context.presentationChatId)) {
+            this.activateTab(tab);
+            this.emit(workspaceId);
+          }
+          break;
+        }
         if (context.source === "user" && command.action !== "present") tab.queue.interrupt();
         if (command.action === "present") {
           // A delayed layout report from the old tab must never cover the selected page.
@@ -2995,10 +3022,10 @@ export class BrowserService {
           break;
         }
         if (command.action === "select") {
-          this.activateTab(tab);
+          this.activateTab(tab, Boolean(context.presentationChatId));
           this.emit(workspaceId);
           if (context.source === "agent" && !tab.state.floating)
-            this.emit(workspaceId, { type: "show", workspaceId, tabId: tab.state.id });
+            this.emit(workspaceId, { type: "show", workspaceId, tabId: tab.state.id, presentationChatId: context.presentationChatId ?? tab.state.presentationChatId });
           break;
         }
         if (command.action === "close") {
@@ -3353,7 +3380,7 @@ export class BrowserService {
         }, signal, context.source);
       }
     }
-    result.state = this.getState(workspaceId);
+    result.state = this.getState(workspaceId, context.source === "agent" ? context.presentationChatId : undefined);
     return redactBrowserData(result);
   }
   private async press(

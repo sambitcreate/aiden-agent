@@ -1285,11 +1285,12 @@ export const browserApi = {
   dismissMenu: (id: string) => invoke<void>("browser:dismiss-menu", id),
   getState: (workspaceId: string) =>
     invoke<import("../shared/browser").BrowserState>("browser:get-state", workspaceId),
-  command: (workspaceId: string, command: import("../shared/browser").BrowserCommand) =>
+  command: (workspaceId: string, command: import("../shared/browser").BrowserCommand, presentationChatId?: string | null) =>
     invoke<import("../shared/browser").BrowserCommandResult>(
       "browser:command",
       workspaceId,
       command,
+      ...(presentationChatId ? [presentationChatId] : []),
     ),
   onEvent: (callback: (event: import("../shared/browser").BrowserEvent) => void) =>
     onNotification<import("../shared/browser").BrowserEvent>("browser:event", callback),

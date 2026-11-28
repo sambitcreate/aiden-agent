@@ -29,8 +29,8 @@ const copy = (text: string, done: string, failed: string) =>
   );
 const message = (error: unknown, fallback: string) => (error instanceof Error ? error.message : fallback);
 
-function previewFile(target: string, path: string): void {
-  void browserApi.command(target, { action: "open_file", path }).catch((error: unknown) =>
+function previewFile(target: string, path: string, presentationChatId?: string | null): void {
+  void browserApi.command(target, { action: "open_file", path }, presentationChatId).catch((error: unknown) =>
     toast.error(message(error, "Couldn't open this file.")),
   );
 }
@@ -109,8 +109,8 @@ export function useBrowserSurfaceBlocker(active: boolean): void {
   React.useEffect(() => (active ? registerBlocker() : undefined), [active, registerBlocker]);
 }
 
-type Pending = { url: string; workspaceId: string | null; remember: boolean; inApp: boolean };
-type Menu = { x: number; y: number; workspaceId: string | null } & (
+type Pending = { chatId: string | null; url: string; workspaceId: string | null; remember: boolean; inApp: boolean };
+type Menu = { chatId: string | null; x: number; y: number; workspaceId: string | null } & (
   | { kind: "link"; url: string; web: boolean }
   | { kind: "file"; route: FileRoute }
 );
@@ -118,11 +118,13 @@ type Menu = { x: number; y: number; workspaceId: string | null } & (
 export function LinkOpenerProvider({
   workspaceId,
   workspaceFolder = null,
+  presentationChatId = null,
   onOpenWorkspaceFile,
   children,
 }: React.PropsWithChildren<{
   workspaceId: string | null;
   workspaceFolder?: string | null;
+  presentationChatId?: string | null;
   /** Shows a workspace-relative file or folder in the Files panel ("" is the folder itself). */
   onOpenWorkspaceFile?: (path: string) => void;
 }>) {
@@ -131,13 +133,13 @@ export function LinkOpenerProvider({
   const [blockers, setBlockers] = React.useState(0);
   const [pending, setPending] = React.useState<Pending | null>(null);
   const [menu, setMenu] = React.useState<Menu | null>(null);
-  const state = React.useRef({ preference, surfaces, blockers, workspaceId, workspaceFolder, onOpenWorkspaceFile });
+  const state = React.useRef({ preference, surfaces, blockers, workspaceId, workspaceFolder, presentationChatId, onOpenWorkspaceFile });
   // Keep the latest render's values available to stable callbacks without
   // writing a ref during render (a discarded concurrent render would corrupt
   // it); the layout effect runs only for a render that actually committed.
   React.useLayoutEffect(() => {
-    state.current = { preference, surfaces, blockers, workspaceId, workspaceFolder, onOpenWorkspaceFile };
-  }, [preference, surfaces, blockers, workspaceId, workspaceFolder, onOpenWorkspaceFile]);
+    state.current = { preference, surfaces, blockers, workspaceId, workspaceFolder, presentationChatId, onOpenWorkspaceFile };
+  }, [preference, surfaces, blockers, workspaceId, workspaceFolder, presentationChatId, onOpenWorkspaceFile]);
 
   // True once the saved preference has loaded (or failed to). A click that
   // arrives first must not show the ask dialog based on the "ask" default
@@ -173,8 +175,8 @@ export function LinkOpenerProvider({
     };
   }, []);
 
-  const openInBrowser = React.useCallback((target: string, url: string) => {
-    void browserApi.command(target, { action: "open_link", url }).catch((error: unknown) => {
+  const openInBrowser = React.useCallback((target: string, url: string, chatId: string | null) => {
+    void browserApi.command(target, { action: "open_link", url }, chatId).catch((error: unknown) => {
       const reason = message(error, "The Aiden browser couldn't open this link.");
       void browserApi.openExternal(url).then(
         () => toast.message(`${reason} Opened it in your system browser.`),
@@ -190,14 +192,14 @@ export function LinkOpenerProvider({
   }, []);
 
   const perform = React.useCallback(
-    (route: LinkRoute, target: string | null) => {
+    (route: LinkRoute, target: string | null, chatId: string | null) => {
       if (route.kind === "external") openExternal(route.url);
       else if (route.kind === "ask")
-        setPending({ url: route.url, workspaceId: target, remember: route.remember, inApp: route.inApp && Boolean(target) });
-      else if (route.kind === "browser" && target) openInBrowser(target, route.url);
+        setPending({ chatId, url: route.url, workspaceId: target, remember: route.remember, inApp: route.inApp && Boolean(target) });
+      else if (route.kind === "browser" && target) openInBrowser(target, route.url, chatId);
       else if (route.kind === "file" && target) {
         // HTML and PDF preview in the Aiden browser; other files and folders open in Files.
-        if (route.preview) previewFile(target, route.path);
+        if (route.preview) previewFile(target, route.path, chatId);
         else openInFiles(route, target);
       }
     },
@@ -216,21 +218,24 @@ export function LinkOpenerProvider({
       forceExternal: options.forceExternal,
       workspaceFolder: target === active ? folder : null,
     });
-    return { resolved, target: target ?? null };
+    return { resolved, target: target ?? null, chatId: target === active ? state.current.presentationChatId : null };
   }, []);
 
   const openLink = React.useCallback(
     (href: string, options?: OpenLinkOptions) => {
-      const { resolved, target } = route(href, options);
+      const { resolved, target, chatId } = route(href, options);
       if (!resolved) return false;
       // The "ask" branch is only reachable while the preference is still the
       // unresolved "ask" default; defer it until the real value is in, then
       // let it resolve against that value instead.
       if (resolved.kind === "ask" && !preferenceReady.current) {
-        queuedLinks.current.push(() => openLink(href, options));
+        queuedLinks.current.push(() => {
+          const updated = route(href, { ...options, workspaceId: target });
+          if (updated.resolved) perform(updated.resolved, target, chatId);
+        });
         return true;
       }
-      perform(resolved, target);
+      perform(resolved, target, chatId);
       return true;
     },
     [perform, route],
@@ -264,15 +269,16 @@ export function LinkOpenerProvider({
       if (!anchor || insideEditableOrSelected(anchor)) return;
       const href = anchor.getAttribute("href") ?? "";
       const forceExternal = anchor.dataset.linkTarget === "external";
-      const { resolved, target } = route(href, { forceExternal });
+      const { resolved, target, chatId } = route(href, { forceExternal });
       if (!resolved) return;
       event.preventDefault();
       lastAnchor.current = anchor;
       if (resolved.kind === "file") {
-        setMenu({ kind: "file", route: resolved, x: event.clientX, y: event.clientY, workspaceId: target });
+        setMenu({ chatId, kind: "file", route: resolved, x: event.clientX, y: event.clientY, workspaceId: target });
         return;
       }
       setMenu({
+        chatId,
         kind: "link",
         url: resolved.url,
         x: event.clientX,
@@ -314,7 +320,7 @@ export function LinkOpenerProvider({
           toast.error(message(error, "Couldn't save your link preference."));
         });
       }
-      if (choice.target === "browser" && current.workspaceId) openInBrowser(current.workspaceId, current.url);
+      if (choice.target === "browser" && current.workspaceId) openInBrowser(current.workspaceId, current.url, current.chatId);
       else openExternal(current.url);
     },
     [openInBrowser, pending, preference],
@@ -356,7 +362,7 @@ export function LinkOpenerProvider({
           {menu?.kind === "file" ? (
             <>
               {menu.route.preview ? (
-                <DropdownMenuItem onSelect={() => menu.workspaceId && previewFile(menu.workspaceId, menu.route.path)}>
+                <DropdownMenuItem onSelect={() => menu.workspaceId && previewFile(menu.workspaceId, menu.route.path, menu.chatId)}>
                   Open in Aiden browser
                 </DropdownMenuItem>
               ) : (
@@ -381,7 +387,7 @@ export function LinkOpenerProvider({
               {menu.web ? (
                 <DropdownMenuItem
                   disabled={!menu.workspaceId}
-                  onSelect={() => menu.workspaceId && openInBrowser(menu.workspaceId, menu.url)}
+                  onSelect={() => menu.workspaceId && openInBrowser(menu.workspaceId, menu.url, menu.chatId)}
                 >
                   Open in Aiden browser
                 </DropdownMenuItem>

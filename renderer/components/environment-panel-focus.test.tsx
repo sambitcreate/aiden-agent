@@ -1,4 +1,4 @@
-import { installBotTestIpc } from "../main/bots/test-dom";
+import { emitBotTestNotification, installBotTestIpc } from "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
@@ -35,7 +35,7 @@ function Probe({ onPanel }: { onPanel: (panel: EnvironmentPanelContextValue) => 
 
 const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
-test("closing a subagent opened from a run chip puts focus back on that chip", async () => {
+async function renderPanel() {
   installBotTestIpc({ "workspaces:list": () => [], "browser:link-preference": () => "ask" });
   let panel!: EnvironmentPanelContextValue;
   await act(async () => {
@@ -53,17 +53,38 @@ test("closing a subagent opened from a run chip puts focus back on that chip", a
       </QueryClientProvider>,
     );
   });
+  return () => panel;
+}
+
+test("closing a subagent opened from a run chip puts focus back on that chip", async () => {
+  const current = await renderPanel();
   const chip = screen.getByRole("button", { name: "Run chip" });
   // The person was typing; the chip handed itself over as the place to come back to.
   screen.getByRole("textbox", { name: "Composer" }).focus();
-  await act(async () => panel.openSubagent("run-1", chip));
-  await waitFor(() => assert.equal(panel.toolsOpen, true));
-  assert.equal(panel.tab, "subagents");
+  await act(async () => current().openSubagent("run-1", chip));
+  await waitFor(() => assert.equal(current().toolsOpen, true));
+  assert.equal(current().tab, "subagents");
 
   screen.getByRole("button", { name: "Close Subagents" }).focus();
   await act(async () => {
-    panel.closeTools();
+    current().closeTools();
     await nextFrame();
   });
   assert.equal(document.activeElement === chip, true);
+});
+
+test("a background browser reveal restores its own chat without changing the foreground panel", async () => {
+  const current = await renderPanel();
+  await act(async () => current().setActiveChat("first", "workspace"));
+  await act(async () => current().showTools("files"));
+  await act(async () => emitBotTestNotification("browser:event", {
+    type: "show", workspaceId: "workspace", presentationChatId: "second", tabId: "page",
+  }));
+  assert.equal(current().tab, "files");
+  await act(async () => current().setActiveChat("second", "workspace"));
+  assert.equal(current().tab, "browser");
+  assert.deepEqual(current().openTabs, ["browser"]);
+  await act(async () => current().setActiveChat("first", "workspace"));
+  assert.equal(current().tab, "files");
+  assert.equal(current().toolsOpen, true);
 });

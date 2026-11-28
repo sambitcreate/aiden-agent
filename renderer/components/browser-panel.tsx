@@ -1,3 +1,4 @@
+import { chatBrowserState } from "../shared/browser";
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { ArrowLeft, ArrowRight, ExternalLink, Globe, History, Link2, Loader2, MessageCirclePlus, MoreVertical, MousePointer2, PictureInPicture2, Plus, RadioTower, RotateCw, Square, Unlink2, Volume2, VolumeX, X } from "lucide-react";
@@ -53,7 +54,7 @@ export function browserHoldNotice(reason: NonNullable<BrowserTab["heldForPerson"
   }
 }
 
-export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = false, onStateChange, variant = "workspace", agentName }: { workspaceId: string; active: boolean; onDock?: () => void; integratedTabs?: boolean; onStateChange?: (state: BrowserState | null) => void; variant?: BrowserPanelVariant; agentName?: string }) {
+export function BrowserPanel({ workspaceId, presentationChatId, active, onDock, integratedTabs = false, onStateChange, variant = "workspace", agentName }: { workspaceId: string; presentationChatId?: string | null; active: boolean; onDock?: () => void; integratedTabs?: boolean; onStateChange?: (state: BrowserState | null) => void; variant?: BrowserPanelVariant; agentName?: string }) {
   // A Bot's own browser: no profile choice, annotations, DevTools, capture, recording or floating.
   const bot = variant === "bot";
   const [state, setState] = React.useState<BrowserState | null>(null);
@@ -90,7 +91,9 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
   const [address, setAddress] = React.useState("");
   const [addressFocused, setAddressFocused] = React.useState(false);
   ownerRef.current = workspaceId;
-  const visibleState = state?.workspaceId === workspaceId ? state : null;
+  const visibleState = React.useMemo(() => state?.workspaceId === workspaceId
+    ? presentationChatId === undefined ? state : chatBrowserState(state, presentationChatId)
+    : null, [state, workspaceId, presentationChatId]);
   React.useEffect(() => { onStateChange?.(visibleState); }, [visibleState, onStateChange]);
   const tab = visibleState?.tabs.find((item) => item.id === visibleState.activeTabId) ?? null;
   const surfaceActive = active || Boolean(tab?.floating);
@@ -120,7 +123,7 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
   const run = React.useCallback<RunCommand>(async (command) => {
     const owner = workspaceId;
     try {
-      const result = await browserApi.command(owner, command);
+      const result = await browserApi.command(owner, command, presentationChatId);
       if (!mountedRef.current || ownerRef.current !== owner) return null;
       commit(result.state);
       setError(null);
@@ -129,7 +132,19 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
       if (mountedRef.current && ownerRef.current === owner) setError(cause instanceof Error ? cause.message : "The browser action could not be completed. Try again.");
       return null;
     }
-  }, [workspaceId, commit]);
+  }, [workspaceId, presentationChatId, commit]);
+
+  // Main accepts presentation only for the active workspace guest. Select
+  // the returning chat's remembered guest before its geometry is reported.
+  const needsSelection = Boolean(active && presentationChatId !== undefined && tab && state?.activeTabId !== tab.id);
+  React.useEffect(() => {
+    if (!needsSelection || !tab?.id) return;
+    let current = true;
+    void enqueueBrowserPresentation(async () => {
+      if (current) await run({ action: "restore_selection", tabId: tab.id, previousTabId: state?.activeTabId ?? null });
+    });
+    return () => { current = false; };
+  }, [needsSelection, tab?.id, state?.activeTabId, run]);
 
   const previewAnnotation = React.useCallback((changes: BrowserStylePreview[]) => {
     const target = annotationTargetRef.current;
@@ -215,7 +230,7 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
       const overlay = bounds
         ? browserNativeViewObstructed(bounds, occluders.map((element) => element.getBoundingClientRect()))
         : false;
-      const visible = surfaceActive && ready && !annotation && !settingsOpen && !overlay && Boolean(bounds);
+      const visible = !needsSelection && surfaceActive && ready && !annotation && !settingsOpen && !overlay && Boolean(bounds);
       const command: BrowserCommand = { action: "present", tabId, visible, ...(bounds ? { bounds } : {}) };
       const key = JSON.stringify(command);
       if (previous === key) return;
@@ -243,7 +258,7 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
       window.removeEventListener("resize", schedule); window.removeEventListener("scroll", scrolled, true); document.removeEventListener("transitionend", schedule, true);
       void enqueueBrowserPresentation(() => browserApi.command(workspaceId, { action: "present", tabId, visible: false })).catch(() => undefined);
     };
-  }, [workspaceId, tab?.id, tab?.floating, surfaceActive, ready, annotation, settingsOpen]);
+  }, [workspaceId, tab?.id, tab?.floating, needsSelection, surfaceActive, ready, annotation, settingsOpen]);
 
   const submitAddress = React.useCallback((url: string) => {
     if (!url.trim()) return;

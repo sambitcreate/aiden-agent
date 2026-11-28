@@ -17,6 +17,8 @@ The interactive gallery that the set was chosen from is `docs/aiden-thinking-ani
 - **Still pose.** When a mark is inactive (terminal subagent, idle Live), when Reduced Motion is on (on desktop, Aiden's applied setting, which follows the system only when set to System), or when it is off-screen, freeze it on its pose at `t = 0`. Never hide a mark in place of animating it.
 - **Same names everywhere.** `tri-step`, `quad-shuffle`, `compose`, `scan-grid`, `glance`, `bounce`, `helix-calm`, `helix-twist`, `helix-swell`, `helix-duplex`, `helix-flat`.
 
+During a desktop chat turn, the last transcript row can show current reasoning or tool progress. When prose follows an earlier thinking block and the model pauses, the footer shows Thinking. As soon as a streamed tool call has a name and ID, the activity feed shows its preparation while the model finishes writing the arguments.
+
 ## Coordinate system and timing model
 
 - Every mark is drawn in a **24 × 24 view box** and scaled uniformly to the rendered size (20 pt/dp inline, 16 for compact tool rows, 64 for Live). Lengths below are view-box units.

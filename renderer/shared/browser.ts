@@ -56,6 +56,9 @@ export function resolveBrowserAgentAccess(
   return (override === "inherit" ? globalAccess : override) === "allow";
 }
 export interface BrowserTab {
+  /** Desktop panel navigation only. Browser permissions and storage belong to the workspace. */
+  presentationChatId?: string;
+  selectedInChat?: boolean;
   id: string;
   workspaceId: string;
   profileId: string;
@@ -208,6 +211,7 @@ export type BrowserCommand =
       readiness?: "none" | "domContentLoaded" | "load";
       timeoutMs?: number;
     }
+  | { action: "restore_selection"; tabId: string; previousTabId: string | null }
   | { action: "create"; url?: string; profileId?: string; show?: boolean }
   | {
       action:
@@ -343,7 +347,7 @@ export type BrowserGrabEndReason =
 
 export type BrowserEvent =
   | { type: "state"; state: BrowserState }
-  | { type: "show"; workspaceId: string; tabId: string }
+  | { type: "show"; workspaceId: string; tabId: string; presentationChatId?: string }
   | {
       type: "shortcut";
       workspaceId: string;
@@ -370,3 +374,11 @@ export const BUILT_IN_BROWSER_PROFILES: BrowserProfile[] = [
   { id: "default", name: "Default", kind: "persistent" },
   { id: "incognito", name: "Incognito", kind: "incognito" },
 ];
+
+/** Project workspace-owned guests into the chat's tab strip and presenter. */
+export function chatBrowserState(state: BrowserState, chatId: string | null): BrowserState {
+  const tabs = state.tabs.filter((tab) => !tab.presentationChatId || tab.presentationChatId === chatId);
+  const activeTabId = tabs.some((tab) => tab.id === state.activeTabId) ? state.activeTabId
+    : tabs.find((tab) => tab.selectedInChat)?.id ?? (state.activeTabId ? tabs[0]?.id : null) ?? null;
+  return { ...state, tabs, activeTabId };
+}

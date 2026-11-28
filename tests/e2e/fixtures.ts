@@ -179,8 +179,9 @@ export type CutOffCompletionPart = { text: string; end: "length" | "drop" | "sto
 export type StreamedReplyController = {
   /** Sends one content delta, or buffers it until the completion request arrives. */
   push: (text: string) => void;
-  /** Ends the reply with a stop reason. */
-  finish: () => void;
+  pushDelta: (delta: Record<string, unknown>) => void;
+  /** Completes this model message so the agent can settle or execute its tool call. */
+  finish: (reason?: "stop" | "tool_calls") => void;
 };
 
 export type DeterministicToolScenario = {
@@ -323,8 +324,8 @@ function writeCompletion(
 
 type StreamedReply = {
   prompt: string;
-  pending: string[];
-  finished: boolean;
+  pending: Record<string, unknown>[];
+  finishReason?: "stop" | "tool_calls";
   response?: import("node:http").ServerResponse;
 };
 
@@ -341,9 +342,9 @@ function streamedChunk(delta: Record<string, unknown>, finishReason: string | nu
 function flushStreamedReply(reply: StreamedReply): void {
   const response = reply.response;
   if (!response || response.writableEnded) return;
-  for (const text of reply.pending.splice(0)) response.write(streamedChunk({ content: text }, null));
-  if (reply.finished) {
-    response.write(streamedChunk({}, "stop"));
+  for (const delta of reply.pending.splice(0)) response.write(streamedChunk(delta, null));
+  if (reply.finishReason) {
+    response.write(streamedChunk({}, reply.finishReason));
     response.end("data: [DONE]\n\n");
   }
 }
@@ -356,15 +357,17 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
     if (!prompt.trim() || streamedReplies.some((reply) => reply.prompt === prompt)) {
       throw new Error("A streamed reply needs a unique, non-empty prompt.");
     }
-    const reply: StreamedReply = { prompt, pending: [], finished: false };
+    const reply: StreamedReply = { prompt, pending: [] };
     streamedReplies.push(reply);
+    const pushDelta = (delta: Record<string, unknown>) => {
+      reply.pending.push(delta);
+      flushStreamedReply(reply);
+    };
     return {
-      push: (text) => {
-        reply.pending.push(text);
-        flushStreamedReply(reply);
-      },
-      finish: () => {
-        reply.finished = true;
+      push: (text) => pushDelta({ content: text }),
+      pushDelta,
+      finish: (reason = "stop") => {
+        reply.finishReason = reason;
         flushStreamedReply(reply);
       },
     };

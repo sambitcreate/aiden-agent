@@ -297,7 +297,6 @@ import { STREAMING_REVEAL_FALLBACK_MS } from "../lib/streaming-reveal";
 import { liveAssistantPresentationRows } from "../lib/assistant-message-presentation";
 import { isLatestRemoteApprovalRefresh, mergeRemoteApproval } from "../lib/remote-approval";
 import {
-  hasActiveThinkingStep,
   hasActiveToolStep,
   isToolStep,
   latestActiveAgentStep,
@@ -4077,18 +4076,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
     displayedGenerationTimeline,
     displayedStreamingReasoning ?? "",
   );
+  // A prior reasoning block can remain open in the provider stream long
+  // after prose has pushed it away from the live edge of the transcript.
+  const lastLiveRow = chronologicalLiveRows?.[chronologicalLiveRows.length - 1];
+  const lastActivityStep = lastLiveRow?.kind === "activity" ? lastLiveRow.steps[lastLiveRow.steps.length - 1] : null;
+  const liveTool = lastActivityStep?.kind === "tool" &&
+    (lastActivityStep.status === "pending" || lastActivityStep.status === "running")
+    ? lastActivityStep : null;
   const visibleAgentActivity = resolveVisibleAgentActivity(timelineActivity, {
-    reasoningVisible:
-      hasActiveThinkingStep(displayedGenerationTimeline) &&
-      chronologicalLiveRows?.some((row) => row.kind === "reasoning" && row.step.finishedAt === undefined) === true,
-    visualizingVisible:
-      visualizingLive && chronologicalLiveRows?.some((row) => row.kind === "activity" &&
-        row.steps.some((step) => step.kind === "tool" &&
-          (step.toolName === RENDER_ARTIFACT_TOOL_NAME || step.toolName === RENDER_UI_TOOL_NAME))) === true,
-    toolVisible:
-      chronologicalLiveRows?.some((row) => row.kind === "activity" &&
-        row.steps.some((step) => step.kind === "tool" &&
-          (step.status === "pending" || step.status === "running"))) === true,
+    reasoningVisible: lastLiveRow?.kind === "reasoning" && lastLiveRow.step.finishedAt === undefined,
+    visualizingVisible: liveTool?.toolName === RENDER_ARTIFACT_TOOL_NAME || liveTool?.toolName === RENDER_UI_TOOL_NAME,
+    toolVisible: liveTool !== null,
   });
 
   React.useEffect(() => {

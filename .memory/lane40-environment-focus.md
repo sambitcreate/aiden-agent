@@ -7,3 +7,9 @@
 - Desktop-local focus/menu behavior only; no server or native transcript/activity contract changes, onboarding capability inventory changes, or visual redesign.
 - Final local verification: 7 Electron cases passed in 59.8s without retries (six new cases plus existing chat-shell keyboard case), 35 focused Environment tests passed, both TypeScript checks and scoped ESLint passed. Production build and final renderer build passed. Hosted CI and independent review remain separate gates.
 - Pullfrog review follow-up: two actual Electron regressions on `5d67bb8d` reproduced lost focus when the trigger was removed or Quick View closed between selection and Radix teardown. Keep normal restoration for usable triggers; when the trigger is disconnected/inert, preserve newer valid focus or focus the existing app root. Added a third case protecting a newer composer focus target. Hosted checks passed for the original head; the correction needs fresh exact-head checks.
+
+## 2026-11-28 — Local chat navigation and live activity
+
+Environment remembers tool tabs and review mode by workspace and local chat ID. The window owns visibility and width. Files keeps its mounted workspace editor and Terminal keeps the existing PTY owner. An explicit panel toggle still opens the launcher.
+
+Workspace Browser carries optional presentation chat IDs for its live pages. The renderer and local chat agent use the same projection for page selection. An inactive chat’s reveal updates its saved navigation, and the returning chat selects its existing guest. Legacy ownerless pages remain available to workspace tools. Browser pages live for the Electron session. Bot browser ownership and Remote contracts use their existing paths.

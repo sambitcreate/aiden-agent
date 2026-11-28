@@ -158,6 +158,7 @@ function EditorSkeleton() {
 }
 
 export function FilesPanel({
+  presentationChatId,
   workspace,
   active,
   requestedPath,
@@ -167,6 +168,7 @@ export function FilesPanel({
   onEditorStateChange,
 }: {
   workspace: Workspace | undefined;
+  presentationChatId?: string | null;
   active: boolean;
   requestedPath: string | null;
   requestedPathKey: number;
@@ -758,7 +760,7 @@ export function FilesPanel({
                 onClick={() => {
                   if (!workspace?.id) return;
                   setOpeningBrowser(true);
-                  void browserApi.command(workspace.id, { action: "open_file", path: selectedPath })
+                  void browserApi.command(workspace.id, { action: "open_file", path: selectedPath }, presentationChatId)
                     .catch((error) => toast.error(errorMessage(error, "Could not open this file in Browser.")))
                     .finally(() => setOpeningBrowser(false));
                 }}

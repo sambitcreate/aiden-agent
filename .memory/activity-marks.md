@@ -41,3 +41,7 @@ recomposition with O(n²) work on Android. The owner wanted animations that are 
   A positive CSS delay means a startup wait, which gives the wrong frozen pose.
 - The app-wide `:root[data-reduce-motion="true"] *` rule (0.001ms, one iteration) excludes `.aiden-mark`.
   Marks freeze via `animation-play-state: paused` instead, which keeps their t = 0 pose.
+
+## 2026-11-28 — Local chat navigation and live activity
+
+The desktop footer yields to a matching active phase at the last chronological transcript row. Pi may leave a reasoning block open after prose. The host publishes a pending step once it has both the streamed tool call ID and name, including when these arrive after the first chunk.
