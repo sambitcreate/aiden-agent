@@ -28,7 +28,8 @@ async function run(input: Start) {
   if (!found) throw new Error("The delegated provider/model is unavailable.");
   // Like daemon chats, a child sends its whole conversation each round, never a Pi message thread.
   const model = withoutMessageThreads(found);
-  const loader = new DefaultResourceLoader({ cwd: input.cwd, agentDir: input.agentDir, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
+  const settingsManager = subagentWorkerSettingsManager(input.cwd, input.agentDir);
+  const loader = new DefaultResourceLoader({ cwd: input.cwd, agentDir: input.agentDir, settingsManager, noContextFiles: true, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
     extensionFactories: [{ name: "aiden-child-tools", factory(pi) {
       pi.on("before_agent_start", () => ({ systemPrompt: input.systemPrompt }));
       for (const tool of input.tools) pi.registerTool({ ...tool, label: tool.name, parameters: Type.Unsafe(tool.parameters),
@@ -42,7 +43,7 @@ async function run(input: Start) {
     if (message.role !== "user" && message.role !== "assistant") throw new Error("Only visible user and assistant context may be forked.");
     manager.appendMessage(message);
   }
-  const created = await createAgentSession({ cwd: input.cwd, agentDir: input.agentDir, settingsManager: subagentWorkerSettingsManager(input.cwd, input.agentDir), modelRuntime: runtime, model, thinkingLevel: input.thinkingLevel, tools: input.tools.map((tool) => tool.name), sessionManager: manager, resourceLoader: loader });
+  const created = await createAgentSession({ cwd: input.cwd, agentDir: input.agentDir, settingsManager, modelRuntime: runtime, model, thinkingLevel: input.thinkingLevel, tools: input.tools.map((tool) => tool.name), sessionManager: manager, resourceLoader: loader });
   session = created.session;
   const unsubscribe = session.subscribe((event) => {
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") send({ type: "delta", text: event.assistantMessageEvent.delta });
