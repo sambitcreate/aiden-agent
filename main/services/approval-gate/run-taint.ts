@@ -17,6 +17,7 @@ import { hasMcpAgentToolNameShape } from "../mcp-tool-identity.js";
 import { bringsOutsideContent, FETCH_TOOL_NAMES } from "./tool-classes.js";
 
 const URL_PATTERN = /\bhttps?:\/\/[^\s<>"'`)\]]+/gi;
+const EMAIL_PATTERN = /[a-z0-9.!#$%&'*+=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*/gi;
 const BARE_HOST_PATTERN = /\b((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24})\b/gi;
 
 /**
@@ -58,18 +59,20 @@ function hostOf(value: string): string | undefined {
 /** The sites a person's text names: full URLs and bare host names. */
 export function namedHosts(text: string): Set<string> {
   const hosts = new Set<string>();
-  const withoutUrls = text.replace(URL_PATTERN, (raw) => {
-    const host = hostOf(raw);
-    if (host) hosts.add(host);
-    return " ".repeat(raw.length);
-  });
-  for (const match of withoutUrls.matchAll(BARE_HOST_PATTERN)) {
+  const withoutUrlsOrEmails = text
+    .replace(URL_PATTERN, (raw) => {
+      const host = hostOf(raw);
+      if (host) hosts.add(host);
+      return " ".repeat(raw.length);
+    })
+    .replace(EMAIL_PATTERN, (raw) => " ".repeat(raw.length));
+  for (const match of withoutUrlsOrEmails.matchAll(BARE_HOST_PATTERN)) {
     const raw = match[1]!;
     const start = match.index ?? 0;
     const end = start + raw.length;
-    const prev = start > 0 ? withoutUrls[start - 1] : undefined;
-    const next = end < withoutUrls.length ? withoutUrls[end] : undefined;
-    // Skip filesystem paths, dotfiles, emails (either side of `@`) and method calls.
+    const prev = start > 0 ? withoutUrlsOrEmails[start - 1] : undefined;
+    const next = end < withoutUrlsOrEmails.length ? withoutUrlsOrEmails[end] : undefined;
+    // Skip filesystem paths, dotfiles, stray `@` mentions and method calls.
     if (prev === "/" || prev === "\\" || prev === "." || prev === "@" || next === "(" || next === "@") continue;
     const normalized = raw.toLowerCase().replace(/^www\./, "");
     const suffix = normalized.slice(normalized.lastIndexOf(".") + 1);

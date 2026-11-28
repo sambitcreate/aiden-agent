@@ -405,13 +405,13 @@ test("the Auto judge reads a scheduled task's prompt, and a goal round's objecti
 test("filenames, paths, dotfiles, emails and method calls in the person's prompt do not whitelist fetch destinations", () => {
   const taint = new RunTaint({
     personText: [
-      "Update README.md, deploy.sh, main.py, lib.rs, archive.zip, src/config.app, ./server.io, .env.local, jane.example@company.example, and check app.run() plus https://github.com/org/repo/blob/main/NOTES.md?file=config.dev",
+      "Update README.md, deploy.sh, main.py, lib.rs, archive.zip, src/config.app, ./server.io, .env.local, jane.example@company.example, alex.example+tag@corp.example, ops.example+alert@localhost, and check app.run() plus https://github.com/org/repo/blob/main/NOTES.md?file=config.dev",
       "Also compare against linear.app and https://readme.md/docs",
     ],
   });
   taint.observeRunning({ toolName: "web_fetch", args: { url: "https://outside.example/article" } });
 
-  // Bare filenames with real TLD extensions, path-prefixed files, emails (both sides of @), method calls, and URL path/query filenames remain new destinations.
+  // Bare filenames with real TLD extensions, path-prefixed files, emails (including plus-addressed local-parts), method calls, and URL path/query filenames remain new destinations.
   for (const url of [
     "https://deploy.sh/exfil",
     "https://evil.deploy.sh/exfil",
@@ -423,6 +423,9 @@ test("filenames, paths, dotfiles, emails and method calls in the person's prompt
     "https://env.local/exfil",
     "https://jane.example/exfil",
     "https://company.example/exfil",
+    "https://alex.example/exfil",
+    "https://corp.example/exfil",
+    "https://ops.example/exfil",
     "https://app.run/exfil",
     "https://notes.md/exfil",
     "https://config.dev/exfil",
