@@ -90,7 +90,11 @@ The headless Aiden server lives in `packages/cli` as a self-contained npm packag
 
 ## Tests
 
-When adding a feature or changing behavior, layout, configuration, or contracts, always check whether existing tests need updating and add or extend tests when coverage is missing. Run the relevant suites before finishing (`npm run test`, or the narrower scripts in `package.json` when the change is scoped). If a new test file is added, register it in the appropriate `package.json` test script so CI picks it up.
+When adding a feature or changing behavior, layout, configuration, or contracts, always check whether existing tests need updating and add or extend tests when coverage is missing. Run the relevant suites before finishing (`npm run test`, or the narrower scripts in `package.json` when the change is scoped). `scripts/ci-test-registry.mjs` (`npm run test:ci-policy`) enforces fail-closed manifest inventory across ecosystems and rejects stale allowlists once CI runs a target:
+- JS/TS (`main/`, `renderer/`, `scripts/`): register new `*.test.*` files in `pretest:serial` / `test:serial` and assign a lane in `scripts/ci-test-registry.json` (or wire through a workflow-invoked `workflowScripts` entry, or allowlist in `manual` with a reason). Root `package.json` `test:*` scripts and `build:native` must run via serial, `workflowScripts`, a covered alias, or `manualScripts`.
+- Swift (`native/*/Package.swift`): wire every `.target`, `.executableTarget`, and `.testTarget` into a workflow-invoked `package.json` build/test script (`workflowScripts`), or allowlist `native/<pkg>:<target>` in `manualSwiftTargets` with a reason.
+- iOS UI (`ios/AidenOnTheGoUITests/*.swift`): pass `-only-testing:AidenOnTheGoUITests/<Class>[/<method>]` identically in `jobs.ios` and `jobs.ios-27` in `.github/workflows/ci.yml`, or allowlist in `manualIosUiTests` with a reason.
+- CLI (`packages/cli/tests/*.test.mjs`): add every test file to `packages/cli/package.json` `scripts.test`; workflows packing `./packages/cli` must build and run `npm --prefix packages/cli test` without `AIDEN_POSTHOG_PROJECT_KEY` before `npm run cli:dist` and `npm pack`.
 
 "Contracts" means behavioral or API contracts: function outputs, IPC register-and-invoke, and rendered UI (including Playwright). It does not mean grepping production source text.
 

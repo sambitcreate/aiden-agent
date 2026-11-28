@@ -19,13 +19,15 @@ platform checks, renderer-only PRs select desktop checks, and CLI-only PRs selec
 the CLI jobs plus static checks. Desktop changes always imply `catalog`.
 `renderer/shared/` selects `desktop`, `cli` and `linux`; the files native clients
 mirror (listed in `scripts/ci-changes.mjs`) select every area. Infrastructure,
-unknown paths, empty diffs and detection failures select every area, with two
-narrower cases on PRs: `scripts/ci-test-registry.json` selects `desktop`, and a
+unknown paths, empty diffs and detection failures select every area, with
+narrower cases on PRs: `native/apple-foundation-models/` and
+`native/cua-s1-forms/` select `desktop` and `apple`, `scripts/ci-test-registry.json`
+selects `desktop`, and a
 root `package.json` change confined to `scripts` selects `desktop`, `cli` and
 `linux`. That case compares the merge base and head manifests, and stays full if
 either cannot be read or the change touches what the Apple and iOS jobs execute:
-`test:native`, `test:ios-release`, their hooks and any script they reach through
-`npm run` or `npm run-script`. Policy checks always run.
+`test:native`, `test:form-fill:native`, `test:ios-release`, their hooks and any
+script they reach through `npm run` or `npm run-script`. Policy checks always run.
 
 Every main push runs full validation except a push that changes only the
 generated model catalog (`resources/model-capabilities.json`, reason
@@ -58,17 +60,26 @@ cancelling CI never cancels a release. Runner capacity can still cause queueing.
 ## Execution and coverage
 
 - TypeScript (including the e2e project) and lint run on Ubuntu. One macOS
-  `build` job runs `npm run build` and uploads `build/` as a tarred, one-day
-  artifact; the Electron shards and `verify` download it instead of rebuilding.
-  Diagnostics and branding remain in `verify`; the model-catalog suite runs in
-  its own Ubuntu `catalog` job.
-- Apple Foundation Models tests run in their own job. The `ios` job resolves
-  Swift packages into a cached directory keyed on `Package.resolved`, builds for
-  testing once for the generic device and once for the simulator, then runs
-  `test-without-building` against the shared DerivedData on one simulator,
-  with parallel clones off. iOS-only changes also
-  run shipping and TestFlight policies in that job; full desktop runs execute
-  them through the preserved regression lane.
+  `build` job runs `npm run build` and `npm run build:native` (compiling both
+  required Swift helpers into `build/native/`), then uploads `build/` as a
+  tarred, one-day artifact; the Electron shards and `verify` download it instead
+  of rebuilding. `verify` runs diagnostics, branding, the foreground file-tools
+  Electron smoke, `test:subagent-worker-smoke:run`, and production-profile
+  diagnostics against the restored bundle; the model-catalog suite runs in its
+  own Ubuntu `catalog` job.
+- The `apple` job runs both Apple Foundation Models (`test:native`) and CUA-S1
+  form-fill (`test:form-fill:native`) Swift package tests. The `ios` job (and
+  non-blocking `ios-27` preview) resolves Swift packages into a cached directory
+  keyed on `Package.resolved`, builds for testing once for the generic device
+  and once for the simulator, runs unit `test-without-building` against the
+  shared DerivedData on one simulator with parallel clones off, and then runs the
+  selected simulator UI suites (`AidenShellUITests` launch/search smokes plus the
+  offline `AidenSandboxedHTMLUITests`, `AidenWorkspaceHTMLUITests`, and
+  `AidenAgentSliderUITests` classes). `AidenBotUXUITests` and the remaining 59
+  `AidenShellUITests` scenario methods stay in `manualIosUiTests` so `jobs.ios`
+  stays within its 50-minute budget. iOS-only changes also run shipping and
+  TestFlight policies in that job; full desktop runs execute them through the
+  preserved regression lane.
 - Four desktop lanes use `scripts/ci-test-registry.json`. GitHub allows five
   concurrent macOS jobs on this plan, and macOS is where jobs queue, so on PRs
   `core-git`, `runtime-subagents` and `renderer-other` run on Ubuntu and only the
@@ -81,14 +92,34 @@ cancelling CI never cancels a release. Runner capacity can still cause queueing.
   the `pretest:serial`/`test:serial` graph belongs to exactly one lane. New files
   require explicit assignment; unknown shell commands, environment changes, test
   flags and root `pretest`/`posttest` hooks fail the inventory check rather than
-  silently dropping or duplicating coverage. Validation also discovers every
-  `*.test.*` file under `main/`, `renderer/` and `scripts/` on disk: each must be
-  reachable from the serial graph, from a registry `workflowScripts` entry (npm
-  scripts a workflow runs directly, such as `test:diagnostics` or
-  `test:linux-native`, which must still appear as `npm run <script>` in a
-  workflow), or from the `manual` allowlist (perf, smoke and Linux D-Bus
-  integration files, each with a reason). Prerequisite and preserved ids must be
-  unique, so the runner schedules each build once.
+  silently dropping or duplicating coverage. `validateRegistry()` in
+  `scripts/ci-test-registry.mjs` runs static multi-ecosystem manifest discovery
+  on Ubuntu in `jobs.policy` without requiring macOS runners or Xcode:
+  - **JS/TS test files and root scripts**: every `*.test.*` file under `main/`,
+    `renderer/` and `scripts/` must be reachable from the serial graph, from a
+    `workflowScripts` entry (npm scripts a workflow invokes directly via
+    `npm run <script>`), or from the `manual` allowlist with a reason; every root
+    `package.json` `test:*` script and `build:native` must be covered by the
+    serial graph, `workflowScripts`, a covered local alias, or `manualScripts`.
+  - **Swift packages (`native/*/Package.swift`)**: every `.target`,
+    `.executableTarget`, and `.testTarget` is statically parsed and must map to a
+    workflow-invoked build or test script (`build:native`, `test:native`,
+    `test:form-fill:native`) or be allowlisted in `manualSwiftTargets` with a
+    reason.
+  - **iOS UI tests (`ios/AidenOnTheGoUITests/*.swift`)**: every `XCTestCase`
+    subclass and zero-argument `func test*()` method must be selected by an
+    `-only-testing:AidenOnTheGoUITests/...` flag in `ci.yml` or listed in
+    `manualIosUiTests` with a reason.
+  - **Headless CLI (`packages/cli/tests/*.test.mjs`)**: every CLI test file on
+    disk (excluding `fixtures/`) must appear in `packages/cli/package.json`
+    `scripts.test`, and any workflow packing `./packages/cli`
+    (`server-bundle.yml`) must build a keyless bundle (`npm run cli:build`) and
+    run `npm --prefix packages/cli test` without `AIDEN_POSTHOG_PROJECT_KEY`
+    before running `npm run cli:dist` and `npm pack ./packages/cli`.
+  Every allowlist (`manual`, `manualScripts`, `manualSwiftTargets`,
+  `manualIosUiTests`) fails closed on stale entries whenever CI begins executing
+  a previously manual target. Prerequisite and preserved ids must be unique, so
+  the runner schedules each build once.
 - `npm test` runs `scripts/run-ci-tests.mjs --parallel`: prerequisites first, the
   four lanes concurrently with prefixed output (sharing one machine-sized pool
   of Node test workers), then the preserved commands.

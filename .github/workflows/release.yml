@@ -107,9 +107,17 @@ jobs:
         if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run test:native
 
+      - name: Run CUA-S1 form-fill Swift tests
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        run: npm run test:form-fill:native
+
       - name: Run deterministic Electron E2E gate
         if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run test:e2e
+
+      - name: Verify subagent inference worker in pinned Electron
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        run: npm run test:subagent-worker-smoke:run
 
       - name: Verify production-profile diagnostics support workflow
         if: ${{ steps.version.outputs.publish == 'true' }}

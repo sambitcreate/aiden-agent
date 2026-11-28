@@ -8,7 +8,7 @@ import { isDeepStrictEqual } from "node:util";
 
 // Areas map to CI jobs:
 // - desktop: static, verify, unit lanes, Electron E2E
-// - apple: the Apple Foundation Models Swift package
+// - apple: the macOS Swift helper packages (Apple Foundation Models and CUA-S1 form-fill)
 // - ios / android: the native mobile clients
 // - cli: the headless CLI container
 // - linux: Linux packaging, Fedora RPM, and the Linux E2E gate (not required)
@@ -100,7 +100,7 @@ const HOST_AREAS = Object.freeze(["desktop", "cli", "linux"]);
 const TEST_REGISTRY_PATH = "scripts/ci-test-registry.json";
 const ROOT_MANIFEST_PATH = "package.json";
 // npm scripts the Apple and iOS jobs run. Android runs none.
-const NATIVE_JOB_NPM_SCRIPTS = Object.freeze(["test:native", "test:ios-release"]);
+const NATIVE_JOB_NPM_SCRIPTS = Object.freeze(["test:native", "test:form-fill:native", "test:ios-release"]);
 
 function selectAreas(selected = []) {
   const areas = {};
@@ -253,7 +253,7 @@ function classifyPath(path, { hostOnlyManifest = false } = {}) {
     }
     return scoped("main", selected, path);
   }
-  if (path.startsWith("native/apple-foundation-models/")) {
+  if (path.startsWith("native/apple-foundation-models/") || path.startsWith("native/cua-s1-forms/")) {
     return scoped("native", ["desktop", "apple"], path);
   }
   if (path.startsWith("native/")) {

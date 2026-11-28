@@ -1941,6 +1941,10 @@
   ],
   "workflowScripts": [
     {
+      "script": "build:native",
+      "reason": "ci.yml build job compiles both required macOS Swift helpers into the desktop production artifact."
+    },
+    {
       "script": "test:diagnostics",
       "reason": "ci.yml verify job and release.yml run the diagnostics privacy and storage contracts."
     },
@@ -1959,6 +1963,50 @@
     {
       "script": "test:linux-native",
       "reason": "ci.yml Linux jobs build and test the Linux native helpers."
+    },
+    {
+      "script": "test:pi-extensions",
+      "reason": "ci.yml Linux and Fedora RPM jobs exercise the desktop Pi extensions."
+    },
+    {
+      "script": "test:secret-service-integration",
+      "reason": "ci.yml Linux job runs the Secret Service D-Bus integration harness."
+    },
+    {
+      "script": "test:foreground-file-tools:electron",
+      "reason": "ci.yml verify job smokes foreground file tools in pinned Electron."
+    },
+    {
+      "script": "test:subagent-worker-smoke:run",
+      "reason": "ci.yml verify job and release.yml smoke the bundled subagent inference worker in pinned Electron."
+    },
+    {
+      "script": "test:native",
+      "reason": "ci.yml apple job and release.yml run the Apple Foundation Models Swift package tests."
+    },
+    {
+      "script": "test:form-fill:native",
+      "reason": "ci.yml apple job and release.yml run the CUA-S1 form-fill Swift package tests."
+    },
+    {
+      "script": "test:e2e",
+      "reason": "release.yml runs the deterministic Playwright Electron E2E gate (ci.yml shards it via scripts/ci-e2e-shards.mjs)."
+    },
+    {
+      "script": "test:e2e:diagnostics:production",
+      "reason": "release.yml verifies the production-profile diagnostics support workflow."
+    },
+    {
+      "script": "test:e2e:diagnostics:production:run",
+      "reason": "ci.yml verify job runs production-profile diagnostics against the restored build."
+    },
+    {
+      "script": "test:e2e:diagnostics:packaged",
+      "reason": "release.yml verifies diagnostics in the signed packaged macOS app."
+    },
+    {
+      "script": "test:subagents:migration:packaged",
+      "reason": "release.yml verifies reboot-safe subagent migration in the signed packaged macOS app."
     }
   ],
   "manual": [
@@ -1971,12 +2019,312 @@
       "reason": "Needs downloaded local speech models; npm run test:stt-smoke sets AIDEN_STT_SMOKE=1."
     },
     {
-      "file": "scripts/subagent-inference-worker-smoke.test.mjs",
-      "reason": "Needs a full Electron build; run with npm run test:subagent-worker-smoke."
-    },
-    {
       "file": "scripts/secret-service-authority.integration.test.mjs",
       "reason": "Linux D-Bus integration; ci.yml runs it through test:secret-service-integration (scripts/run-secret-service-integration.mjs)."
+    }
+  ],
+  "manualScripts": [
+    {
+      "script": "test:bot-computers:packaged",
+      "reason": "Requires a locally packaged macOS app and Apple Virtualization Lume VM restore image."
+    },
+    {
+      "script": "test:compaction:evaluate",
+      "reason": "Manual Pi upgrade replay evaluation harness."
+    },
+    {
+      "script": "test:compaction:packaged",
+      "reason": "Requires a locally packaged app for Pi session restart acceptance."
+    },
+    {
+      "script": "test:computer-use:packaged",
+      "reason": "Requires a locally packaged macOS app with Accessibility and Screen Recording permissions."
+    },
+    {
+      "script": "test:create-images:perf",
+      "reason": "Local timing budget benchmark for main/services/create-images/run-ledger.perf.test.ts."
+    },
+    {
+      "script": "test:e2e:list",
+      "reason": "Developer inspection helper that lists Playwright specs without executing tests."
+    },
+    {
+      "script": "test:e2e:live:lmstudio",
+      "reason": "Requires a local LM Studio server with a loaded model."
+    },
+    {
+      "script": "test:e2e:space",
+      "reason": "Local macOS wrapper that runs window-opening E2E suites inside a Cua Space Linux VM."
+    },
+    {
+      "script": "test:gemini-live:electron",
+      "reason": "Interactive Gemini Live Electron spike requiring live credentials and local audio devices."
+    },
+    {
+      "script": "test:gemini-live:google:acceptance",
+      "reason": "Live Google Gemini API acceptance harness requiring external credentials."
+    },
+    {
+      "script": "test:gemini-live:packaged",
+      "reason": "Interactive packaged macOS Gemini Live spike."
+    },
+    {
+      "script": "test:gemini-live:packaged:authorized",
+      "reason": "Requires macOS TCC screen and microphone authorization on a physical Mac."
+    },
+    {
+      "script": "test:stt-smoke",
+      "reason": "Requires downloaded local speech models via AIDEN_STT_SMOKE=1."
+    },
+    {
+      "script": "test:subagents:packaged",
+      "reason": "Long-running packaged subagent soak harness run on demand."
+    },
+    {
+      "script": "test:tailscale-live",
+      "reason": "Requires an authenticated live Tailscale daemon and tailnet."
+    }
+  ],
+  "manualIosUiTests": [
+    {
+      "test": "AidenBotUXUITests",
+      "reason": "Screenshot-capture UI walks for light and dark Bot UX screens; deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testAChatNamesItsMachineWithSeveralMachines",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testAChatWithoutAWorkspaceCanBeDeletedFromTheInbox",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testALongChatOpensOnItsLatestWords",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testAMachineOpensFromSettingsAndBackRetracesTheWay",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testAMessageShowsItsTimeAndCopyOnlyOnTap",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testAPushedChatHidesTheTabBarUntilItIsLeft",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testAPushedRouteHidesTheTabBarAndBackReturnsIt",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testAShortChatStaysAtTheTop",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testAccessoryAppearsOnlyWhileRunning",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testAccessoryWithSeveralRunningChatsOpensASheet",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testAllFourTabsExistInEveryScenario",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testAnApprovalThatArrivesWhileTypingInAChatPutsTheKeyboardAway",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testAnApprovalThatArrivesWhileTypingPutsTheKeyboardAway",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testAnApprovalUnderASheetLeavesTheSheetsKeyboardUp",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testAnOpenChatSurvivesAResize",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testAskingAboutAMessageBringsTheKeyboardUp",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testBotsTabDoesNotExplainAnythingWhenBotsAreAvailable",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testBotsTabStaysSelectableWhenBotsAreUnavailable",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testCaptureMachineChromeScreens",
+      "reason": "Screenshot-capture shell UI pass deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testCaptureRunningAccessoryAndCatchUp",
+      "reason": "Screenshot-capture shell UI pass deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testCaptureSearchScreens",
+      "reason": "Screenshot-capture shell UI pass deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testCaptureTabDestinations",
+      "reason": "Screenshot-capture shell UI pass deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testCaptureTabShellScreens",
+      "reason": "Screenshot-capture shell UI pass deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testCaptureTheAccessibilityPass",
+      "reason": "Screenshot-capture shell UI pass deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testCatchUpWalksEveryMachineThenFinishes",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testCompactWidthUsesTabs",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testDraftTextSurvivesNext",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testDraggingTheResultsPutsTheKeyboardAwayAndKeepsTheQuery",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testEveryMainScreenPassesTheAudit",
+      "reason": "Full-screen accessibility UI walk deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testEveryOldHomeDestinationIsReachable",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testIPadUsesASidebar",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testInboxShowsNeedsYouUpdatesEarlierInOrder",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testLoadEarlierKeepsTheReaderOnTheMessageTheyWereReading",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testNextAsksBeforeLeavingAttachmentsBehind",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testNextShowsOnlyDuringCatchUp",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testOneMachineHasNoStrip",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testOnlyTheSearchTabHasASearchField",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testPairAMachineOpensFromPushedSettings",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testRowMenusMatchTheirSwipes",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testSearchFindsAChatAndABotConversationAndOpensTheChat",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testSearchFindsChatsOnAMachineThatIsNotSelected",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testSearchInARegularWidthLeavesAWayBackToTheOtherTabs",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testSearchNamesTheMachinesItCouldNotSearch",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testSearchSaysItCoversLoadedChatsWhenNothingMatches",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testSearchShowsTheNameThisPhoneGaveTheMachine",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testTheEmptyStatesScrollClearOfTheField",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testTheFootersOwnCopyAndReadAloudLeaveItShown",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testTheInboxSaysWhileItsMachineConnects",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testTheKeyboardGoesAwayInABotChatAndKeepsTheDraft",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testTheKeyboardGoesAwayInAChatAndKeepsTheDraft",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testTheMachinePageCountsItsOpenChats",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testTheRecoveryBannerSitsAboveTheTabsAndOpensMachines",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testTheSearchKeyPutsTheKeyboardAwayAndKeepsTheQuery",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testTheStatusItemCountsMachinesAndOpensThem",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testTheStripNarrowsTheInboxToOneMachine",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testTheTabBarMinimizesOnScrollDownAndComesBack",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testUnpairedShellFirstRunWalksDesktopCheckDownloadLinksAndAddComputer",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testWorkspacesComposeStartsOnAHiddenMachineItIsFilteredTo",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
+    },
+    {
+      "test": "AidenShellUITests/testWorkspacesComposeStartsOnThePickerAtTheFilteredMachine",
+      "reason": "Extended shell UI scenario deferred from jobs.ios to stay within the 50-minute simulator budget."
     }
   ]
 }
