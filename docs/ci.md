@@ -118,16 +118,32 @@ cancelling CI never cancels a release. Runner capacity can still cause queueing.
   Pull requests may run a subset of specs (see below); unused shards still start
   and exit successfully so required check names stay stable.
 - On pull requests, macOS runs only the specs in the spec map's `macos` list
-  (specs that skip or assert less off macOS: the isolated keychain, the iOS
-  Simulator device tabs, guided setup's Computer Use and Apple models, and
-  Computer Use goals) that the PR selected, on one runner named
-  `Electron E2E (1/1)`. When the PR selects none, the job skips and the
-  `changes` job reports `mac-e2e=false`, which is the only way **CI required**
-  accepts that skip. Every other selected spec runs on the Linux shards, so
-  darwin-only branches inside shared specs (such as Meta-modifier shortcuts) are
-  checked at merge rather than on the PR, as with the unit lanes. When you add an
-  E2E spec that only does its work on macOS, add it to `macos` in
-  `scripts/ci-e2e-spec-map.json`.
+  (the 11 hosted specs that skip tests or subsystem checks off `darwin`: the
+  isolated keychain, the iOS Simulator device tabs and SSH hosts, guided
+  setup's Computer Use and Apple models, Picture in Picture screencast and
+  crash recovery in `browser-throttling.spec.ts`, `Computers & VMs` /
+  `Computer Use` in `settings-model-picker.spec.ts`, and `Screen and
+  Accessibility` in `assistant-scheduled-profile.spec.ts`) that the PR
+  selected. `planMacE2E` computes the macOS PR shard count from
+  `Math.min(shardCount, Math.max(1, Math.ceil(plannedSeconds / 900)))` against
+  the 900s net budget (20-minute timeout minus two minutes of setup/cleanup
+  reserve and three minutes of headroom), keeping one runner (`374s` net /
+  `494s` with reserve) today and scaling `Electron E2E (1/N)` shards past
+  `900s`. Specs that require interactive macOS Accessibility and Screen
+  Recording permissions (`AIDEN_E2E_COMPUTER_USE_HOST=1`) belong in `hostOnly`
+  (`keep-going-goals-computer-use.spec.ts`); hosted CI never sets
+  `AIDEN_E2E_COMPUTER_USE_HOST` and ignores `hostOnly` during selection while
+  mapping `main/services/computer-use/` to active hosted specs
+  (`guided-setup.spec.ts` and `keep-going-goals.spec.ts`). When the PR selects
+  no `macos` spec, the job skips and the `changes` job reports `mac-e2e=false`,
+  which is the only way **CI required** accepts that skip. Every other selected
+  spec runs on the Linux shards, so shared modifier and noun branches (`Meta`
+  vs `Control`, `Mac` vs `computer`) stay Linux-only on pull requests and run
+  on macOS at merge, as with the unit lanes. When you add an E2E spec that
+  skips tests or subsystem checks off `darwin`, add it to `macos` (or
+  `hostOnly` if it requires host permissions) in `scripts/ci-e2e-spec-map.json`;
+  `npm run test:ci-policy` fails if any `darwin`-divergent spec in `tests/e2e/`
+  is missing from both lists.
 - Linux runs the same Electron shards on three Ubuntu runners in `linux-e2e`,
   beside the packaging job rather than after it. Any `desktop` or `linux` change
   selects it, so a renderer-only PR runs its E2E specs here. The required `Linux x64` and
@@ -145,21 +161,30 @@ reads a file's source as text is still selected when that file changes.
 `path.join("renderer", "preload.ts")` segments and `readdir` of a `main/` or
 `renderer/` tree count as well, so a registered inventory test such as
 `main/handlers/ipc-contract.test.ts` still runs when a handler it walks
-changes. Electron shards run the specs listed for those paths
-in `scripts/ci-e2e-spec-map.json`. Pushes to `main`, merge-group runs, releases,
-and `workflow_dispatch` keep the full suites. Selection also falls back to the
-full suite when a changed path is unmapped, or when shared config, fixtures,
-`package.json`, lockfiles, CI files, or test infra change. Empty unit lanes skip
-their `tsx --test` invocation but still start. When you add a deterministic
-E2E spec, add it to `scripts/ci-e2e-spec-map.json` with the `renderer/` and
-`main/` prefixes it covers; CI policy fails if a runnable spec is missing, if
-an entry names a spec that no longer exists, or if a listed prefix matches no
-file on disk. Shared harness files belong in the map's `full` list so they keep
-every spec. Prefixes are exact paths, directories (`settings/`), or stems that
-continue with `/`, `.`, or `-` (`chat-fork` matches `chat-fork-service.ts`).
-Changing a spec file itself selects that spec. A failed-job rerun downloads the
-original `changes` job's selection artifact, not a name built from the rerun
-attempt.
+changes. Electron E2E selection (`selectRelatedE2ESpecs`) also expands changed
+production files through `buildReverseImportGraph` before matching prefixes in
+`scripts/ci-e2e-spec-map.json`, stopping reverse-import walks at `requiresFullE2E`
+paths (`map.full`, configs, shared harness), wiring hubs (`main/handlers/index.ts`,
+`renderer/lib/ipc.ts`), and 40-import aggregators so leaf edits stay scoped.
+When a changed file has 8+ direct importers or matches 25+ specs, E2E selection
+returns `mode: "all"` (`reason: "high-fanout"`), and if `related` selection
+yields zero active Linux specs it falls back to `mode: "all"` so required Linux
+checks never pass with zero E2E assertions. Pushes to `main`, merge-group runs,
+releases, and `workflow_dispatch` keep the full suites. Selection also falls
+back to the full suite when a changed path is unmapped, or when shared config,
+fixtures, `package.json`, lockfiles, CI files, or test infra (`map.full`) are
+edited directly. Empty unit lanes skip their `tsx --test` invocation but still
+start. When you add a deterministic E2E spec, add it to
+`scripts/ci-e2e-spec-map.json` with the `renderer/` and `main/` prefixes it
+covers, and run `npm run test:ci-policy`; CI policy fails if a runnable spec is
+missing, if an entry names a spec that no longer exists, if a listed prefix
+matches no file on disk, or if a `darwin`-divergent spec is omitted from
+`macos` / `hostOnly`. Shared harness files belong in the map's `full` list so
+they keep every spec. Prefixes are exact paths, directories (`settings/`), or
+stems that continue with `/`, `.`, or `-` (`chat-fork` matches
+`chat-fork-service.ts`). Changing a hosted spec file itself selects that spec.
+A failed-job rerun downloads the original `changes` job's selection artifact,
+not a name built from the rerun attempt.
 
 Use `node scripts/run-ci-tests.mjs --list` or `--dry-run` to inspect assignments.
 Use `--lane core-git`, `--lane runtime-subagents`, `--lane renderer-other`, or

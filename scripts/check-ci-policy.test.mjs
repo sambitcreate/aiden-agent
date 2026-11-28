@@ -7,6 +7,8 @@ import { spawnSync } from "node:child_process";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { AREA_NAMES } from "./ci-changes.mjs";
+import { discoverSpecs } from "./ci-e2e-shards.mjs";
+import { isDarwinDivergentE2ESpec, readE2ESpecMap } from "./ci-related-tests.mjs";
 import { PLAN_DECISIONS, REQUIRED_JOB_RULES } from "./ci-required.mjs";
 import { readRegistry } from "./ci-test-registry.mjs";
 
@@ -299,6 +301,53 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
   assert.match(manifest.scripts["test:e2e:diagnostics:production:run"], /--fail-on-flaky-tests/u);
   assert.ok(!manifest.scripts["test:e2e:diagnostics:production:run"].includes("npm run build"));
   assert.ok(!jobs.verify.steps.some((step) => step.run === "npm test"));
+  // Host-only Computer Use rounds need macOS Accessibility and Screen Recording
+  // permissions, so hosted CI must never enable AIDEN_E2E_COMPUTER_USE_HOST.
+  for (const jobName of ["e2e", "linux-e2e"]) {
+    assert.equal(jobs[jobName].env?.AIDEN_E2E_COMPUTER_USE_HOST, undefined, jobName);
+    for (const step of jobs[jobName].steps) {
+      assert.equal(step.env?.AIDEN_E2E_COMPUTER_USE_HOST, undefined, `${jobName}: ${step.name}`);
+    }
+  }
+});
+
+test("every darwin-divergent E2E spec appears in map.macos or map.hostOnly", () => {
+  const specs = discoverSpecs();
+  const map = readE2ESpecMap();
+  const covered = new Set([...(map.macos ?? []), ...(map.hostOnly ?? [])]);
+  const missing = specs.filter((spec) => isDarwinDivergentE2ESpec(spec) && !covered.has(spec));
+  assert.deepEqual(
+    missing,
+    [],
+    `Specs that skip tests or subsystem checks off darwin must appear in map.macos or map.hostOnly: ${missing.join(", ")}`,
+  );
+
+  // Synthetic fixtures verify the invariant catches skipped tests, native-helper
+  // darwin branches, and omitted Linux spread assertions while keeping shared
+  // modifier/noun branches Linux-only on pull requests.
+  const syntheticFiles = {
+    "tests/e2e/skip-darwin.spec.ts":
+      'import { test } from "./fixtures";\ntest.skip(process.platform !== "darwin", "macOS only");\ntest("x", async () => {});\n',
+    "tests/e2e/native-branch.spec.ts":
+      'import { test } from "./fixtures";\nconst entry = "./native-branch-native.ts";\ntest("x", async () => { void entry; });\n',
+    "tests/e2e/native-branch-native.ts":
+      'const mode = process.platform === "linux" ? "hidden" : "minimized";\nif (mode === "minimized") { console.log("pip"); }\n',
+    "tests/e2e/spread-darwin.spec.ts":
+      'const items = ["General", ...(process.platform === "darwin" ? ["Computer Use"] : [])];\nexport { items };\n',
+    "tests/e2e/shared-modifier.spec.ts":
+      'const mod = process.platform === "darwin" ? "Meta" : "Control";\nconst noun = process.platform === "darwin" ? "Mac" : "computer";\nexport { mod, noun };\n',
+    "tests/e2e/both-desktop.spec.ts":
+      'import { test } from "./fixtures";\ntest.skip(process.platform !== "darwin" && process.platform !== "linux", "desktop");\ntest("x", async () => {});\n',
+  };
+  const readSynthetic = (file) => {
+    if (file in syntheticFiles) return syntheticFiles[file];
+    throw new Error(`missing ${file}`);
+  };
+  assert.equal(isDarwinDivergentE2ESpec("skip-darwin.spec.ts", { readFile: readSynthetic }), true);
+  assert.equal(isDarwinDivergentE2ESpec("native-branch.spec.ts", { readFile: readSynthetic }), true);
+  assert.equal(isDarwinDivergentE2ESpec("spread-darwin.spec.ts", { readFile: readSynthetic }), true);
+  assert.equal(isDarwinDivergentE2ESpec("shared-modifier.spec.ts", { readFile: readSynthetic }), false);
+  assert.equal(isDarwinDivergentE2ESpec("both-desktop.spec.ts", { readFile: readSynthetic }), false);
 });
 
 test("Pullfrog uses immutable action source and frozen local runtime with OIDC", async () => {

@@ -1,15 +1,20 @@
 {
   "version": 1,
   "macos": [
+    "assistant-scheduled-profile.spec.ts",
     "bots-persistence.spec.ts",
+    "browser-throttling.spec.ts",
     "environment-devices-agent.spec.ts",
     "environment-devices-android.spec.ts",
     "environment-devices-features.spec.ts",
     "environment-devices-stream.spec.ts",
     "environment-devices-tab.spec.ts",
     "guided-setup.spec.ts",
-    "keep-going-goals-computer-use.spec.ts",
+    "settings-model-picker.spec.ts",
     "settings-simulator-ssh-hosts.spec.ts"
+  ],
+  "hostOnly": [
+    "keep-going-goals-computer-use.spec.ts"
   ],
   "full": [
     "playwright.config.ts",
@@ -154,6 +159,7 @@
     "bots-starter.spec.ts": [
       "renderer/components/bot",
       "renderer/components/onboarding-bots",
+      "main/services/bot-store",
       "renderer/shared/bot-presets.ts"
     ],
     "browser-agent.spec.ts": [
@@ -323,6 +329,7 @@
       "renderer/lib/goal-notification",
       "renderer/shared/goal.ts",
       "main/services/goal/",
+      "main/services/computer-use/",
       "main/handlers/goals.ts"
     ],
     "keep-going-goals-computer-use.spec.ts": [
@@ -331,7 +338,8 @@
     ],
     "guided-setup.spec.ts": [
       "renderer/components/onboarding",
-      "renderer/components/guided-provider-chooser"
+      "renderer/components/guided-provider-chooser",
+      "main/services/computer-use/"
     ],
     "inbox-sidebar.spec.ts": [
       "renderer/components/sidebar/inbox",

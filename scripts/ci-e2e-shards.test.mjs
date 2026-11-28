@@ -121,10 +121,33 @@ test("a pull request's macOS runner runs only its planned macOS-only specs", () 
   assert.deepEqual(specsForRunner(discovered, unknown, "macos"), ["a.spec.ts", "b.spec.ts", "c.spec.ts"]);
 });
 
-test("every macOS-only spec fits one pull-request runner inside the E2E job budget", () => {
+test("every macOS-only spec fits one pull-request runner inside the E2E job budget and scales cleanly", () => {
   const fixture = JSON.parse(readFileSync(new URL("./fixtures/ci-e2e-2026-11-04-timings.json", import.meta.url), "utf8"));
   const { jobSeconds, setupAndCleanupReserveSeconds, minimumHeadroomSeconds } = fixture.budget;
-  const [shard] = planShards(readE2ESpecMap().macos, 1);
-  assert.equal(shard.files.length, readE2ESpecMap().macos.length);
+  const map = readE2ESpecMap();
+  assert.equal(map.macos.length, 11);
+  for (const requiredSpec of [
+    "assistant-scheduled-profile.spec.ts",
+    "browser-throttling.spec.ts",
+    "settings-model-picker.spec.ts",
+  ]) {
+    assert.ok(map.macos.includes(requiredSpec), requiredSpec);
+  }
+  assert.ok(!map.macos.includes("keep-going-goals-computer-use.spec.ts"));
+  assert.deepEqual(map.hostOnly, ["keep-going-goals-computer-use.spec.ts"]);
+
+  const [shard] = planShards(map.macos, 1);
+  assert.equal(shard.files.length, 11);
+  assert.equal(shard.seconds, 374);
+  assert.equal(shard.seconds + setupAndCleanupReserveSeconds, 494);
   assert.ok(shard.seconds + setupAndCleanupReserveSeconds <= jobSeconds - minimumHeadroomSeconds, `${shard.seconds}s`);
+
+  const scaledSelection = {
+    e2e: { mode: "all", specs: discoverSpecs() },
+    macE2E: { scope: "macos", shards: [1, 2], specs: map.macos },
+  };
+  const runnerSpecs = specsForRunner(discoverSpecs(), scaledSelection, "macos");
+  const scaledShards = planShards(runnerSpecs, 2);
+  assert.equal(scaledShards.length, 2);
+  assert.deepEqual(scaledShards.flatMap((entry) => entry.files).toSorted(), map.macos.toSorted());
 });

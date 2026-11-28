@@ -32,7 +32,10 @@ export function buildTestSelection(options = {}) {
     desktop: detection.desktop === true,
     e2e: selection.e2e,
     map: options.map ?? readE2ESpecMap(),
-    shardCount: E2E_SHARD_COUNT,
+    shardCount: options.shardCount ?? E2E_SHARD_COUNT,
+    weights: options.weights,
+    recorded: options.recorded,
+    fallback: options.fallback,
   });
   return {
     ...selection,
@@ -40,6 +43,18 @@ export function buildTestSelection(options = {}) {
     changedCount: detection.changedCount ?? (detection.changedPaths ?? []).length,
     decisionReason: detection.reason,
   };
+}
+
+export function formatMacE2ESummary(macE2E) {
+  const runners = macE2E.shards.length;
+  const runnerLabel = `${runners} ${runners === 1 ? "runner" : "runners"}`;
+  if (macE2E.scope === "macos") {
+    return `macOS E2E: ${macE2E.specs.length} macOS-only specs on ${runnerLabel}; Linux runs the rest.`;
+  }
+  if (macE2E.scope === "all") {
+    return `macOS E2E: full suite on ${runnerLabel}.`;
+  }
+  return "macOS E2E: none selected; Linux runs the selected specs.";
 }
 
 function main() {
@@ -61,11 +76,7 @@ function main() {
   if (process.env.GITHUB_STEP_SUMMARY) {
     appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`);
   }
-  const macSummary = selection.macE2E.scope === "macos"
-    ? `macOS E2E: ${selection.macE2E.specs.length} macOS-only specs on one runner; Linux runs the rest.`
-    : selection.macE2E.scope === "all"
-      ? `macOS E2E: full suite on ${selection.macE2E.shards.length} runners.`
-      : "macOS E2E: none selected; Linux runs the selected specs.";
+  const macSummary = formatMacE2ESummary(selection.macE2E);
   if (process.env.GITHUB_STEP_SUMMARY) {
     appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${macSummary}\n`);
   }

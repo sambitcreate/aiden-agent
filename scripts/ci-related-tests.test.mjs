@@ -285,17 +285,317 @@ test("pull requests send only their selected macOS-only specs to a Mac; other ev
   assert.ok(!devices.specs.includes("bots-persistence.spec.ts"));
   assert.ok(devices.specs.every((file) => map.macos.includes(file)));
 
-  // A shared-harness change selects every spec; the Mac still runs only the macOS-only ones.
+  // A shared-harness change selects every hosted spec; the Mac still runs only the macOS-only ones.
   const harness = plan("pull_request", ["tests/e2e/fixtures.ts"]);
   assert.equal(harness.scope, "macos");
+  assert.deepEqual(harness.shards, [1]);
   assert.deepEqual(harness.specs.toSorted(), map.macos.toSorted());
   assert.deepEqual(plan("pull_request", ["tests/e2e/fixtures.ts"], false), { run: false, scope: "none", shards: [], specs: [] });
 });
 
-test("the macOS-only spec list names each runnable spec once", () => {
+test("the macOS-only and host-only spec lists name distinct runnable specs once", () => {
   const specs = discoverSpecs();
   const map = validateE2ESpecMap(specs, readE2ESpecMap());
-  assert.ok(map.macos.length > 0);
+  assert.equal(map.macos.length, 11);
+  assert.deepEqual(map.hostOnly, ["keep-going-goals-computer-use.spec.ts"]);
   assert.throws(() => validateE2ESpecMap(specs, { ...map, macos: [...map.macos, "not-a-spec.spec.ts"] }), /not-a-spec\.spec\.ts/u);
   assert.throws(() => validateE2ESpecMap(specs, { ...map, macos: [map.macos[0], map.macos[0]] }), /macos list is malformed/u);
+  assert.throws(() => validateE2ESpecMap(specs, { ...map, hostOnly: ["not-a-spec.spec.ts"] }), /not-a-spec\.spec\.ts/u);
+  assert.throws(() => validateE2ESpecMap(specs, { ...map, hostOnly: [map.hostOnly[0], map.hostOnly[0]] }), /hostOnly list is malformed/u);
+  assert.throws(() => validateE2ESpecMap(specs, { ...map, hostOnly: null }), /hostOnly list is malformed/u);
+  assert.throws(
+    () => validateE2ESpecMap(specs, { ...map, macos: [...map.macos, map.hostOnly[0]] }),
+    /both macos and hostOnly/u,
+  );
+});
+
+test("high-fanout shared modules escalate pull-request E2E selection to all hosted specs", () => {
+  const specs = discoverSpecs();
+  const map = readE2ESpecMap();
+  for (const file of [
+    "renderer/components/ui.tsx",
+    "renderer/shared/bots.ts",
+    "renderer/shared/assistant.ts",
+    "renderer/shared/browser-element-grab.ts",
+    "main/services/generation-runtime.ts",
+  ]) {
+    const selected = selectRelatedE2ESpecs({ changedPaths: [file], specs, map });
+    assert.equal(selected.mode, "all", file);
+    assert.equal(selected.reason, "high-fanout", file);
+    assert.ok(!selected.specs.includes("keep-going-goals-computer-use.spec.ts"), file);
+    assert.equal(selected.specs.length, 85, file);
+  }
+});
+
+test("reverse-import fanout escalates at 8 direct importers or 25 matched specs", () => {
+  const makeImporterGraph = (importerCount) => {
+    const sourceMap = { "renderer/shared/token.ts": "export const token = 1;\n" };
+    for (let index = 0; index < importerCount; index += 1) {
+      sourceMap[`renderer/components/feature-${index}.tsx`] = 'import { token } from "../shared/token.js";\nexport const v = token;\n';
+    }
+    return sourceMap;
+  };
+  const specs = ["alpha.spec.ts", "beta.spec.ts"];
+  const baseMap = {
+    version: 1,
+    macos: [],
+    hostOnly: [],
+    full: [],
+    specs: {
+      "alpha.spec.ts": ["renderer/components/feature-"],
+      "beta.spec.ts": ["renderer/components/other"],
+    },
+  };
+
+  const seven = makeImporterGraph(7);
+  const belowImporterLimit = selectRelatedE2ESpecs({
+    changedPaths: ["renderer/shared/token.ts"],
+    specs,
+    sourceFiles: Object.keys(seven),
+    readFile: (file) => seven[file],
+    map: baseMap,
+  });
+  assert.equal(belowImporterLimit.mode, "related");
+  assert.deepEqual(belowImporterLimit.specs, ["alpha.spec.ts"]);
+
+  const eight = makeImporterGraph(8);
+  const atImporterLimit = selectRelatedE2ESpecs({
+    changedPaths: ["renderer/shared/token.ts"],
+    specs,
+    sourceFiles: Object.keys(eight),
+    readFile: (file) => eight[file],
+    map: baseMap,
+  });
+  assert.equal(atImporterLimit.mode, "all");
+  assert.equal(atImporterLimit.reason, "high-fanout");
+
+  const manySpecs = Array.from({ length: 26 }, (_, index) => `spec-${index}.spec.ts`);
+  const specEntriesFor = (matchedCount) =>
+    Object.fromEntries(
+      manySpecs.map((spec, index) => [
+        spec,
+        [index < matchedCount ? "renderer/components/target" : "renderer/components/untouched"],
+      ]),
+    );
+  const specGraph = {
+    "renderer/lib/leaf-helper.ts": "export const leaf = 1;\n",
+    "renderer/components/target.tsx": 'import { leaf } from "../lib/leaf-helper.js";\nexport const view = leaf;\n',
+  };
+  const twentyFour = selectRelatedE2ESpecs({
+    changedPaths: ["renderer/lib/leaf-helper.ts"],
+    specs: manySpecs,
+    sourceFiles: Object.keys(specGraph),
+    readFile: (file) => specGraph[file],
+    map: { version: 1, macos: [], hostOnly: [], full: [], specs: specEntriesFor(24) },
+  });
+  assert.equal(twentyFour.mode, "related");
+  assert.equal(twentyFour.specs.length, 24);
+
+  const twentyFive = selectRelatedE2ESpecs({
+    changedPaths: ["renderer/lib/leaf-helper.ts"],
+    specs: manySpecs,
+    sourceFiles: Object.keys(specGraph),
+    readFile: (file) => specGraph[file],
+    map: { version: 1, macos: [], hostOnly: [], full: [], specs: specEntriesFor(25) },
+  });
+  assert.equal(twentyFive.mode, "all");
+  assert.equal(twentyFive.reason, "high-fanout");
+});
+
+test("reverse-import walks expand through importers but stop at full-suite paths, wiring hubs, and 40-import aggregators", () => {
+  const deps = Array.from({ length: 40 }, (_, index) => `main/services/dep-${index}.ts`);
+  const fixtureSources = {
+    "main/services/leaf-logic.ts": "export const leaf = 1;\n",
+    "main/services/mapped-feature.ts": 'import { leaf } from "./leaf-logic.js";\nexport const feature = leaf;\n',
+    "main/handlers/index.ts": 'import { feature } from "../services/mapped-feature.js";\nexport const h = feature;\n',
+    "renderer/lib/ipc.ts": 'import { leaf } from "../../main/services/leaf-logic.js";\nexport const ipc = leaf;\n',
+    "renderer/main/app-shell.tsx": 'import { leaf } from "../../main/services/leaf-logic.js";\nexport const shell = leaf;\n',
+    "main/services/mega-aggregator.ts": [
+      'import { leaf } from "./leaf-logic.js";',
+      ...deps.map((dep, index) => `import { d${index} } from "./dep-${index}.js";`),
+      "export const all = leaf;",
+    ].join("\n"),
+    "main/services/behind-hub.ts":
+      'import { h } from "../handlers/index.js";\nimport { ipc } from "../../renderer/lib/ipc.js";\nimport { shell } from "../../renderer/main/app-shell.tsx";\nimport { all } from "./mega-aggregator.js";\nexport const behind = [h, ipc, shell, all];\n',
+  };
+  for (const [index, dep] of deps.entries()) {
+    fixtureSources[dep] = `export const d${index} = ${index};\n`;
+  }
+  const map = {
+    version: 1,
+    macos: [],
+    hostOnly: [],
+    full: ["renderer/main/"],
+    specs: {
+      "feature.spec.ts": ["main/services/mapped-feature"],
+      "unrelated.spec.ts": ["main/services/behind-hub"],
+    },
+  };
+  const specs = ["feature.spec.ts", "unrelated.spec.ts"];
+  const selected = selectRelatedE2ESpecs({
+    changedPaths: ["main/services/leaf-logic.ts"],
+    specs,
+    sourceFiles: Object.keys(fixtureSources),
+    readFile: (file) => fixtureSources[file],
+    map,
+  });
+  assert.equal(selected.mode, "related");
+  assert.deepEqual(selected.specs, ["feature.spec.ts"]);
+
+  // Direct edits to map.full still escalate to the full suite.
+  const directFull = selectRelatedE2ESpecs({
+    changedPaths: ["renderer/main/app-shell.tsx"],
+    specs,
+    sourceFiles: Object.keys(fixtureSources),
+    readFile: (file) => fixtureSources[file],
+    map,
+  });
+  assert.equal(directFull.mode, "all");
+  assert.equal(directFull.reason, "infrastructure");
+
+  // Real leaf edits remain scoped and exclude unrelated browser or studio specs.
+  const realSpecs = discoverSpecs();
+  for (const leaf of ["renderer/components/settings/about-settings.tsx", "main/services/chat-fork-service.ts"]) {
+    const leafSelected = selectRelatedE2ESpecs({ changedPaths: [leaf], specs: realSpecs });
+    assert.equal(leafSelected.mode, "related", leaf);
+    assert.ok(!leafSelected.specs.includes("browser.spec.ts"), leaf);
+    assert.ok(!leafSelected.specs.includes("browser-lifecycle.spec.ts"), leaf);
+    assert.ok(!leafSelected.specs.includes("studio-foundation.spec.ts"), leaf);
+    assert.ok(!leafSelected.specs.includes("design-canvas.spec.ts"), leaf);
+  }
+});
+
+test("every Computer Use service file selects active hosted specs and ignores hostOnly", async () => {
+  const { listSourceFiles } = await import("./ci-related-tests.mjs");
+  const specs = discoverSpecs();
+  const map = readE2ESpecMap();
+  const computerUseFiles = listSourceFiles().filter(
+    (file) => file.startsWith("main/services/computer-use/") && !file.endsWith(".test.ts"),
+  );
+  assert.equal(computerUseFiles.length, 20);
+  for (const file of computerUseFiles) {
+    const selected = selectRelatedE2ESpecs({ changedPaths: [file], specs, map });
+    assert.ok(selected.specs.includes("guided-setup.spec.ts"), file);
+    assert.ok(selected.specs.includes("keep-going-goals.spec.ts"), file);
+    assert.ok(!selected.specs.includes("keep-going-goals-computer-use.spec.ts"), file);
+  }
+  const directHostOnly = selectRelatedE2ESpecs({
+    changedPaths: ["tests/e2e/keep-going-goals-computer-use.spec.ts"],
+    specs,
+    map,
+  });
+  assert.equal(directHostOnly.mode, "all");
+  assert.ok(!directHostOnly.specs.includes("keep-going-goals-computer-use.spec.ts"));
+});
+
+test("bot-store pairs with bots-starter and related selection falls back to all when Linux has zero active specs", () => {
+  const specs = discoverSpecs();
+  const map = readE2ESpecMap();
+  const botStore = selectRelatedE2ESpecs({
+    changedPaths: ["main/services/bot-store-leaf.ts"],
+    specs,
+    sourceFiles: ["main/services/bot-store-leaf.ts"],
+    readFile: () => "export const leaf = 1;\n",
+    map,
+  });
+  assert.equal(botStore.mode, "related");
+  assert.ok(botStore.specs.includes("bots-persistence.spec.ts"));
+  assert.ok(botStore.specs.includes("bots-starter.spec.ts"));
+
+  const darwinOnlyFixture = {
+    "main/services/darwin-only.ts": "export const onlyMac = true;\n",
+    "tests/e2e/mac-only.spec.ts":
+      'import { test } from "./fixtures";\ntest.skip(process.platform !== "darwin", "macOS only");\ntest("mac", async () => {});\n',
+    "tests/e2e/linux-active.spec.ts":
+      'import { test } from "./fixtures";\ntest("cross-platform", async () => {});\n',
+  };
+  const fallback = selectRelatedE2ESpecs({
+    changedPaths: ["main/services/darwin-only.ts"],
+    specs: ["mac-only.spec.ts", "linux-active.spec.ts"],
+    sourceFiles: ["main/services/darwin-only.ts"],
+    readFile: (file) => darwinOnlyFixture[file],
+    map: {
+      version: 1,
+      macos: ["mac-only.spec.ts"],
+      hostOnly: [],
+      full: [],
+      specs: {
+        "mac-only.spec.ts": ["main/services/darwin-only"],
+        "linux-active.spec.ts": ["main/services/other"],
+      },
+    },
+  });
+  assert.equal(fallback.mode, "all");
+  assert.equal(fallback.reason, "no-active-linux-specs");
+  assert.deepEqual(fallback.specs, ["mac-only.spec.ts", "linux-active.spec.ts"]);
+});
+
+test("planMacE2E covers Picture in Picture, Settings model picker, and Live surfaces and scales shards past 900s", async () => {
+  const { buildTestSelection, formatMacE2ESummary } = await import("./ci-select-tests.mjs");
+  const specs = discoverSpecs();
+  const map = readE2ESpecMap();
+
+  for (const [changed, expectedSpec] of [
+    ["main/services/browser/pip-feed.ts", "browser-throttling.spec.ts"],
+    ["renderer/components/model-picker.tsx", "settings-model-picker.spec.ts"],
+    ["renderer/shared/assistant.ts", "assistant-scheduled-profile.spec.ts"],
+  ]) {
+    const e2e = selectRelatedE2ESpecs({ changedPaths: [changed], specs, map });
+    const planned = planMacE2E({ eventName: "pull_request", desktop: true, e2e, map, shardCount: 5 });
+    assert.equal(planned.run, true, changed);
+    assert.equal(planned.scope, "macos", changed);
+    assert.deepEqual(planned.shards, [1], changed);
+    assert.ok(planned.specs.includes(expectedSpec), `${changed} -> ${expectedSpec}`);
+  }
+
+  // At 900s total, one macOS shard still suffices; 901s scales to two; heavy weights cap at shardCount.
+  const twoSpecMap = {
+    version: 1,
+    macos: ["assistant-scheduled-profile.spec.ts", "guided-setup.spec.ts"],
+    hostOnly: [],
+    full: [],
+    specs: {
+      "assistant-scheduled-profile.spec.ts": ["renderer/components/assistant"],
+      "guided-setup.spec.ts": ["renderer/components/onboarding"],
+    },
+  };
+  const e2eBoth = { mode: "all", reason: "high-fanout", specs: twoSpecMap.macos };
+  const atBudget = planMacE2E({
+    eventName: "pull_request",
+    desktop: true,
+    e2e: e2eBoth,
+    map: twoSpecMap,
+    shardCount: 5,
+    weights: { "assistant-scheduled-profile.spec.ts": 450, "guided-setup.spec.ts": 450 },
+  });
+  assert.deepEqual(atBudget.shards, [1]);
+  assert.equal(
+    formatMacE2ESummary(atBudget),
+    "macOS E2E: 2 macOS-only specs on 1 runner; Linux runs the rest.",
+  );
+
+  const overBudget = planMacE2E({
+    eventName: "pull_request",
+    desktop: true,
+    e2e: e2eBoth,
+    map: twoSpecMap,
+    shardCount: 5,
+    weights: { "assistant-scheduled-profile.spec.ts": 451, "guided-setup.spec.ts": 450 },
+  });
+  assert.deepEqual(overBudget.shards, [1, 2]);
+  assert.equal(
+    formatMacE2ESummary(overBudget),
+    "macOS E2E: 2 macOS-only specs on 2 runners; Linux runs the rest.",
+  );
+
+  const capped = buildTestSelection({
+    eventName: "pull_request",
+    detection: { desktop: true, changedPaths: ["tests/e2e/fixtures.ts"], changedCount: 1, reason: "pull-request-diff" },
+    registry: { lanes: [] },
+    specs: twoSpecMap.macos,
+    map: { ...twoSpecMap, full: ["tests/e2e/fixtures.ts"] },
+    shardCount: 3,
+    weights: { "assistant-scheduled-profile.spec.ts": 2_000, "guided-setup.spec.ts": 2_000 },
+  });
+  assert.deepEqual(capped.macE2E.shards, [1, 2, 3]);
 });
