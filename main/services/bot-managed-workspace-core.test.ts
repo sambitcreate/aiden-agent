@@ -564,3 +564,240 @@ test("Bot home delete refuses a directory that replaced the owned home", async (
     await rm(paths.parent, { recursive: true, force: true });
   }
 });
+
+function workspaceUuid(index: number): string {
+  return `30000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((grant) => {
+    resolve = grant;
+  });
+  return { promise, resolve };
+}
+
+test("resolve in a 50-Bot fleet inspects only the target Bot while full audits inspect all Bots", async () => {
+  const paths = await temporaryRoot("aiden-bot-home-fleet-");
+  try {
+    const baseStorage = createFileBotManagedWorkspaceStorage({
+      root: () => paths.root,
+      syncDirectory: async () => undefined,
+    });
+    const inspected: string[] = [];
+    let nextId = 0;
+    const service = createBotManagedWorkspaceCore({
+      storage: {
+        ...baseStorage,
+        inspectHome: async (directoryName) => {
+          inspected.push(directoryName);
+          return baseStorage.inspectHome(directoryName);
+        },
+      },
+      now: () => 1_000 + nextId,
+      mintWorkspaceId: () => {
+        nextId += 1;
+        return workspaceUuid(nextId);
+      },
+    });
+
+    const provisioned = [];
+    for (let index = 1; index <= 50; index += 1) {
+      provisioned.push(await service.provision(`bot-${index}`));
+    }
+
+    inspected.length = 0;
+    const resolved = await service.resolve("bot-25");
+    assert.deepEqual(resolved, provisioned[24]);
+    assert.deepEqual(inspected, [botManagedHomeDirectoryName(provisioned[24]!.workspaceId)]);
+
+    // Re-provisioning an existing Bot reuses auditDocument's verified resolution instead of inspecting twice.
+    inspected.length = 0;
+    assert.deepEqual(await service.provision("bot-25"), provisioned[24]);
+    assert.equal(inspected.length, 50);
+
+    // Full-fleet checks remain active on listBindings and audit.
+    inspected.length = 0;
+    assert.equal((await service.listBindings()).length, 50);
+    assert.equal(inspected.length, 50);
+
+    inspected.length = 0;
+    await service.audit();
+    assert.equal(inspected.length, 50);
+
+    // Multi-Bot bounded-parallel audit still fails closed when multiple homes are missing.
+    await rm(provisioned[5]!.homePath, { recursive: true, force: true });
+    await rm(provisioned[35]!.homePath, { recursive: true, force: true });
+    await assert.rejects(service.audit(), /incomplete and requires reconciliation/u);
+  } finally {
+    await rm(paths.parent, { recursive: true, force: true });
+  }
+});
+
+test("resolve and revalidate share read access while mutations wait for active readers and block new readers", async () => {
+  const paths = await temporaryRoot("aiden-bot-home-rwlock-");
+  try {
+    const baseStorage = createFileBotManagedWorkspaceStorage({
+      root: () => paths.root,
+      syncDirectory: async () => undefined,
+    });
+    let nextId = 0;
+    let activeManifestReads = 0;
+    let peakManifestReads = 0;
+    const bothSharedReadersEntered = deferred();
+    let releaseSharedReaders: (() => void) | undefined;
+
+    let gateFirstReaderInspect: (() => Promise<void>) | undefined;
+    let gateWriterCreateHome: (() => Promise<void>) | undefined;
+    const events: string[] = [];
+
+    const service = createBotManagedWorkspaceCore({
+      storage: {
+        ...baseStorage,
+        readManifest: async () => {
+          activeManifestReads += 1;
+          peakManifestReads = Math.max(peakManifestReads, activeManifestReads);
+          if (releaseSharedReaders && activeManifestReads === 2) {
+            bothSharedReadersEntered.resolve();
+          }
+          try {
+            if (releaseSharedReaders) {
+              await bothSharedReadersEntered.promise;
+            }
+            return await baseStorage.readManifest();
+          } finally {
+            activeManifestReads -= 1;
+          }
+        },
+        inspectHome: async (directoryName) => {
+          if (gateFirstReaderInspect) {
+            const wait = gateFirstReaderInspect;
+            gateFirstReaderInspect = undefined;
+            events.push("reader-1:inspect-enter");
+            await wait();
+            events.push("reader-1:inspect-exit");
+          }
+          return baseStorage.inspectHome(directoryName);
+        },
+        createHome: async (directoryName, receipt) => {
+          events.push(`create:${receipt.botId}:enter`);
+          if (gateWriterCreateHome) {
+            const wait = gateWriterCreateHome;
+            gateWriterCreateHome = undefined;
+            await wait();
+          }
+          const created = await baseStorage.createHome(directoryName, receipt);
+          events.push(`create:${receipt.botId}:exit`);
+          return created;
+        },
+        removeOwnedHome: async (directoryName, receipt) => {
+          events.push(`delete:${receipt.botId}:enter`);
+          await baseStorage.removeOwnedHome(directoryName, receipt);
+          events.push(`delete:${receipt.botId}:exit`);
+        },
+      },
+      now: () => 2_000 + nextId,
+      mintWorkspaceId: () => {
+        nextId += 1;
+        return workspaceUuid(nextId);
+      },
+    });
+
+    const bot1 = await service.provision("bot-1");
+    const bot2 = await service.provision("bot-2");
+    events.length = 0;
+
+    // 1. Concurrent resolve + revalidate enter storage in parallel without blocking one another.
+    peakManifestReads = 0;
+    releaseSharedReaders = () => undefined;
+    const [concurrentResolved, concurrentRevalidated] = await Promise.all([
+      service.resolve("bot-2"),
+      service.revalidate(bot1),
+    ]);
+    releaseSharedReaders = undefined;
+    assert.deepEqual(concurrentResolved, bot2);
+    assert.deepEqual(concurrentRevalidated, bot1);
+    assert.equal(peakManifestReads, 2);
+
+    // 2. Active reader holds the shared lock; waiting writers drain active readers, block new readers,
+    // serialize mutations, and then release queued readers as a shared batch before a trailing writer.
+    const reader1Gate = deferred();
+    const writer1Gate = deferred();
+    const reader1Entered = deferred();
+    const writer1Entered = deferred();
+
+    gateFirstReaderInspect = async () => {
+      reader1Entered.resolve();
+      await reader1Gate.promise;
+    };
+    gateWriterCreateHome = async () => {
+      writer1Entered.resolve();
+      await writer1Gate.promise;
+    };
+
+    const reader1 = service.resolve("bot-1").then((res) => {
+      events.push("reader-1:done");
+      return res;
+    });
+    await reader1Entered.promise;
+
+    // Queue writer-1 (provision bot-3), then two readers (blocked behind writer-1), then writer-2 (delete bot-2).
+    const writer1 = service.provision("bot-3").then((res) => {
+      events.push("writer-1:done");
+      return res;
+    });
+    const queuedReaderA = service.resolve("bot-1").then((res) => {
+      events.push("queued-reader-a:done");
+      return res;
+    });
+    const queuedReaderB = service.revalidate(bot1).then((res) => {
+      events.push("queued-reader-b:done");
+      return res;
+    });
+    const writer2 = service.deleteHome("bot-2").then((deleted) => {
+      events.push("writer-2:done");
+      return deleted;
+    });
+
+    // Neither writer-1 nor queued readers may run while reader-1 is still active.
+    await Promise.resolve();
+    assert.deepEqual(events, ["reader-1:inspect-enter"]);
+
+    // Release reader-1; writer-1 must now acquire exclusively and pause inside createHome.
+    reader1Gate.resolve();
+    await reader1;
+    await writer1Entered.promise;
+    assert.deepEqual(events, [
+      "reader-1:inspect-enter",
+      "reader-1:inspect-exit",
+      "reader-1:done",
+      "create:bot-3:enter",
+    ]);
+
+    // Release writer-1; queued readers A and B run before writer-2 deletes bot-2.
+    writer1Gate.resolve();
+    const [bot3, resolvedAfterWrite, revalidatedAfterWrite, deletedBot2] = await Promise.all([
+      writer1,
+      queuedReaderA,
+      queuedReaderB,
+      writer2,
+    ]);
+    assert.equal(bot3.botId, "bot-3");
+    assert.deepEqual(resolvedAfterWrite, bot1);
+    assert.deepEqual(revalidatedAfterWrite, bot1);
+    assert.equal(deletedBot2, true);
+
+    const writer1DoneIndex = events.indexOf("writer-1:done");
+    const readerADoneIndex = events.indexOf("queued-reader-a:done");
+    const readerBDoneIndex = events.indexOf("queued-reader-b:done");
+    const deleteEnterIndex = events.indexOf("delete:bot-2:enter");
+    const writer2DoneIndex = events.indexOf("writer-2:done");
+    assert.ok(writer1DoneIndex < readerADoneIndex);
+    assert.ok(writer1DoneIndex < readerBDoneIndex);
+    assert.ok(readerADoneIndex < deleteEnterIndex);
+    assert.ok(readerBDoneIndex < deleteEnterIndex);
+    assert.ok(deleteEnterIndex < writer2DoneIndex);
+  } finally {
+    await rm(paths.parent, { recursive: true, force: true });
+  }
+});
