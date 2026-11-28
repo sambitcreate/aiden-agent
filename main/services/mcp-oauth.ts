@@ -6,6 +6,7 @@
 // (RFC 8252 loopback redirect) and live status.
 
 import type { OAuthTokens } from "@earendil-works/pi-mcp/oauth";
+import { parseMcpOAuthEndpointUrl } from "../../renderer/shared/mcp-oauth-config.js";
 import { app, shell, logger } from "../platform.js";
 import { mcpOAuthStore } from "./mcp-oauth-store.js";
 import { McpOAuthOperationGate, type McpOAuthOperation } from "./mcp-oauth-operation.js";
@@ -34,7 +35,7 @@ const runtime: McpOAuthRuntime = {
   store: mcpOAuthStore,
   gate: oauthOperations,
   status: mcpLiveStatus,
-  openBrowser: (url) => shell.openExternal(url),
+  openBrowser: (url) => shell.openExternal(parseMcpOAuthEndpointUrl(url)),
   log: {
     info: (message) => logger.info("mcp-oauth", message),
     warn: (message) => logger.warn("mcp-oauth", message),
@@ -125,5 +126,9 @@ export function authorizeMcpServer(
   ownerSignal?: AbortSignal,
   reservedOperation?: McpOAuthOperation,
 ): Promise<McpOAuthAuthorizationResult> {
-  return authorizeMcpServerWithRuntime(runtime, server, { isCurrent, ownerSignal, reservedOperation });
+  const serverRuntime: McpOAuthRuntime = {
+    ...runtime,
+    openBrowser: (url) => shell.openExternal(parseMcpOAuthEndpointUrl(url, server.url)),
+  };
+  return authorizeMcpServerWithRuntime(serverRuntime, server, { isCurrent, ownerSignal, reservedOperation });
 }

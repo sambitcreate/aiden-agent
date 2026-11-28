@@ -743,3 +743,235 @@ test("a sign-in stored before expiries were recorded is still renewed after a 40
   assert.deepEqual(refreshVerdicts(h.fake), [[200, null]]);
   assert.ok((await h.session()).expiresAt, "the renewed tokens record their expiry");
 });
+
+function localNonLoopbackIpv4(): string | undefined {
+  const os = process.getBuiltinModule("node:os");
+  for (const entries of Object.values(os.networkInterfaces())) {
+    for (const entry of entries ?? []) {
+      if (!entry.internal && entry.family === "IPv4" && !entry.address.startsWith("127.") && !entry.address.startsWith("169.254.")) {
+        return entry.address;
+      }
+    }
+  }
+  return undefined;
+}
+
+test("remote HTTPS MCP OAuth blocks WWW-Authenticate resource_metadata SSRF, loopback POST SSRF, and plaintext or credentialed browser URLs", async (t) => {
+  const hostIp = localNonLoopbackIpv4();
+  assert.ok(hostIp, "expected a non-loopback IPv4 interface in the test environment");
+
+  const dns = process.getBuiltinModule("node:dns");
+  const fs = process.getBuiltinModule("node:fs/promises");
+  const http = process.getBuiltinModule("node:http");
+  const https = process.getBuiltinModule("node:https");
+  const os = process.getBuiltinModule("node:os");
+  const path = process.getBuiltinModule("node:path");
+  const tls = process.getBuiltinModule("node:tls");
+  const { loadOrCreateAidenRemoteTlsIdentity } = await import("./aiden-remote-tls-identity.js");
+  const { sessionForMcpAuthorizationAttempt, sessionWithMcpClientInformation, sessionWithSavedMcpTokens } = await import("./mcp-oauth-session.js");
+
+  const certDir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-mcp-oauth-tls-"));
+  t.after(() => fs.rm(certDir, { recursive: true, force: true }));
+  const identity = await loadOrCreateAidenRemoteTlsIdentity({
+    directory: certDir,
+    hostnames: ["remote-mcp.example", "remote-auth.example", "evil-loopback.example"],
+  });
+
+  const origCreateSecureContext = tls.createSecureContext.bind(tls);
+  t.mock.method(tls, "createSecureContext", (options?: import("node:tls").SecureContextOptions) =>
+    origCreateSecureContext({
+      ...options,
+      ...(options?.ca === undefined ? { ca: [...tls.rootCertificates, identity.caCertificate] } : {}),
+    }),
+  );
+
+  const origLookup = dns.lookup.bind(dns);
+  t.mock.method(dns, "lookup", ((hostname: string, options: unknown, callback: unknown) => {
+    const cb = (typeof options === "function" ? options : callback) as (err: NodeJS.ErrnoException | null, address: unknown, family?: number) => void;
+    const all = Boolean(options && typeof options === "object" && (options as { all?: boolean }).all);
+    if (hostname === "remote-mcp.example" || hostname === "remote-auth.example") {
+      if (all) cb(null, [{ address: hostIp, family: 4 }]);
+      else cb(null, hostIp, 4);
+      return;
+    }
+    if (hostname === "evil-loopback.example") {
+      if (all) cb(null, [{ address: "127.0.0.1", family: 4 }]);
+      else cb(null, "127.0.0.1", 4);
+      return;
+    }
+    (origLookup as (...args: unknown[]) => void)(hostname, options, callback);
+  }) as typeof dns.lookup);
+
+  const canaryHits: string[] = [];
+  const canaryHttp = http.createServer((req, res) => {
+    canaryHits.push(`http:${req.method} ${req.url}`);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ leaked: true }));
+  });
+  await new Promise<void>((resolve) => canaryHttp.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => canaryHttp.close(() => resolve())));
+  const internalPort = (canaryHttp.address() as net.AddressInfo).port;
+
+  const canaryHttps = https.createServer({ key: identity.privateKey, cert: identity.certificateChain }, (req, res) => {
+    canaryHits.push(`https:${req.method} ${req.url}`);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ leaked: true }));
+  });
+  await new Promise<void>((resolve) => canaryHttps.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => canaryHttps.close(() => resolve())));
+  const internalHttpsPort = (canaryHttps.address() as net.AddressInfo).port;
+
+  let remotePort = 0;
+  let challengeHeader = () => `Bearer resource_metadata="http://127.0.0.1:${internalPort}/canary-resource-metadata"`;
+  let metadataPayload = (): Record<string, unknown> => ({
+    issuer: `https://remote-mcp.example:${remotePort}`,
+    authorization_endpoint: "http://canary-user:canary-pass@remote-auth.example/authorize",
+    registration_endpoint: `http://127.0.0.1:${internalPort}/canary-register`,
+    token_endpoint: `http://127.0.0.1:${internalPort}/canary-bg-token`,
+    response_types_supported: ["code"],
+    code_challenge_methods_supported: ["S256"],
+  });
+
+  const remoteServer = https.createServer({ key: identity.privateKey, cert: identity.certificateChain }, (req, res) => {
+    const pathname = new URL(req.url ?? "/", `https://remote-mcp.example:${remotePort}`).pathname;
+    if (pathname === "/mcp") {
+      const header = challengeHeader();
+      res.writeHead(401, header ? { "www-authenticate": header } : {});
+      res.end();
+      return;
+    }
+    if (pathname.startsWith("/.well-known/oauth-protected-resource")) {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
+    if (pathname.startsWith("/.well-known/oauth-authorization-server")) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(metadataPayload()));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise<void>((resolve) => remoteServer.listen(0, hostIp, resolve));
+  t.after(() => new Promise<void>((resolve) => remoteServer.close(() => resolve())));
+  remotePort = (remoteServer.address() as net.AddressInfo).port;
+
+  const serviceUrl = `https://remote-mcp.example:${remotePort}/mcp`;
+  const store = memoryStore();
+  const openedBrowserUrls: string[] = [];
+  const runtime: McpOAuthRuntime = {
+    store,
+    gate: new McpOAuthOperationGate(),
+    status: new McpLiveStatusRegistry(),
+    openBrowser: async (url) => {
+      openedBrowserUrls.push(url);
+    },
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    clientVersion: "0.0.0-test",
+    loopback: { port: 0, redirectUri: "http://127.0.0.1:0/callback", timeoutMs: 10_000 },
+    publish: (_serverId, operation) => operation(),
+  };
+  const remoteMcpServer: McpServer = {
+    id: "custom-remote-ssrf",
+    name: "Remote Canary",
+    transport: "http",
+    url: serviceUrl,
+    oauth: true,
+    enabled: true,
+  };
+  const backgroundConnect = async (target: McpServer = remoteMcpServer) => {
+    const client = createMcpClient("remote-bg-canary", "1");
+    try {
+      await connectMcpClient(client, makeMcpOAuthTransport(target, createBackgroundMcpOAuthProvider(runtime, target)), { timeoutMs: 10_000 });
+    } finally {
+      await client.close().catch(() => undefined);
+    }
+  };
+  const seedExpiredRefreshableSession = async (target: McpServer = remoteMcpServer) => {
+    const binding = mcpOAuthBindingForServer(target);
+    const attempt = sessionForMcpAuthorizationAttempt({}, binding);
+    const withClient = sessionWithMcpClientInformation(attempt, binding, {
+      client_id: "seeded-client",
+      redirect_uris: ["http://127.0.0.1:49152/callback"],
+    });
+    const withTokens = sessionWithSavedMcpTokens(
+      withClient,
+      binding,
+      { access_token: "expired-access", token_type: "Bearer", refresh_token: "seeded-refresh", expires_in: 60 },
+      undefined,
+      Date.now() - 120_000,
+    );
+    await store.set(target.id, withTokens);
+  };
+
+  // 1. Exact combined canary scenario: 401 with loopback WWW-Authenticate resource_metadata + malicious AS metadata.
+  await assert.rejects(authorizeMcpServerWithRuntime(runtime, remoteMcpServer), /HTTPS|insecure|loopback/iu);
+  await seedExpiredRefreshableSession();
+  await assert.rejects(backgroundConnect(), /HTTPS|insecure|loopback/iu);
+  assert.deepEqual(canaryHits, []);
+  assert.deepEqual(openedBrowserUrls, []);
+
+  // 2. Without resource_metadata header, discovery reaches /.well-known/oauth-authorization-server:
+  //    a) Combined malicious AS metadata (credentialed HTTP authorize + loopback HTTP register & token)
+  challengeHeader = () => "Bearer";
+  await store.clear(remoteMcpServer.id);
+  await assert.rejects(authorizeMcpServerWithRuntime(runtime, remoteMcpServer), /HTTPS|insecure|loopback|credentials/iu);
+  await seedExpiredRefreshableSession();
+  await assert.rejects(backgroundConnect(), /HTTPS|insecure|loopback/iu);
+  assert.deepEqual(canaryHits, []);
+  assert.deepEqual(openedBrowserUrls, []);
+
+  //    b) HTTPS loopback registration_endpoint SSRF during interactive dynamic registration
+  metadataPayload = () => ({
+    issuer: `https://remote-mcp.example:${remotePort}`,
+    authorization_endpoint: `https://remote-auth.example:${remotePort}/authorize`,
+    token_endpoint: `https://remote-auth.example:${remotePort}/token`,
+    registration_endpoint: `https://127.0.0.1:${internalHttpsPort}/canary-register`,
+    response_types_supported: ["code"],
+    code_challenge_methods_supported: ["S256"],
+  });
+  await store.clear(remoteMcpServer.id);
+  await assert.rejects(authorizeMcpServerWithRuntime(runtime, remoteMcpServer), /loopback|HTTPS|insecure/iu);
+  assert.deepEqual(canaryHits, []);
+  assert.deepEqual(openedBrowserUrls, []);
+
+  //    c) Plaintext or credential-bearing authorization_endpoint with pre-registered client
+  for (const badAuthEndpoint of [
+    "http://canary-user:canary-pass@remote-auth.example/authorize",
+    `https://canary-user:canary-pass@remote-auth.example:${remotePort}/authorize`,
+  ]) {
+    metadataPayload = () => ({
+      issuer: `https://remote-mcp.example:${remotePort}`,
+      authorization_endpoint: badAuthEndpoint,
+      token_endpoint: `https://remote-auth.example:${remotePort}/token`,
+      response_types_supported: ["code"],
+      code_challenge_methods_supported: ["S256"],
+    });
+    const preRegisteredServer: McpServer = { ...remoteMcpServer, oauthClientId: "pre-registered-client" };
+    await store.clear(preRegisteredServer.id);
+    await assert.rejects(authorizeMcpServerWithRuntime(runtime, preRegisteredServer), /HTTPS|credentials|insecure/iu);
+    assert.deepEqual(canaryHits, []);
+    assert.deepEqual(openedBrowserUrls, []);
+  }
+
+  //    d) Background refresh POST SSRF via loopback IP or DNS-resolved loopback hostname on token_endpoint
+  for (const badTokenEndpoint of [
+    `http://127.0.0.1:${internalPort}/canary-bg-token`,
+    `https://127.0.0.1:${internalHttpsPort}/canary-bg-token`,
+    `https://evil-loopback.example:${internalHttpsPort}/canary-bg-token`,
+  ]) {
+    metadataPayload = () => ({
+      issuer: `https://remote-mcp.example:${remotePort}`,
+      authorization_endpoint: `https://remote-auth.example:${remotePort}/authorize`,
+      token_endpoint: badTokenEndpoint,
+      response_types_supported: ["code"],
+      code_challenge_methods_supported: ["S256"],
+    });
+    await seedExpiredRefreshableSession();
+    await assert.rejects(backgroundConnect(), /HTTPS|insecure|loopback|Could not reach evil-loopback\.example/iu);
+    assert.deepEqual(canaryHits, []);
+    assert.deepEqual(openedBrowserUrls, []);
+  }
+});
+

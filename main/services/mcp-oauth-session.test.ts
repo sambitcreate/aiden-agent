@@ -768,3 +768,308 @@ test("a 403 insufficient_scope on another path of the service origin is remember
   await fetch("https://sse-step-up.example.test/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "grant_type=refresh_token" });
   assert.equal(mcpInteractiveAuthorizationScope(serviceUrl, "mail.read"), "mail.read");
 });
+
+test("OAuth endpoint and metadata URL helpers isolate remote servers from loopback, plaintext, credentials, and fragments", async () => {
+  const {
+    mcpOAuthMetadataUrlForServer,
+    parseMcpOAuthEndpointUrl,
+    parseMcpOAuthMetadataUrl,
+  } = await import("../../renderer/shared/mcp-oauth-config.js");
+
+  const remoteService = "https://remote-mcp.example/mcp";
+  for (const rejected of [
+    "http://remote-auth.example/authorize",
+    "http://127.0.0.1:3000/authorize",
+    "https://127.0.0.1:3000/authorize",
+    "https://127.0.0.2:3000/authorize",
+    "https://localhost:3000/authorize",
+    "https://idp.localhost:3000/authorize",
+    "https://[::1]:3000/authorize",
+    "https://[::]:3000/authorize",
+    "https://0.0.0.0:3000/authorize",
+    "https://169.254.169.254/latest/meta-data",
+    "https://[fe80::1]/authorize",
+    "https://[::ffff:127.0.0.1]/authorize",
+    "https://[64:ff9b::127.0.0.1]/authorize",
+    "https://canary-user:canary-pass@remote-auth.example/authorize",
+    "https://canary-user@remote-auth.example/authorize",
+    "https://remote-auth.example/authorize#fragment",
+  ]) {
+    assert.throws(() => parseMcpOAuthEndpointUrl(rejected, remoteService), /OAuth endpoint URL/u, rejected);
+    assert.throws(() => parseMcpOAuthMetadataUrl(rejected, remoteService), /OAuth metadata URL/u, rejected);
+  }
+
+  assert.equal(
+    parseMcpOAuthEndpointUrl("https://remote-auth.example/authorize?client_id=a", remoteService),
+    "https://remote-auth.example/authorize?client_id=a",
+  );
+  assert.throws(
+    () => mcpOAuthMetadataUrlForServer({ transport: "http", oauth: true, url: remoteService, authServerMetadataUrl: "http://127.0.0.1:3000/metadata" }),
+    /OAuth metadata URL/u,
+  );
+  assert.equal(
+    mcpOAuthMetadataUrlForServer({ transport: "http", oauth: true, url: "http://127.0.0.1:8080/mcp", authServerMetadataUrl: "http://127.0.0.1:3000/metadata" }),
+    "http://127.0.0.1:3000/metadata",
+  );
+  assert.equal(
+    mcpOAuthMetadataUrlForServer({ transport: "http", oauth: true, authServerMetadataUrl: "http://127.0.0.1:3000/metadata" }),
+    "http://127.0.0.1:3000/metadata",
+  );
+
+  for (const loopbackService of ["http://127.0.0.1:8080/mcp", "http://localhost:8080/mcp", "http://[::1]:8080/mcp"]) {
+    assert.equal(
+      parseMcpOAuthEndpointUrl("http://127.0.0.1:9000/token", loopbackService),
+      "http://127.0.0.1:9000/token",
+    );
+    assert.throws(() => parseMcpOAuthEndpointUrl("http://remote-auth.example/token", loopbackService), /HTTPS/u);
+    assert.throws(() => parseMcpOAuthEndpointUrl("http://user:pass@127.0.0.1:9000/token", loopbackService), /credentials/u);
+  }
+});
+
+test("saveDiscovery, authorizationUrl, and metadata overrides reject loopback, HTTP, and credentialed endpoints for remote servers", async () => {
+  const { loadMcpOAuthMetadataOverride } = await import("./mcp-oauth-metadata.js");
+  const remoteService = "https://remote-mcp.example/mcp";
+  const validMetadata = {
+    issuer: "https://remote-auth.example",
+    authorization_endpoint: "https://remote-auth.example/authorize",
+    token_endpoint: "https://remote-auth.example/token",
+    registration_endpoint: "https://remote-auth.example/register",
+    response_types_supported: ["code"],
+  };
+
+  for (const badState of [
+    {
+      authorizationServerUrl: "http://127.0.0.1:4000",
+      authorizationServerMetadata: { ...validMetadata, issuer: "http://127.0.0.1:4000" },
+    },
+    {
+      authorizationServerUrl: "https://remote-auth.example",
+      resourceMetadataUrl: "http://127.0.0.1:4000/.well-known/oauth-protected-resource",
+      authorizationServerMetadata: validMetadata,
+    },
+    {
+      authorizationServerUrl: "https://remote-auth.example",
+      resourceMetadata: { resource: remoteService, authorization_servers: ["http://127.0.0.1:4000"] },
+      authorizationServerMetadata: validMetadata,
+    },
+    {
+      authorizationServerUrl: "https://remote-auth.example",
+      authorizationServerMetadata: { ...validMetadata, authorization_endpoint: "http://canary-user:canary-pass@remote-auth.example/authorize" },
+    },
+    {
+      authorizationServerUrl: "https://remote-auth.example",
+      authorizationServerMetadata: { ...validMetadata, authorization_endpoint: "https://canary-user:canary-pass@remote-auth.example/authorize" },
+    },
+    {
+      authorizationServerUrl: "https://remote-auth.example",
+      authorizationServerMetadata: { ...validMetadata, token_endpoint: "http://127.0.0.1:4000/token" },
+    },
+    {
+      authorizationServerUrl: "https://remote-auth.example",
+      authorizationServerMetadata: { ...validMetadata, token_endpoint: "https://127.0.0.1:4000/token" },
+    },
+    {
+      authorizationServerUrl: "https://remote-auth.example",
+      authorizationServerMetadata: { ...validMetadata, registration_endpoint: "http://127.0.0.1:4000/register" },
+    },
+    {
+      authorizationServerUrl: "https://remote-auth.example",
+      authorizationServerMetadata: { ...validMetadata, registration_endpoint: "https://localhost:4000/register" },
+    },
+  ]) {
+    const flow = new McpOAuthAuthorizationFlow(remoteService);
+    assert.throws(() => flow.saveDiscovery(badState), /OAuth endpoint URL/u);
+    assert.equal(flow.discoveryState(), undefined);
+  }
+
+  const remoteFlow = new McpOAuthAuthorizationFlow(remoteService);
+  assert.throws(() => remoteFlow.authorizationUrl(new URL(`http://remote-auth.example/authorize?state=${remoteFlow.state}`)), /HTTPS/u);
+  assert.throws(() => remoteFlow.authorizationUrl(new URL(`https://user:pass@remote-auth.example/authorize?state=${remoteFlow.state}`)), /credentials/u);
+  assert.throws(() => remoteFlow.authorizationUrl(new URL(`https://127.0.0.1:4443/authorize?state=${remoteFlow.state}`)), /loopback/u);
+
+  const loopbackFlow = new McpOAuthAuthorizationFlow("http://127.0.0.1:8080/mcp");
+  loopbackFlow.saveDiscovery({
+    authorizationServerUrl: "http://127.0.0.1:8080",
+    authorizationServerMetadata: {
+      issuer: "http://127.0.0.1:8080",
+      authorization_endpoint: "http://127.0.0.1:8080/authorize",
+      token_endpoint: "http://127.0.0.1:8080/token",
+      registration_endpoint: "http://127.0.0.1:8080/register",
+      response_types_supported: ["code"],
+    },
+  });
+  assert.equal(
+    loopbackFlow.authorizationUrl(new URL(`http://127.0.0.1:8080/authorize?state=${loopbackFlow.state}`)).origin,
+    "http://127.0.0.1:8080",
+  );
+
+  await assert.rejects(
+    loadMcpOAuthMetadataOverride("http://127.0.0.1:4000/config", { serviceUrl: remoteService, fetch: async () => Response.json(validMetadata) }),
+    /HTTPS/u,
+  );
+  await assert.rejects(
+    loadMcpOAuthMetadataOverride("https://remote-auth.example/config", {
+      serviceUrl: remoteService,
+      fetch: async () => Response.json({ ...validMetadata, registration_endpoint: "https://127.0.0.1:4000/register" }),
+    }),
+    /loopback/u,
+  );
+  await assert.rejects(
+    loadMcpOAuthMetadataOverride("https://remote-auth.example/config", {
+      serviceUrl: remoteService,
+      fetch: async (input) => String(input).includes("oauth-protected-resource")
+        ? Response.json({ resource: remoteService, authorization_servers: ["http://127.0.0.1:4000"] })
+        : Response.json(validMetadata),
+    }),
+    /HTTPS/u,
+  );
+});
+
+test("remote MCP transport rejects untrusted WWW-Authenticate resource_metadata URLs before discovery across interactive and refresh flows", async () => {
+  const { OAuthInsecureEndpointError } = await import("@earendil-works/pi-mcp/oauth");
+  const serviceUrl = "https://remote-mcp.example/mcp";
+
+  for (const untrustedResourceMetadata of [
+    "http://127.0.0.1:9100/canary-resource-metadata",
+    "https://127.0.0.1:9100/canary-resource-metadata",
+    "https://localhost:9100/canary-resource-metadata",
+    "http://remote-auth.example/canary-resource-metadata",
+    "https://user:secret@remote-auth.example/canary-resource-metadata",
+  ]) {
+    for (const withLock of [false, true]) {
+      const seenUrls: string[] = [];
+      const flow = new McpOAuthAuthorizationFlow(serviceUrl);
+      const base = recordingProvider(flow, {
+        tokens: () => ({ access_token: "expired-token", token_type: "Bearer", refresh_token: "refresh-token" }),
+      }).provider;
+      const provider = withLock
+        ? { ...base, withRefreshLock: <T>(operation: () => Promise<T>) => operation() }
+        : base;
+
+      const transport = createMcpRemoteTransport({
+        serviceUrl,
+        authProvider: provider,
+        fetch: async (input) => {
+          const url = new URL(String(input));
+          seenUrls.push(url.href);
+          if (url.href === serviceUrl) {
+            return new Response(null, {
+              status: 401,
+              headers: { "www-authenticate": `Bearer resource_metadata="${untrustedResourceMetadata}"` },
+            });
+          }
+          throw new Error(`Untrusted resource_metadata caused unexpected fetch to ${url.href}`);
+        },
+      });
+      const client = new McpClient({ name: "www-auth-ssrf", version: "1" });
+      try {
+        await assert.rejects(client.connect(transport), (error: unknown) => {
+          assert.ok(error instanceof OAuthInsecureEndpointError, `expected OAuthInsecureEndpointError, got ${String(error)}`);
+          assert.doesNotMatch(error.message, /secret/u);
+          return true;
+        });
+      } finally {
+        await client.close().catch(() => undefined);
+        await transport.close().catch(() => undefined);
+      }
+      assert.deepEqual(seenUrls, [serviceUrl], `no discovery request should follow ${untrustedResourceMetadata}`);
+    }
+  }
+});
+
+test("MCP fetch policy enforces DNS and socket IP guards for public and private enterprise remote servers", async () => {
+  const { createMcpFetchPolicy } = await import("./mcp-fetch-policy.js");
+  type LookupCallback = (err: NodeJS.ErrnoException | null, addresses: { address: string; family: number }[]) => void;
+
+  const lookupFrom = (table: Record<string, { address: string; family: number }[]>) =>
+    ((hostname: string, _options: unknown, callback: LookupCallback) => {
+      const entries = table[hostname];
+      if (!entries) {
+        callback(Object.assign(new Error(`ENOTFOUND ${hostname}`), { code: "ENOTFOUND" }), []);
+        return;
+      }
+      callback(null, entries);
+    }) as unknown as typeof import("node:dns").lookup;
+
+  // 1. Public remote MCP server blocks loopback, link-local, private IPs, and mixed public+private answers.
+  for (const blockedTargetIp of [
+    { address: "127.0.0.1", family: 4 },
+    { address: "::1", family: 6 },
+    { address: "::ffff:127.0.0.1", family: 6 },
+    { address: "169.254.169.254", family: 4 },
+    { address: "fe80::1", family: 6 },
+    { address: "10.0.0.8", family: 4 },
+    { address: "192.168.1.20", family: 4 },
+    { address: "fd00::1", family: 6 },
+  ]) {
+    let dispatched = false;
+    const policy = createMcpFetchPolicy({
+      serviceUrl: "https://public-mcp.example/mcp",
+      lookup: lookupFrom({
+        "public-mcp.example": [{ address: "93.184.216.34", family: 4 }],
+        "oauth-target.example": [blockedTargetIp],
+      }),
+      fetch: async () => {
+        dispatched = true;
+        return Response.json({ ok: true });
+      },
+    });
+    await assert.rejects(
+      policy("https://oauth-target.example/token", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: "grant_type=refresh_token",
+      }),
+      /Could not reach oauth-target\.example/u,
+      blockedTargetIp.address,
+    );
+    assert.equal(dispatched, false, `request to ${blockedTargetIp.address} must not dispatch`);
+  }
+
+  // Mixed public + private DNS response and post-latch DNS rebinding of service host are refused.
+  let rebindCalls = 0;
+  let rebindDispatched = 0;
+  const rebindingPolicy = createMcpFetchPolicy({
+    serviceUrl: "https://public-mcp.example/mcp",
+    lookup: ((hostname: string, _options: unknown, callback: LookupCallback) => {
+      if (hostname === "mixed-auth.example") {
+        callback(null, [{ address: "93.184.216.34", family: 4 }, { address: "10.0.0.7", family: 4 }]);
+        return;
+      }
+      rebindCalls += 1;
+      callback(null, rebindCalls === 1 ? [{ address: "93.184.216.34", family: 4 }] : [{ address: "10.0.0.7", family: 4 }]);
+    }) as unknown as typeof import("node:dns").lookup,
+    fetch: async () => {
+      rebindDispatched += 1;
+      return Response.json({ ok: true });
+    },
+  });
+  const firstResponse = await rebindingPolicy("https://public-mcp.example/.well-known/oauth-authorization-server");
+  assert.equal(firstResponse.status, 200);
+  assert.equal(rebindDispatched, 1);
+  await assert.rejects(rebindingPolicy("https://mixed-auth.example/token", { method: "POST", body: "a=1" }), /Could not reach mixed-auth\.example/u);
+  await assert.rejects(rebindingPolicy("https://public-mcp.example/token", { method: "POST", body: "a=1" }), /Could not reach public-mcp\.example/u);
+  assert.equal(rebindDispatched, 1);
+
+  // 2. Private enterprise HTTPS server allows private enterprise OAuth hosts while blocking loopback and link-local IPs.
+  let enterpriseCalls = 0;
+  const enterprisePolicy = createMcpFetchPolicy({
+    serviceUrl: "https://mcp.corp.internal/mcp",
+    lookup: lookupFrom({
+      "mcp.corp.internal": [{ address: "10.20.30.40", family: 4 }],
+      "sso.corp.internal": [{ address: "10.20.30.41", family: 4 }],
+      "loopback.corp.internal": [{ address: "127.0.0.1", family: 4 }],
+      "imds.corp.internal": [{ address: "169.254.169.254", family: 4 }],
+    }),
+    fetch: async () => {
+      enterpriseCalls += 1;
+      return Response.json({ ok: true });
+    },
+  });
+  assert.equal((await enterprisePolicy("https://sso.corp.internal/.well-known/oauth-authorization-server")).status, 200);
+  assert.equal(enterpriseCalls, 1);
+  await assert.rejects(enterprisePolicy("https://loopback.corp.internal/token", { method: "POST", body: "a=1" }), /Could not reach loopback\.corp\.internal/u);
+  await assert.rejects(enterprisePolicy("https://imds.corp.internal/.well-known/oauth-authorization-server"), /Could not reach imds\.corp\.internal/u);
+  assert.equal(enterpriseCalls, 1);
+});
+

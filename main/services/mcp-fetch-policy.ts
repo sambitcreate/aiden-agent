@@ -1,5 +1,237 @@
 import { createHash } from "node:crypto";
+import dns, { type LookupAddress } from "node:dns";
+import http from "node:http";
+import https from "node:https";
+import { BlockList, isIP, type LookupFunction } from "node:net";
+import { Readable, type Transform } from "node:stream";
+import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
+import { OAuthInsecureEndpointError } from "@earendil-works/pi-mcp/oauth";
+import { isMcpLoopbackServiceUrl, parseMcpOAuthEndpointUrl } from "../../renderer/shared/mcp-oauth-config.js";
 import { recordMcpStepUpScope } from "./mcp-oauth-session.js";
+import { isPublicAddress } from "./web-fetch-transport.js";
+
+const nativeFetch = globalThis.fetch;
+
+const disallowedNonLoopbackBlocks = new BlockList();
+for (const [network, prefix] of [
+  ["0.0.0.0", 8],
+  ["127.0.0.0", 8],
+  ["169.254.0.0", 16],
+  ["224.0.0.0", 4],
+  ["240.0.0.0", 4],
+] as const) {
+  disallowedNonLoopbackBlocks.addSubnet(network, prefix, "ipv4");
+}
+for (const [network, prefix] of [
+  ["::", 128],
+  ["::1", 128],
+  ["fe80::", 10],
+  ["ff00::", 8],
+] as const) {
+  disallowedNonLoopbackBlocks.addSubnet(network, prefix, "ipv6");
+}
+
+function embeddedIpv4Address(address: string): string | undefined {
+  const lower = address.toLowerCase();
+  if (lower === "::" || lower === "::1") return undefined;
+  const dotted = /^(?:::ffff:|::|64:ff9b::)(\d{1,3}(?:\.\d{1,3}){3})$/u.exec(lower);
+  if (dotted) return dotted[1];
+  const hex = /^(?:::ffff:|::|64:ff9b::|64:ff9b:1:(?:[0-9a-f]{1,4}:){0,2}:?)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/u.exec(lower);
+  if (!hex) return undefined;
+  const high = Number.parseInt(hex[1]!, 16);
+  const low = Number.parseInt(hex[2]!, 16);
+  return `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`;
+}
+
+function isAllowedNonLoopbackAddress(address: string): boolean {
+  const family = isIP(address);
+  if (family === 4) return !disallowedNonLoopbackBlocks.check(address, "ipv4");
+  if (family !== 6) return false;
+  const mapped = embeddedIpv4Address(address);
+  if (mapped !== undefined) return isAllowedNonLoopbackAddress(mapped);
+  return !disallowedNonLoopbackBlocks.check(address, "ipv6");
+}
+
+function blockedAddressError(target: URL): TypeError {
+  const cause = new Error(`refused non-public or loopback address for ${target.host}`);
+  return Object.assign(new TypeError("fetch failed"), { cause });
+}
+
+function resolveHostAddresses(hostname: string, resolver: typeof dns.lookup): Promise<LookupAddress[]> {
+  const bare = hostname.replace(/^\[|\]$/gu, "");
+  if (bare.includes("%")) {
+    return Promise.reject(Object.assign(new TypeError("fetch failed"), { cause: new Error("refused link-local zone address") }));
+  }
+  const family = isIP(bare);
+  if (family === 4 || family === 6) {
+    return Promise.resolve([{ address: bare, family }]);
+  }
+  return new Promise((resolve, reject) => {
+    resolver(bare, { all: true, verbatim: true }, (error, addresses, resolvedFamily?: number) => {
+      if (error) {
+        reject(Object.assign(new TypeError("fetch failed"), { cause: error }));
+        return;
+      }
+      if (Array.isArray(addresses)) {
+        resolve(addresses as LookupAddress[]);
+        return;
+      }
+      if (typeof addresses === "string") {
+        resolve([{ address: addresses, family: resolvedFamily ?? (isIP(addresses) || 4) }]);
+        return;
+      }
+      resolve([]);
+    });
+  });
+}
+
+function sanitizedEndpointForError(url: URL): string {
+  const copy = new URL(url.href);
+  copy.username = "";
+  copy.password = "";
+  copy.hash = "";
+  return copy.href;
+}
+
+function assertSafeRemoteOAuthUrl(target: URL, service: URL): void {
+  try {
+    parseMcpOAuthEndpointUrl(target.href, service);
+  } catch (cause) {
+    const error = new OAuthInsecureEndpointError(sanitizedEndpointForError(target));
+    Object.defineProperty(error, "cause", { value: cause, configurable: true, writable: true });
+    throw error;
+  }
+}
+
+function decompressorFor(encoding: string): Transform | undefined {
+  if (encoding === "gzip" || encoding === "x-gzip") return createGunzip();
+  if (encoding === "deflate") return createInflate();
+  if (encoding === "br") return createBrotliDecompress();
+  return undefined;
+}
+
+async function encodeRequestBody(
+  target: Parameters<typeof fetch>[0],
+  init: RequestInit | undefined,
+  headers: Headers,
+): Promise<Buffer | undefined> {
+  const body = init?.body !== undefined ? init.body : target instanceof Request ? await target.arrayBuffer() : undefined;
+  if (body === undefined || body === null) return undefined;
+  if (typeof body === "string") return Buffer.from(body, "utf8");
+  if (body instanceof URLSearchParams) {
+    if (!headers.has("content-type")) headers.set("content-type", "application/x-www-form-urlencoded;charset=UTF-8");
+    return Buffer.from(body.toString(), "utf8");
+  }
+  if (body instanceof ArrayBuffer) return Buffer.from(body);
+  if (ArrayBuffer.isView(body)) return Buffer.from(body.buffer, body.byteOffset, body.byteLength);
+  if (body instanceof Blob) return Buffer.from(await body.arrayBuffer());
+  const chunks: Buffer[] = [];
+  const reader = (body as ReadableStream<Uint8Array>).getReader();
+  for (;;) {
+    const next = await reader.read();
+    if (next.done) break;
+    chunks.push(Buffer.from(next.value));
+  }
+  return Buffer.concat(chunks);
+}
+
+async function socketFetch(
+  target: Parameters<typeof fetch>[0],
+  init: RequestInit | undefined,
+  checkedAddresses: LookupAddress[],
+): Promise<Response> {
+  const requestObj = target instanceof Request ? target : undefined;
+  const targetUrl = new URL(requestObj?.url ?? String(target));
+  if (targetUrl.protocol !== "https:" && targetUrl.protocol !== "http:") {
+    throw Object.assign(new TypeError("fetch failed"), { cause: new Error(`unsupported protocol ${targetUrl.protocol}`) });
+  }
+  const signal = init?.signal ?? requestObj?.signal ?? undefined;
+  if (signal?.aborted) throw abortError(signal);
+  const method = (init?.method ?? requestObj?.method ?? "GET").toUpperCase();
+  const headers = new Headers(init?.headers ?? requestObj?.headers);
+  if (!headers.has("accept-encoding")) headers.set("accept-encoding", "gzip, deflate, br");
+  const payload = method === "GET" || method === "HEAD" ? undefined : await encodeRequestBody(target, init, headers);
+  if (payload !== undefined && payload.byteLength > 0 && !headers.has("content-length") && !headers.has("transfer-encoding")) {
+    headers.set("content-length", String(payload.byteLength));
+  } else if (payload !== undefined && payload.byteLength === 0 && (method === "POST" || method === "PUT" || method === "PATCH") && !headers.has("content-length") && !headers.has("transfer-encoding")) {
+    headers.set("content-length", "0");
+  }
+  const pinnedLookup: LookupFunction = (_hostname, lookupOptions, callback) => {
+    if (lookupOptions.all) {
+      (callback as unknown as (error: null, addresses: LookupAddress[]) => void)(null, checkedAddresses);
+      return;
+    }
+    callback(null, checkedAddresses[0]!.address, checkedAddresses[0]!.family);
+  };
+  const outgoingHeaders: Record<string, string> = {};
+  headers.forEach((value, name) => { outgoingHeaders[name] = value; });
+  const client = targetUrl.protocol === "https:" ? https : http;
+  return new Promise<Response>((resolve, reject) => {
+    const fail = (error: unknown) => {
+      if (signal?.aborted) {
+        reject(abortError(signal));
+        return;
+      }
+      reject(error instanceof TypeError ? error : Object.assign(new TypeError("fetch failed"), { cause: error }));
+    };
+    const outgoing = client.request(
+      targetUrl,
+      {
+        method,
+        headers: outgoingHeaders,
+        agent: false,
+        lookup: pinnedLookup,
+        ...(signal ? { signal } : {}),
+      },
+      (incoming) => {
+        const status = incoming.statusCode ?? 0;
+        if (status < 100 || status > 599) {
+          incoming.resume();
+          fail(new Error(`invalid HTTP status ${status}`));
+          return;
+        }
+        if (init?.redirect === "error" && REDIRECT_STATUSES.has(status)) {
+          incoming.resume();
+          fail(new Error("unexpected redirect"));
+          return;
+        }
+        const responseHeaders = new Headers();
+        for (let index = 0; index + 1 < incoming.rawHeaders.length; index += 2) {
+          responseHeaders.append(incoming.rawHeaders[index]!, incoming.rawHeaders[index + 1]!);
+        }
+        const nullBody = method === "HEAD" || status === 101 || status === 204 || status === 205 || status === 304 ||
+          (init?.redirect === "manual" && REDIRECT_STATUSES.has(status));
+        if (nullBody) {
+          incoming.resume();
+          resolve(new Response(null, { status, statusText: incoming.statusMessage ?? "", headers: responseHeaders }));
+          return;
+        }
+        const encoding = String(incoming.headers["content-encoding"] ?? "").trim().toLowerCase();
+        const decompressor = decompressorFor(encoding);
+        let stream: Readable = incoming;
+        if (decompressor) {
+          responseHeaders.delete("content-encoding");
+          responseHeaders.delete("content-length");
+          stream = incoming.pipe(decompressor);
+          incoming.once("error", (error) => decompressor.destroy(error));
+          incoming.once("close", () => {
+            if (!incoming.complete) decompressor.destroy(new Error("Response closed before finishing."));
+          });
+        } else {
+          incoming.on("error", () => {});
+        }
+        resolve(new Response(Readable.toWeb(stream) as ReadableStream<Uint8Array>, {
+          status,
+          statusText: incoming.statusMessage ?? "",
+          headers: responseHeaders,
+        }));
+      },
+    );
+    outgoing.on("error", fail);
+    if (payload && payload.byteLength > 0) outgoing.write(payload);
+    outgoing.end();
+  });
+}
 
 export const MAX_MCP_RESPONSE_BYTES = 8 * 1024 * 1024;
 export const MCP_OAUTH_REQUEST_TIMEOUT_MS = 30_000;
@@ -222,6 +454,9 @@ export interface McpFetchPolicyOptions {
   signal?: AbortSignal;
   isCurrent?: () => boolean;
   fetch?: typeof globalThis.fetch;
+  wrapFetch?: (send: typeof globalThis.fetch) => typeof globalThis.fetch;
+  /** Tests only: DNS resolution for socket-address policy checks. */
+  lookup?: typeof dns.lookup;
   maximumBytes?: number;
   oauthTimeoutMs?: number;
 }
@@ -233,7 +468,6 @@ export interface McpFetchPolicyOptions {
  */
 export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fetch {
   const configuredHeaders = new Headers(options.serviceHeaders);
-  const fetchImpl = options.fetch ?? globalThis.fetch;
   const maximumBytes = options.maximumBytes ?? MAX_MCP_RESPONSE_BYTES;
   const timeoutMs = options.oauthTimeoutMs ?? MCP_OAUTH_REQUEST_TIMEOUT_MS;
   if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1 ||
@@ -241,6 +475,73 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
     throw new Error("Invalid MCP transport policy.");
   }
   const service = new URL(options.serviceUrl);
+  const remoteService = !isMcpLoopbackServiceUrl(service);
+  const defaultLookup = ((hostname: string, lookupOptions: dns.LookupAllOptions, callback: (err: NodeJS.ErrnoException | null, addresses: LookupAddress[]) => void) => {
+    dns.lookup(hostname, lookupOptions, callback);
+  }) as typeof dns.lookup;
+  const resolver = options.lookup ?? defaultLookup;
+  let servicePublicLatch = false;
+  let serviceResolution: Promise<boolean> | undefined;
+
+  const isServicePublic = (): Promise<boolean> => {
+    if (servicePublicLatch) return Promise.resolve(true);
+    const run = async (): Promise<boolean> => {
+      const list = await resolveHostAddresses(service.hostname, resolver);
+      if (list.length === 0 || !list.every(({ address }) => isAllowedNonLoopbackAddress(address))) {
+        throw blockedAddressError(service);
+      }
+      const anyPublic = list.some(({ address }) => isPublicAddress(address));
+      if (anyPublic && !list.every(({ address }) => isPublicAddress(address))) {
+        throw blockedAddressError(service);
+      }
+      if (anyPublic) servicePublicLatch = true;
+      return anyPublic;
+    };
+    serviceResolution ??= run().finally(() => {
+      if (!servicePublicLatch) serviceResolution = undefined;
+    });
+    return serviceResolution;
+  };
+
+  const checkAddresses = async (target: URL): Promise<LookupAddress[]> => {
+    const list = await resolveHostAddresses(target.hostname, resolver);
+    if (list.length === 0 || !list.every(({ address }) => isAllowedNonLoopbackAddress(address))) {
+      throw blockedAddressError(target);
+    }
+    if (target.hostname === service.hostname) {
+      const anyPublic = list.some(({ address }) => isPublicAddress(address));
+      if (anyPublic) {
+        servicePublicLatch = true;
+        if (!list.every(({ address }) => isPublicAddress(address))) {
+          throw blockedAddressError(target);
+        }
+      } else if (servicePublicLatch) {
+        throw blockedAddressError(target);
+      }
+      return list;
+    }
+    if (!list.every(({ address }) => isPublicAddress(address))) {
+      if (await isServicePublic()) {
+        throw blockedAddressError(target);
+      }
+    }
+    return list;
+  };
+
+  const rawFetch: typeof globalThis.fetch = async (target, reqInit) => {
+    if (remoteService && options.fetch === undefined && globalThis.fetch === nativeFetch) {
+      const targetUrl = new URL(target instanceof Request ? target.url : String(target));
+      const addresses = await checkAddresses(targetUrl);
+      return socketFetch(target, reqInit, addresses);
+    }
+    if (remoteService && options.lookup !== undefined) {
+      const targetUrl = new URL(target instanceof Request ? target.url : String(target));
+      await checkAddresses(targetUrl);
+    }
+    const impl = options.fetch ?? globalThis.fetch;
+    return impl(target, reqInit);
+  };
+  const fetchImpl = options.wrapFetch ? options.wrapFetch(rawFetch) : rawFetch;
   const policyFetch = async (
     input: Parameters<typeof fetch>[0],
     init: RequestInit | undefined,
@@ -304,6 +605,9 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
     };
     try {
       assertCurrent();
+      if (remoteService && !mcpRequest) {
+        assertSafeRemoteOAuthUrl(url, service);
+      }
       let response = await send(input, headers);
       let location = url;
       for (let hops = 0; followsRedirects && REDIRECT_STATUSES.has(response.status); hops += 1) {
@@ -318,6 +622,7 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
           response = new Response(null, { status: 404, statusText: `Redirect to another origin (${next.origin}) not followed` });
           break;
         }
+        if (remoteService) assertSafeRemoteOAuthUrl(next, service);
         if (hops >= MAX_METADATA_REDIRECTS) throw new TypeError(`OAuth metadata at ${url.host} redirected more than ${MAX_METADATA_REDIRECTS} times.`);
         // Redirect hops carry the request's own headers, never configured
         // service headers or an Authorization header.

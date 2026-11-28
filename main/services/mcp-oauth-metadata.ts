@@ -4,7 +4,7 @@ import {
   type OAuthDiscoveryState,
   type OAuthProtectedResourceMetadata,
 } from "@earendil-works/pi-mcp/oauth";
-import { parseMcpOAuthMetadataUrl } from "../../renderer/shared/mcp-oauth-config.js";
+import { parseMcpOAuthEndpointUrl, parseMcpOAuthMetadataUrl } from "../../renderer/shared/mcp-oauth-config.js";
 import { createMcpFetchPolicy, type McpFetchPolicyOptions } from "./mcp-fetch-policy.js";
 
 const OPTIONAL_STRING_ARRAYS = [
@@ -38,7 +38,7 @@ export function parseMcpAuthorizationServerMetadata(value: unknown): Authorizati
  * service's own protected-resource metadata) instead.
  */
 export async function loadMcpOAuthMetadataOverride(metadataUrl: string, options: McpFetchPolicyOptions): Promise<OAuthDiscoveryState> {
-  const url = parseMcpOAuthMetadataUrl(metadataUrl);
+  const url = parseMcpOAuthMetadataUrl(metadataUrl, options.serviceUrl);
   const fetch = createMcpFetchPolicy({ ...options, maximumBytes: 64 * 1024 });
   const response = await fetch(url, { headers: { Accept: "application/json" } });
   if (!response.ok) {
@@ -48,9 +48,9 @@ export async function loadMcpOAuthMetadataOverride(metadataUrl: string, options:
   const metadata = parseMcpAuthorizationServerMetadata(await response.json());
   if (!metadata) throw new Error("OAuth metadata document is invalid.");
   // Configured documents may describe a different issuer, but cannot redirect
-  // browser or token traffic to non-web protocols, plaintext remote hosts, or credentials.
+  // browser or token traffic to non-web protocols, plaintext remote hosts, loopback, or credentials.
   for (const endpoint of [metadata.issuer, metadata.authorization_endpoint, metadata.token_endpoint, metadata.registration_endpoint]) {
-    if (endpoint !== undefined) parseMcpOAuthMetadataUrl(endpoint);
+    if (endpoint !== undefined) parseMcpOAuthEndpointUrl(endpoint, options.serviceUrl);
   }
   // The protected resource still names the `resource` indicator and its
   // scopes; only the authorization server it advertises is overridden. A
@@ -60,6 +60,9 @@ export async function loadMcpOAuthMetadataOverride(metadataUrl: string, options:
     resourceMetadata = await discoverProtectedResourceMetadata(options.serviceUrl, { fetch });
   } catch (error) {
     if (error instanceof TypeError) throw error;
+  }
+  for (const server of resourceMetadata?.authorization_servers ?? []) {
+    parseMcpOAuthEndpointUrl(server, options.serviceUrl);
   }
   return {
     authorizationServerUrl: metadata.issuer,
