@@ -26,7 +26,7 @@ for (const payloadExpansion of [0, 40_000]) {
   const harness = new PiAgentRuntimeHarness({
     initialState: { systemPrompt: generationOptions.systemPrompt, model, tools: [], messages: [], thinkingLevel: "off" },
     convertToLlm, transformContext: transform,
-    durability: { session, initialMessages: [], appendMessages: appendPiMessages, compaction: { models: createModels(), model, thinkingLevel: "off", settings: { enabled: false }, retryDelayMs: 0 } },
+    durability: { session, initialMessages: [], appendMessages: appendPiMessages, compaction: { models: createModels(), model, thinkingLevel: "off", settings: { enabled: false } } },
     onContextProjection: (projection) => projections.push(projection.contextTokens),
     extensions: [{ id: "trusted-research-payload-mutator", beforeProviderPayload: async ({ payload }) => {
       trace.push("extension-payload");

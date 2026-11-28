@@ -7,7 +7,7 @@
  */
 import assert from 'node:assert/strict';
 import { runToolCall, type AgentTool } from '@earendil-works/pi-agent-core';
-import { Type } from '@earendil-works/pi-ai';
+import { Type } from 'typebox';
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux';
 import { projectPiRuntimeAgentEvent, type PiRuntimeAgentEvent } from '../../../main/services/pi-runtime-events.js';
 import type { DurablePiRuntimeEffectState } from '../../../main/services/pi-runtime-effect-core.js';

@@ -73,6 +73,7 @@ The headless Aiden server lives in `packages/cli` as a self-contained npm packag
 - Pin pi packages exactly (matching the desktop pin line) and upgrade them through a replay evaluation rather than casually.
 - The CLI bundles `main/services` and `renderer/shared` sources directly; `aidenRelativeTsRewritePlugin` in `packages/cli/scripts/build.mjs` maps their NodeNext `.js` specifiers to `.ts`. Do not reintroduce vendored copies (the former `src/vendor/advisor/` copies and their drift test were removed); import the original instead.
 - The CLI keeps the same manual-only network posture as the desktop for models.dev.
+- Because `packages/cli` uses its own lockfile and `esbuild` strips types without checking them, `npm --prefix packages/cli run type-check` runs inside `npm run test:cli`, conditionally in CI's `static` job when `cli` is selected (after `npm --prefix packages/cli ci`), and before bundling in `server-bundle.yml`.
 
 ## Pull requests, CI, and branches
 

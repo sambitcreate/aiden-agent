@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
-import { readdir, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { URL } from "node:url";
+import ts from "typescript";
 import { parse } from "yaml";
 import { spawnSync } from "node:child_process";
 import process from "node:process";
@@ -10,12 +13,65 @@ import { AREA_NAMES } from "./ci-changes.mjs";
 import { PLAN_DECISIONS, REQUIRED_JOB_RULES } from "./ci-required.mjs";
 import { readRegistry } from "./ci-test-registry.mjs";
 
+const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+const packageJsonUrl = new URL("../package.json", import.meta.url);
 const workflowUrl = new URL("../.github/workflows/ci.yml", import.meta.url);
 const releaseWorkflowUrl = new URL("../.github/workflows/release.yml", import.meta.url);
+const serverBundleWorkflowUrl = new URL("../.github/workflows/server-bundle.yml", import.meta.url);
 const pullfrogWorkflowUrl = new URL(
   "../.github/workflows/pullfrog.yml",
   import.meta.url,
 );
+
+const CI_CHECKED_TSCONFIGS = [
+  "tsconfig.json",
+  "scripts/tsconfig.json",
+  "tests/e2e/tsconfig.json",
+  "packages/cli/tsconfig.json",
+];
+const TRACKED_TYPESCRIPT_PATH = /\.(?:tsx?|[cm]ts)$/u;
+
+function collectCoveredTypeScriptFiles(rootDir, configPaths = CI_CHECKED_TSCONFIGS) {
+  const covered = new Set();
+  for (const relativeConfig of configPaths) {
+    const configPath = path.resolve(rootDir, relativeConfig);
+    const readResult = ts.readConfigFile(configPath, ts.sys.readFile);
+    assert.equal(
+      readResult.error,
+      undefined,
+      `Failed to read ${relativeConfig}: ${readResult.error && ts.flattenDiagnosticMessageText(readResult.error.messageText, "\n")}`,
+    );
+    const parsed = ts.parseJsonConfigFileContent(
+      readResult.config,
+      ts.sys,
+      path.dirname(configPath),
+      undefined,
+      configPath,
+    );
+    assert.deepEqual(
+      parsed.errors.map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")),
+      [],
+      `Invalid tsconfig ${relativeConfig}`,
+    );
+    for (const filePath of parsed.fileNames) {
+      const relativeFile = path.relative(rootDir, path.resolve(filePath)).split(path.sep).join("/");
+      covered.add(relativeFile);
+    }
+  }
+  return covered;
+}
+
+function assertAllTrackedTypeScriptFilesCovered(rootDir, trackedPaths, configPaths = CI_CHECKED_TSCONFIGS) {
+  const covered = collectCoveredTypeScriptFiles(rootDir, configPaths);
+  const uncovered = trackedPaths
+    .filter((filePath) => TRACKED_TYPESCRIPT_PATH.test(filePath))
+    .filter((filePath) => !covered.has(filePath));
+  assert.deepEqual(
+    uncovered,
+    [],
+    `Git-tracked TypeScript files are missing from CI-checked tsconfig.json projects:\n${uncovered.join("\n")}`,
+  );
+}
 
 function workflowStep(workflow, name) {
   const marker = `      - name: ${name}`;
@@ -416,14 +472,85 @@ test("Linux provenance policy rejects bypasses, incomplete subjects, and custom 
 
 test("CI supersedes older PR and main runs, keeps dispatches independent, and keeps portable static checks on Linux", async () => {
   const workflow = parse(await readFile(workflowUrl, "utf8"));
+  const serverBundleWorkflow = parse(await readFile(serverBundleWorkflowUrl, "utf8"));
+  const packageJson = JSON.parse(await readFile(packageJsonUrl, "utf8"));
   assert.equal(workflow.concurrency["cancel-in-progress"], "${{ github.event_name != 'workflow_dispatch' }}");
   assert.equal(workflow.concurrency.group, "ci-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}");
   assert.equal(workflow.jobs.static["runs-on"], "ubuntu-24.04");
-  assert.ok(workflow.jobs.static.steps.some((step) => step.run?.includes("npm run type-check")));
-  assert.ok(workflow.jobs.static.steps.some((step) => step.run === "npm run lint"));
+  const staticSteps = workflow.jobs.static.steps;
+  assert.ok(staticSteps.some((step) => step.run === "npm run type-check && npm run type-check:e2e"));
+  const cliInstallIndex = staticSteps.findIndex((step) => step.run === "npm --prefix packages/cli ci");
+  const cliTypeCheckIndex = staticSteps.findIndex((step) => step.run === "npm --prefix packages/cli run type-check");
+  assert.ok(cliInstallIndex >= 0 && cliInstallIndex < cliTypeCheckIndex, "static must install packages/cli before CLI type-check");
+  assert.equal(staticSteps[cliInstallIndex].if, "${{ needs.changes.outputs.cli == 'true' }}");
+  assert.equal(staticSteps[cliTypeCheckIndex].if, "${{ needs.changes.outputs.cli == 'true' }}");
+  assert.ok(staticSteps.some((step) => step.run === "npm run lint"));
+  assert.match(packageJson.scripts["type-check"], /\btsc --noEmit\b/u);
+  assert.match(packageJson.scripts["type-check"], /\bnpm run type-check:scripts\b/u);
+  assert.equal(packageJson.scripts["type-check:scripts"], "tsc --noEmit --project scripts/tsconfig.json");
+  assert.equal(packageJson.scripts["type-check:e2e"], "tsc --noEmit --project tests/e2e/tsconfig.json");
+  assert.match(packageJson.scripts["test:cli"], /\bnpm --prefix packages\/cli run type-check\b/u);
+  const bundleSteps = serverBundleWorkflow.jobs.bundle.steps;
+  const bundleInstallIndex = bundleSteps.findIndex((step) => step.run?.includes("npm ci --prefix packages/cli"));
+  const bundleTypeCheckIndex = bundleSteps.findIndex((step) => step.run === "npm --prefix packages/cli run type-check");
+  const bundleBuildIndex = bundleSteps.findIndex((step) => step.run === "npm run cli:dist");
+  assert.ok(
+    bundleInstallIndex >= 0 && bundleInstallIndex < bundleTypeCheckIndex && bundleTypeCheckIndex < bundleBuildIndex,
+    "server-bundle.yml must run packages/cli type-check after install and before building cli:dist",
+  );
   for (const [name, job] of Object.entries(workflow.jobs)) assert.ok(job["timeout-minutes"] > 0, name);
   assert.equal(workflow.jobs.timings["continue-on-error"], true);
   assert.equal(workflow.jobs.timings.permissions.actions, "read");
+});
+
+test("every git-tracked TypeScript file belongs to a CI-checked tsconfig.json project", () => {
+  const gitLs = spawnSync("git", ["ls-files", "-z"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  assert.equal(gitLs.status, 0, gitLs.stderr);
+  const trackedPaths = gitLs.stdout.split("\0").filter(Boolean);
+  assert.ok(trackedPaths.length > 0, "git ls-files returned no tracked files");
+  assertAllTrackedTypeScriptFilesCovered(repoRoot, trackedPaths);
+});
+
+test("orphan TypeScript policy rejects uncovered tracked .ts and .mts paths", async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-tsconfig-policy-"));
+  try {
+    for (const relativeConfig of CI_CHECKED_TSCONFIGS) {
+      const sourcePath = path.join(repoRoot, relativeConfig);
+      const targetPath = path.join(tempRoot, relativeConfig);
+      await mkdir(path.dirname(targetPath), { recursive: true });
+      await writeFile(targetPath, await readFile(sourcePath, "utf8"));
+    }
+    const baselineCovered = [
+      "main/covered.ts",
+      "scripts/covered.mts",
+      "docs/research/covered.ts",
+      "tests/generative-ui/covered.spec.ts",
+      "packages/cli/src/covered.ts",
+    ];
+    for (const relativeFile of baselineCovered) {
+      const targetPath = path.join(tempRoot, relativeFile);
+      await mkdir(path.dirname(targetPath), { recursive: true });
+      await writeFile(targetPath, "export const ok = 1;\n");
+    }
+    assertAllTrackedTypeScriptFilesCovered(tempRoot, baselineCovered);
+
+    for (const orphanPath of ["tools/uncovered.ts", "benchmarks/uncovered.mts"]) {
+      const targetPath = path.join(tempRoot, orphanPath);
+      await mkdir(path.dirname(targetPath), { recursive: true });
+      await writeFile(targetPath, "export const orphan = 1;\n");
+      assert.throws(
+        () => assertAllTrackedTypeScriptFilesCovered(tempRoot, [...baselineCovered, orphanPath]),
+        (error) => error instanceof assert.AssertionError && error.message.includes(orphanPath),
+        `Expected uncovered path ${orphanPath} to fail policy check`,
+      );
+    }
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test("iOS-only PRs retain shipping and TestFlight policy checks when desktop lanes skip", async () => {

@@ -198,7 +198,11 @@ function collectDirectTestFiles(segment, scriptName) {
     const npmCommand = segment.slice(index).join(" ");
     const allowed = {
       "cli:build": ["npm --prefix packages/cli run build"],
-      "test:cli": ["npm --prefix packages/cli ci", "npm --prefix packages/cli test"],
+      "test:cli": [
+        "npm --prefix packages/cli ci",
+        "npm --prefix packages/cli run type-check",
+        "npm --prefix packages/cli test",
+      ],
     };
     if (allowed[scriptName]?.includes(npmCommand)) return [];
     throw new Error(`${scriptName} uses an unregistered npm command: ${npmCommand}`);

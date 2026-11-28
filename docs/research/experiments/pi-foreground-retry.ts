@@ -6,7 +6,8 @@
  * repeats five times, so this does not establish an unbounded real-model loop.
  */
 import assert from 'node:assert/strict';
-import { createModels, Type } from '@earendil-works/pi-ai';
+import { createModels } from '@earendil-works/pi-ai';
+import { Type } from 'typebox';
 import { createFauxCore, fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 import { InMemorySessionRepo } from '../../../main/services/pi-session-repository-port.js';
 import { createPiSessionPort } from '../../../main/services/pi-session-port.js';

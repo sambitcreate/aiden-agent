@@ -13,16 +13,12 @@ export {
   MemorySessionRepo,
   branchTip,
   calculateContextTokens,
-  convertToLlm,
   createBranchSummaryMessage,
   createCompactionSummaryMessage,
   entryLabel,
-  estimateContextTokens,
   estimateTokens,
   formatSkillInvocation,
   formatSkillsForSystemPrompt,
-  insertEntry,
-  prepareCompaction,
   sessionName,
   setValue,
   shouldCompact,
@@ -36,20 +32,58 @@ export type {
   CompactResult,
   CompactionPreparation,
   CompactionSettings,
-  Entry,
-  NewEntry,
   JsonValue,
   JsonlSessionMetadata
 } from "@aiden/pi-legacy-harness";
 export { NodeExecutionEnv } from "@aiden/pi-legacy-harness/node";
 export { uuidv7 } from "@earendil-works/pi-ai";
 
-import type {
-  BashExecutionMessage,
-  BranchSummaryMessage,
-  CompactionSummaryMessage,
-  CustomMessage,
+import {
+  convertToLlm as legacyConvertToLlm,
+  estimateContextTokens as legacyEstimateContextTokens,
+  insertEntry as legacyInsertEntry,
+  prepareCompaction as legacyPrepareCompaction,
+  type BashExecutionMessage,
+  type BranchSummaryMessage,
+  type CompactionSettings,
+  type CompactionSummaryMessage,
+  type CustomMessage,
+  type Entry as LegacyEntry,
 } from "@aiden/pi-legacy-harness";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { Message, Usage } from "@earendil-works/pi-ai";
+
+type LegacyEntryVariant<TEntry extends LegacyEntry> = TEntry extends { type: "message" }
+  ? Omit<TEntry, "message"> & { message: AgentMessage }
+  : TEntry extends { type: "compaction" }
+    ? Omit<TEntry, "retainedTail" | "usage"> & {
+        retainedTail: AgentMessage[];
+        usage?: Usage;
+      }
+    : TEntry extends { type: "branch_summary" }
+      ? Omit<TEntry, "usage"> & {
+          usage?: Usage;
+        }
+      : TEntry extends { type: "custom" }
+        ? Omit<TEntry, "data"> & { data?: unknown }
+        : never;
+
+export type Entry = LegacyEntryVariant<LegacyEntry>;
+export type NewEntry<TEntry extends Entry = Entry> = TEntry extends Entry
+  ? Omit<TEntry, "seq" | "timestamp">
+  : never;
+
+export const convertToLlm = legacyConvertToLlm as unknown as (messages: AgentMessage[]) => Message[];
+export const estimateContextTokens = legacyEstimateContextTokens as unknown as (
+  messages: AgentMessage[],
+) => ReturnType<typeof legacyEstimateContextTokens>;
+export const insertEntry = legacyInsertEntry as unknown as (
+  entry: NewEntry,
+) => ReturnType<typeof legacyInsertEntry>;
+export const prepareCompaction = legacyPrepareCompaction as unknown as (
+  pathEntries: Entry[],
+  settings: CompactionSettings,
+) => ReturnType<typeof legacyPrepareCompaction>;
 
 // Legacy helper augmentation targets its own core copy. Register the persisted
 // Aiden message roles with the current agent too, without widening to unknown.
@@ -118,14 +152,14 @@ type LegacyBranchSummaryArguments = Parameters<typeof legacyGenerateBranchSummar
 
 /** Fork summaries use the same current-provider seam as compaction. */
 export function generateBranchSummary(
-  entries: LegacyBranchSummaryArguments[0],
+  entries: Entry[],
   options: Omit<LegacyBranchSummaryArguments[1], "models"> & { models: Pick<Models, "completeSimple"> },
   context: LegacyBranchSummaryArguments[2],
 ): ReturnType<typeof legacyGenerateBranchSummary> {
   const summaryModels = {
     completeSimple: (...request: Parameters<Models["completeSimple"]>) => options.models.completeSimple(...request),
   };
-  return legacyGenerateBranchSummary(entries, {
+  return legacyGenerateBranchSummary(entries as unknown as LegacyBranchSummaryArguments[0], {
     ...options,
     models: summaryModels as unknown as LegacyBranchSummaryArguments[1]["models"],
   }, context);

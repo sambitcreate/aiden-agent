@@ -225,8 +225,14 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci
+      - name: Install CLI locked dependencies
+        if: ${{ needs.changes.outputs.cli == 'true' }}
+        run: npm --prefix packages/cli ci
       - name: Verify TypeScript
         run: npm run type-check && npm run type-check:e2e
+      - name: Verify CLI TypeScript
+        if: ${{ needs.changes.outputs.cli == 'true' }}
+        run: npm --prefix packages/cli run type-check
       - name: Verify lint
         run: npm run lint
       - name: Verify Aiden design rules

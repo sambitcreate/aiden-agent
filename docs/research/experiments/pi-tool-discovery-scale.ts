@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
-import { Type } from '@earendil-works/pi-ai';
+import { Type } from 'typebox';
 import { createPiCodemodeTool } from '../../../main/services/pi-codemode.js';
 import { createPiToolDiscovery, type PiDiscoverableTool } from '../../../main/services/pi-tool-discovery.js';
 import { partitionPiCodemodeTools, isPiCodemodeCallable } from '../../../main/services/pi-runtime-tool.js';

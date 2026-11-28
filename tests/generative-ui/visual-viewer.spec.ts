@@ -82,13 +82,13 @@ test("a native visual draws its chart offline in the phone's dark theme and hand
   <Button action={openUrl("https://example.com/report")}>Open report</Button>
   <Data name="data">{"weeks": [{"week": "W1", "users": 1180}, {"week": "W2", "users": 1240}, {"week": "W3", "users": 1310}]}</Data>
 </Visual>`);
-  const document = buildVisualViewerDocument(
+  const viewerDocument = buildVisualViewerDocument(
     { kind: "ui", title: visual.title, visual, attachments: [] },
     { scheme: "dark", preset: "aiden" },
     await viewerBundle(),
     {},
   );
-  const loaded = await openDocument(page, document);
+  const loaded = await openDocument(page, viewerDocument);
 
   await expect(page.locator("canvas[role='img'][data-chart-ready='true']")).toHaveCount(1);
   expect(await page.evaluate(() => document.documentElement.classList.contains("dark"))).toBe(true);
@@ -118,13 +118,13 @@ test("an HTML visual runs sandboxed with its inlined library, takes the phone's 
   aiden.sendPrompt("Explain bar b");
   aiden.sendPrompt("Explain bar b again");
 </script>`;
-  const document = buildVisualViewerDocument(
+  const viewerDocument = buildVisualViewerDocument(
     { kind: "html", title: "Bars", html },
     { scheme: "dark", preset: "midnight" },
     await viewerBundle(),
     await loadGenerativeUiHostLibraries(),
   );
-  const loaded = await openDocument(page, document);
+  const loaded = await openDocument(page, viewerDocument);
 
   await expect(page.locator("iframe[data-themed='true']")).toHaveCount(1);
   const guest = page.frameLocator("iframe");
