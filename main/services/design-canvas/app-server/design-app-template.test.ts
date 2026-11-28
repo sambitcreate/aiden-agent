@@ -64,14 +64,15 @@ test("only the allowlisted optional darwin package has an install script", () =>
   assert.deepEqual(lock.packages["node_modules/fsevents"].os, ["darwin"]);
 });
 
-test("the template's .npmrc turns off install scripts, audit, fund and the update check, and sets no registry", () => {
+test("the template's .npmrc turns off install scripts, audit, fund and the update check, logs each fetch, and sets no registry", () => {
   const lines = fs
     .readFileSync(path.join(TEMPLATE, ".npmrc"), "utf8")
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line && !line.startsWith("#") && !line.startsWith(";"));
   const settings = Object.fromEntries(lines.map((line) => line.split("=").map((part) => part.trim())));
-  assert.deepEqual(settings, { "ignore-scripts": "true", audit: "false", fund: "false", "update-notifier": "false" });
+  // loglevel=http: npm 10 can end a failed install with only "Exit handler never called!", so each fetch's error code must be in the output for the hint (S112).
+  assert.deepEqual(settings, { "ignore-scripts": "true", audit: "false", fund: "false", "update-notifier": "false", loglevel: "http" });
   assert.equal(lines.some((line) => /registry/u.test(line)), false);
 });
 

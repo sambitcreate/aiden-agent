@@ -67,6 +67,16 @@ const anyScaffoldCard = (page: Page) => page.locator("[data-design-app-card]");
 const node = (page: Page, id: string) => page.locator(`.react-flow__node[data-id="${id}"]`);
 const insideNode = (page: Page, id: string) => node(page, id).frameLocator("iframe[data-app-frame-id]");
 
+/**
+ * Fits the canvas once it draws every frame in `ids`. A frame main saved reaches
+ * the canvas with its next read, and pressing Fit earlier fits without it; Aiden's
+ * own focus then gives way to that press, so the frame stays off screen.
+ */
+async function fitOnceDrawn(page: Page, ...ids: string[]): Promise<void> {
+  for (const id of ids) await expect(node(page, id)).toHaveCount(1, { timeout: 30_000 });
+  await designCanvas(page).getByRole("button", { name: "Fit to screen" }).click();
+}
+
 async function exists(file: string): Promise<boolean> {
   return stat(file).then(
     () => true,
@@ -210,7 +220,7 @@ mock.describe("with live apps on", () => {
 
     // The design app's / lands live on the chat's page, and its heading carries a workspace source stamp.
     const home = await onlyFrame(userDataDir, "/");
-    await designCanvas(page).getByRole("button", { name: "Fit to screen" }).click();
+    await fitOnceDrawn(page, home.id);
     const heading = insideNode(page, home.id).getByRole("heading", { level: 1 });
     await expect(heading).toHaveText("Design app", { timeout: 60_000 });
     await expect(heading).toHaveAttribute("data-aiden-src", /^ws:design-app\/src\/routes\/index\.tsx:\d+$/u);
@@ -221,7 +231,7 @@ mock.describe("with live apps on", () => {
     await turn(aiden, "Mock test: write the settings page.", [{ name: "write_file", arguments: { path: "design-app/src/routes/settings.tsx", content: SETTINGS } }]);
     const settings = await onlyFrame(userDataDir, "/settings");
     expect(settings.createdBy).toBe("aiden");
-    await designCanvas(page).getByRole("button", { name: "Fit to screen" }).click();
+    await fitOnceDrawn(page, home.id, settings.id);
     const save = insideNode(page, settings.id).getByRole("button", { name: "Save changes" });
     await expect(save).toBeVisible({ timeout: 60_000 });
     await expect(save).toHaveCSS("background-color", "rgb(14, 116, 144)");
@@ -235,6 +245,7 @@ mock.describe("with live apps on", () => {
     await expect.poll(() => exists(copy)).toBe(true);
     const variant = await onlyFrame(userDataDir, "/settings-v2");
     expect(variant.label).toBe("v2");
+    await fitOnceDrawn(page, home.id, settings.id, variant.id);
     await expect(insideNode(page, variant.id).getByRole("button", { name: "Save changes" })).toBeVisible({ timeout: 60_000 });
     await page.keyboard.press(`${MOD}+z`);
     await expect.poll(async () => (await appFrames(userDataDir, "/settings-v2")).length).toBe(0);

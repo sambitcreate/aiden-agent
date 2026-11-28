@@ -393,6 +393,12 @@ test("installFailureHint reads npm's network and auth codes", () => {
     ["npm error code ECONNRESET\nnpm error network aborted", "network"],
     ["npm error code ECONNREFUSED", "network"],
     ["npm error code ENETUNREACH", "network"],
+    // npm 10.9.9 offline, at the template's loglevel=http: the code is only on the fetch lines.
+    [
+      "npm http fetch GET http://registry.test/react/-/react-19.2.7.tgz attempt 1 failed with ECONNREFUSED\nnpm error Exit handler never called!\nnpm error This is an error with npm itself. Please report this error at:",
+      "network",
+    ],
+    ["npm error Exit handler never called!\nnpm error This is an error with npm itself.", "other"],
     ["npm error network request to https://example.test/x.tgz failed, reason: socket hang up", "network"],
     ["npm error code E401\nnpm error Unable to authenticate, need: Basic realm=\"Artifactory\"", "auth"],
     ["npm error code E403\nnpm error 403 Forbidden - GET https://mirror.test/react", "auth"],
