@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { createChatTitleService } from "./services/chat-title-core.js";
 
 test("runtime identity is configured before the main module can take its lock", () => {
   const bootstrap = readFileSync(new URL("./bootstrap.ts", import.meta.url), "utf8");
@@ -81,12 +82,8 @@ test("optional background services cannot close an already visible desktop windo
   );
 });
 
-test("Apple Foundation Models status probes remain behind the host capability policy", () => {
+test("Apple Foundation Models status probes remain behind the host capability policy", async () => {
   const main = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
-  const chatTitle = readFileSync(
-    new URL("./services/chat-title.ts", import.meta.url),
-    "utf8",
-  );
   const titleProviders = readFileSync(
     new URL("./handlers/title-providers.ts", import.meta.url),
     "utf8",
@@ -99,20 +96,142 @@ test("Apple Foundation Models status probes remain behind the host capability po
     main,
     /app\.on\("activate", \(\) => \{\s*void foundationModelsConnection\.status/u,
   );
-  assert.match(
-    chatTitle,
-    /!hostPlatformCapabilities\(\)\.appleFoundationModels\s+\? null\s+: await foundationModelsConnection\.status/u,
-  );
-  assert.match(
-    chatTitle,
-    /generateFoundationModelsRename[\s\S]*?if \(!hostPlatformCapabilities\(\)\.appleFoundationModels\)/u,
-  );
   assert.equal(
     titleProviders.match(
       /if \(!hostPlatformCapabilities\(\)\.appleFoundationModels\) return null;/gu,
     )?.length,
     2,
   );
+
+  let statusCalls = 0;
+  let generateCalls = 0;
+  let chatModelCalls = 0;
+  let chatTitleProviderId: "automatic" | "apple-foundation-models" = "automatic";
+
+  const titleService = createChatTitleService({
+    chatStore: {
+      getWithImageReferences: async (id) => ({
+        id,
+        title: "New agent",
+        workspaceId: "workspace-1",
+        createdAt: 1,
+        updatedAt: 1,
+        messages: [
+          {
+            id: "msg-1",
+            role: "user",
+            content: "Check capability policy before probing Foundation Models",
+            createdAt: 1,
+          },
+        ],
+      }),
+      readImage: async () => undefined,
+      replaceAutoTitle: async (id, _seed, title) => ({
+        id,
+        title,
+        workspaceId: "workspace-1",
+        createdAt: 1,
+        updatedAt: 2,
+        messages: [],
+      }),
+      replaceTitleIfUnchanged: async () => null,
+    },
+    configStore: {
+      getSettings: async () => ({ chatTitleProviderId }),
+    },
+    foundationModelsConnection: {
+      status: async () => {
+        statusCalls += 1;
+        return {
+          id: "apple-foundation-models",
+          label: "Apple Foundation Models",
+          state: "ready",
+          detail: "Ready",
+          local: true,
+          titleOnly: true,
+          retryable: false,
+        };
+      },
+      generateTitle: async () => {
+        generateCalls += 1;
+        return "Foundation Models title";
+      },
+    },
+    hostPlatformCapabilities: () => ({ appleFoundationModels: false }),
+    resolveModelRuntime: async () =>
+      ({
+        provider: { id: "anthropic", label: "Anthropic", kind: "apiKey" },
+        model: {
+          id: "model-title",
+          name: "Model Title",
+          api: "anthropic-messages",
+          provider: "anthropic",
+          baseUrl: "https://example.invalid",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200_000,
+          maxTokens: 8_192,
+        },
+        apiKey: "secret",
+        headers: undefined,
+        streams: {
+          streamSimple: () => {
+            chatModelCalls += 1;
+            return {
+              result: async () => ({
+                role: "assistant",
+                content: [{ type: "text", text: "Chat model fallback title" }],
+                api: "anthropic-messages",
+                provider: "anthropic",
+                model: "model-title",
+                usage: {
+                  input: 8,
+                  output: 4,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  totalTokens: 12,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                },
+                stopReason: "stop",
+                timestamp: 2,
+              }),
+            };
+          },
+        },
+      }) as never,
+    usageStore: { record: async () => undefined },
+    broadcastMetadataUpdated: () => undefined,
+    logWarn: () => undefined,
+  });
+
+  titleService.startForFirstTurn({
+    chatId: "chat-auto",
+    providerId: "anthropic",
+    model: "model-title",
+  });
+  await titleService.waitForFirstTurn("chat-auto");
+  assert.equal(statusCalls, 0);
+  assert.equal(generateCalls, 0);
+  assert.equal(chatModelCalls, 1);
+
+  chatTitleProviderId = "apple-foundation-models";
+  titleService.startForFirstTurn({
+    chatId: "chat-afm",
+    providerId: "anthropic",
+    model: "model-title",
+  });
+  await titleService.waitForFirstTurn("chat-afm");
+  assert.equal(statusCalls, 0);
+  assert.equal(generateCalls, 0);
+  assert.equal(chatModelCalls, 1);
+
+  await assert.rejects(
+    titleService.renameWithFoundationModels("chat-rename"),
+    /Apple Foundation Models are not available on this platform/u,
+  );
+  assert.equal(statusCalls, 0);
+  assert.equal(generateCalls, 0);
 });
 
 test("packaged test launches retain their explicit private user-data directory", () => {
