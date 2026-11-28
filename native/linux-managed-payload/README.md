@@ -56,8 +56,11 @@ Cleanup errors are reported. If rename succeeds but parent fsync fails, the CLI
 reports uncertain durability and leaves the private generation in place; it does
 not claim success or delete a published generation.
 
-Run ordinary unprivileged tests with `cargo test --locked`. The registered npm
-wrapper runs these on Linux, fails if cargo is unavailable, and skips on macOS.
+Run formatting, ordinary unprivileged tests, and lint checks with
+`cargo fmt -- --check`, `cargo test --locked`, and
+`cargo clippy --locked --all-targets -- -D warnings`. The registered npm wrapper
+(`npm run test:linux-contracts`) runs all three on Linux, fails if `cargo`,
+`rustfmt`, or `clippy` is unavailable, and skips on macOS.
 The ignored root integration is explicit, runs only in an authorized disposable
 Fedora host, and never invokes sudo itself:
 

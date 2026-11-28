@@ -90,7 +90,7 @@ The headless Aiden server lives in `packages/cli` as a self-contained npm packag
 
 ## Tests
 
-When adding a feature or changing behavior, layout, configuration, or contracts, always check whether existing tests need updating and add or extend tests when coverage is missing. Run the relevant suites before finishing (`npm run test`, or the narrower scripts in `package.json` when the change is scoped). If a new test file is added, register it in the appropriate `package.json` test script so CI picks it up.
+When adding a feature or changing behavior, layout, configuration, or contracts, always check whether existing tests need updating and add or extend tests when coverage is missing. Run the relevant suites before finishing (`npm run test`, or the narrower scripts in `package.json` when the change is scoped). For Rust crates under `native/` (`native/computer-use-broker` and `native/linux-managed-payload`), run `cargo fmt -- --check`, `cargo test --locked`, and `cargo clippy --locked --all-targets -- -D warnings` (covered by `npm run test:computer-use:native` and, on Linux, `npm run test:linux-contracts`). If a new test file is added, register it in the appropriate `package.json` test script so CI picks it up.
 
 "Contracts" means behavioral or API contracts: function outputs, IPC register-and-invoke, and rendered UI (including Playwright). It does not mean grepping production source text.
 

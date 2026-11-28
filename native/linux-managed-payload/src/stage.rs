@@ -326,15 +326,13 @@ fn stage_inner(
             .map_err(|e| format!("generation published but parent fsync failed: {e}"))?;
         Ok(receipt)
     })();
-    if result.is_err() && !published {
-        if let Err(cleanup) =
-            fs::remove_tree(&store, &temporary).and_then(|_| Ok(store.sync_all()?))
-        {
-            return Err(format!(
-                "{}; cleanup failed for {temporary}: {cleanup}",
-                result.unwrap_err()
-            )
-            .into());
+    if !published {
+        if let Err(ref err) = result {
+            if let Err(cleanup) =
+                fs::remove_tree(&store, &temporary).and_then(|_| Ok(store.sync_all()?))
+            {
+                return Err(format!("{err}; cleanup failed for {temporary}: {cleanup}").into());
+            }
         }
     }
     result
