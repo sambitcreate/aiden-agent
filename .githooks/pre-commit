@@ -1,0 +1,29 @@
+#!/bin/sh
+set -eu
+
+top_level="$(git rev-parse --show-toplevel)"
+common_git_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
+common_root="$(dirname "$common_git_dir")"
+
+if [ -d "$common_root/node_modules/.bin" ]; then
+  PATH="$common_root/node_modules/.bin:$PATH"
+fi
+if [ -d "$top_level/node_modules/.bin" ]; then
+  PATH="$top_level/node_modules/.bin:$PATH"
+fi
+export PATH
+
+if [ ! -e "$top_level/node_modules" ] && [ -d "$common_root/node_modules" ]; then
+  NODE_PATH="$common_root/node_modules${NODE_PATH:+:$NODE_PATH}"
+  export NODE_PATH
+  export AIDEN_WORKTREE_ROOT="$top_level"
+  export AIDEN_COMMON_ROOT="$common_root"
+  if [ -f "$top_level/scripts/worktree-node-modules.mjs" ]; then
+    loader_url="$(node -e 'console.log(require("node:url").pathToFileURL(process.argv[1]).href)' "$top_level/scripts/worktree-node-modules.mjs")"
+    NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--import=$loader_url"
+    export NODE_OPTIONS
+  fi
+fi
+
+cd "$top_level"
+exec node "$top_level/scripts/run-pre-commit.mjs" "$@"

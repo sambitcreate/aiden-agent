@@ -10,7 +10,7 @@
 // An entry that covers nothing, or whose `max` is above the real count, fails,
 // so the list only shrinks. There is deliberately no `--update`.
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
@@ -446,21 +446,30 @@ export function checkAidenRules({ files, allowlist, allowlistPath = ALLOWLIST_PA
 }
 
 const RELEVANT_FILE = /\.(?:[cm]?[jt]s|tsx|jsx|css|svg|png|webp)$/u;
+const TEXT_RULE_FILE = /\.(?:[cm]?[jt]s|tsx|jsx|css)$/u;
+
+export function isRelevantAidenRuleFile(file) {
+  return (
+    Boolean(file) &&
+    RELEVANT_FILE.test(file) &&
+    !SKIPPED_DIRS.test(file) &&
+    !SKIPPED_PREFIXES.some((prefix) => file.startsWith(prefix))
+  );
+}
+
 export function listRepoFiles(root) {
   const output = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
     cwd: root,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   });
-  return [...new Set(output.split("\0"))].filter(
-    (file) => file && RELEVANT_FILE.test(file) && !SKIPPED_DIRS.test(file) && !SKIPPED_PREFIXES.some((prefix) => file.startsWith(prefix)),
-  );
+  return [...new Set(output.split("\0"))].filter(isRelevantAidenRuleFile);
 }
 
 function readRepoFiles(root) {
   const files = [];
   for (const file of listRepoFiles(root)) {
-    if (!/\.(?:[cm]?[jt]s|tsx|jsx|css)$/u.test(file)) {
+    if (!TEXT_RULE_FILE.test(file)) {
       files.push({ path: file, text: "" });
       continue;
     }
@@ -473,14 +482,149 @@ function readRepoFiles(root) {
   return files;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  const allowlist = JSON.parse(readFileSync(path.join(root, ALLOWLIST_PATH), "utf8"));
-  const { problems, allowances } = checkAidenRules({ files: readRepoFiles(root), allowlist });
-  for (const problem of problems) console.log(`${problem.file}:${problem.line} ${problem.rule} ${problem.message}`);
-  if (problems.length) {
-    console.log(`\n${problems.length} problem(s). Fix them, or add an entry with a reason to ${ALLOWLIST_PATH} (see docs/design-guide.md "Enforced rules").`);
-    process.exit(1);
+export function parseStagedRawDiff(rawOutput) {
+  const present = new Map();
+  const deleted = new Set();
+  if (!rawOutput) {
+    return { present, deleted };
   }
-  console.log(`Aiden design rules pass (${allowlist.length} allowlist entries, ${allowances} inline allowances).`);
+  const tokens = rawOutput.split("\0");
+  for (let index = 0; index < tokens.length; ) {
+    const meta = tokens[index++];
+    if (!meta) continue;
+    const match = meta.match(/^:(\d+)\s+(\d+)\s+[0-9a-f]+\s+[0-9a-f]+\s+([A-Z]\d*)$/iu);
+    if (!match) continue;
+    const [, , newMode, status] = match;
+    const code = status[0];
+    if (code === "R" || code === "C") {
+      const oldPath = tokens[index++] ?? "";
+      const newPath = tokens[index++] ?? "";
+      if (code === "R" && oldPath) deleted.add(oldPath);
+      if (newPath) {
+        deleted.delete(newPath);
+        present.set(newPath, { status: code, mode: newMode });
+      }
+    } else {
+      const filePath = tokens[index++] ?? "";
+      if (!filePath) continue;
+      if (code === "D") {
+        present.delete(filePath);
+        deleted.add(filePath);
+      } else {
+        deleted.delete(filePath);
+        present.set(filePath, { status: code, mode: newMode });
+      }
+    }
+  }
+  return { present, deleted };
+}
+
+function readIndexBlob(root, file, env = process.env) {
+  return execFileSync("git", ["show", `:${file}`], {
+    cwd: root,
+    env,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+}
+
+function listIndexFilesWithModes(root, env = process.env) {
+  const output = execFileSync("git", ["ls-files", "--stage", "-z"], {
+    cwd: root,
+    env,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const entries = [];
+  for (const record of output.split("\0")) {
+    if (!record) continue;
+    const tabIndex = record.indexOf("\t");
+    if (tabIndex === -1) continue;
+    const mode = record.slice(0, tabIndex).trim().split(/\s+/u)[0] ?? "";
+    const file = record.slice(tabIndex + 1);
+    if (file) entries.push({ file, mode });
+  }
+  return entries;
+}
+
+export function checkStagedAidenRules(root, { env = process.env } = {}) {
+  const rawDiff = execFileSync("git", ["diff", "--cached", "--raw", "-z"], {
+    cwd: root,
+    env,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const { present, deleted } = parseStagedRawDiff(rawDiff);
+  if (present.size === 0 && deleted.size === 0) {
+    return { problems: [], allowances: 0, allowlistCount: 0, checkedFiles: 0 };
+  }
+
+  let allowlist = [];
+  if (present.has(ALLOWLIST_PATH)) {
+    allowlist = JSON.parse(readIndexBlob(root, ALLOWLIST_PATH, env));
+  } else if (!deleted.has(ALLOWLIST_PATH) && existsSync(path.join(root, ALLOWLIST_PATH))) {
+    allowlist = JSON.parse(readFileSync(path.join(root, ALLOWLIST_PATH), "utf8"));
+  }
+
+  const fullIndexScan =
+    present.has(ALLOWLIST_PATH) ||
+    deleted.has(ALLOWLIST_PATH) ||
+    present.has("scripts/check-aiden-rules.mjs") ||
+    deleted.has("scripts/check-aiden-rules.mjs");
+
+  const files = [];
+  if (fullIndexScan) {
+    for (const { file, mode } of listIndexFilesWithModes(root, env)) {
+      if (!isRelevantAidenRuleFile(file)) continue;
+      if (mode !== "100644" && mode !== "100755") continue;
+      files.push({
+        path: file,
+        text: TEXT_RULE_FILE.test(file) ? readIndexBlob(root, file, env) : "",
+      });
+    }
+    const { problems, allowances } = checkAidenRules({ files, allowlist });
+    return { problems, allowances, allowlistCount: allowlist.length, checkedFiles: files.length };
+  }
+
+  for (const [file, { mode }] of present.entries()) {
+    if (!isRelevantAidenRuleFile(file)) continue;
+    if (mode !== "100644" && mode !== "100755") continue;
+    files.push({
+      path: file,
+      text: TEXT_RULE_FILE.test(file) ? readIndexBlob(root, file, env) : "",
+    });
+  }
+
+  const touchedPaths = new Set([...present.keys(), ...deleted]);
+  const scopedAllowlist = allowlist.filter((entry) => touchedPaths.has(entry?.file));
+  if (files.length === 0 && scopedAllowlist.length === 0) {
+    return { problems: [], allowances: 0, allowlistCount: 0, checkedFiles: 0 };
+  }
+
+  const { problems, allowances } = checkAidenRules({ files, allowlist: scopedAllowlist });
+  return { problems, allowances, allowlistCount: scopedAllowlist.length, checkedFiles: files.length };
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  const stagedMode = process.argv.slice(2).includes("--staged");
+  if (stagedMode) {
+    const root = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
+    const { problems, allowances, allowlistCount } = checkStagedAidenRules(root);
+    for (const problem of problems) console.log(`${problem.file}:${problem.line} ${problem.rule} ${problem.message}`);
+    if (problems.length) {
+      console.log(`\n${problems.length} problem(s). Fix them, or add an entry with a reason to ${ALLOWLIST_PATH} (see docs/design-guide.md "Enforced rules").`);
+      process.exit(1);
+    }
+    console.log(`Aiden design rules pass for staged changes (${allowlistCount} allowlist entries, ${allowances} inline allowances).`);
+  } else {
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const allowlist = JSON.parse(readFileSync(path.join(root, ALLOWLIST_PATH), "utf8"));
+    const { problems, allowances } = checkAidenRules({ files: readRepoFiles(root), allowlist });
+    for (const problem of problems) console.log(`${problem.file}:${problem.line} ${problem.rule} ${problem.message}`);
+    if (problems.length) {
+      console.log(`\n${problems.length} problem(s). Fix them, or add an entry with a reason to ${ALLOWLIST_PATH} (see docs/design-guide.md "Enforced rules").`);
+      process.exit(1);
+    }
+    console.log(`Aiden design rules pass (${allowlist.length} allowlist entries, ${allowances} inline allowances).`);
+  }
 }

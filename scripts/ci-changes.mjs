@@ -171,6 +171,7 @@ function isInfrastructurePath(path) {
   const baseName = path.slice(path.lastIndexOf("/") + 1);
   return (
     path.startsWith("scripts/") ||
+    path.startsWith(".githooks/") ||
     path.startsWith(".github/workflows/") ||
     path.startsWith("workflows/") ||
     path.startsWith("config/") ||

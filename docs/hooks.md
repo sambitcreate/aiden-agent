@@ -4,6 +4,8 @@ A hook is a shell command Aiden runs at a fixed point in a chat: before or after
 
 The format is Claude Code's, so most Claude Code command hooks work unchanged. Aiden runs only what you approve. See the [plan](plans/aiden-hooks-plan.md) for the design record.
 
+> **Repository Git hooks vs. Aiden chat hooks:** This document covers in-app Aiden chat and workspace hooks (`.aiden/hooks.json` and Settings → Hooks). Contributor Git commit and push hooks for developing this repository (`pre-commit` and `pre-push`) live in `.githooks/`, are enabled automatically via `core.hooksPath` on `npm install`, and run staged checks plus `npm run verify:static` (`test:ci-policy`, `type-check`, `type-check:e2e`, `lint`, and `check:aiden-rules`); see [Development and architecture](development.md#verify-changes).
+
 ## Where hooks live
 
 | Where | What it holds | Who edits it |

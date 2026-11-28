@@ -426,6 +426,62 @@ test("CI supersedes older PR and main runs, keeps dispatches independent, and ke
   assert.equal(workflow.jobs.timings.permissions.actions, "read");
 });
 
+test("verify:static, type-check heap limits, and contributor docs stay in parity with ci.yml static and policy gates", async () => {
+  const workflow = parse(await readFile(workflowUrl, "utf8"));
+  const releaseWorkflow = parse(await readFile(releaseWorkflowUrl, "utf8"));
+  const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const { scripts, dependencies = {}, devDependencies = {} } = manifest;
+
+  const extractNpmRunScripts = (job) =>
+    job.steps
+      .flatMap((step) => [...String(step.run ?? "").matchAll(/npm run ([\w:-]+)/gu)].map((match) => match[1]))
+      .filter((name) => name !== "ci");
+
+  const ciStaticAndPolicyGates = [
+    ...extractNpmRunScripts(workflow.jobs.policy),
+    ...extractNpmRunScripts(workflow.jobs.static),
+  ];
+  assert.deepEqual(ciStaticAndPolicyGates, [
+    "test:ci-policy",
+    "type-check",
+    "type-check:e2e",
+    "lint",
+    "check:aiden-rules",
+  ]);
+
+  assert.equal(
+    scripts["verify:static"],
+    ciStaticAndPolicyGates.map((gate) => `npm run ${gate}`).join(" && "),
+  );
+  assert.equal(scripts.prepare, "node scripts/install-git-hooks.mjs");
+  for (const forbiddenPkg of ["husky", "lefthook", "simple-git-hooks", "lint-staged"]) {
+    assert.equal(forbiddenPkg in dependencies, false, `${forbiddenPkg} must not be in dependencies`);
+    assert.equal(forbiddenPkg in devDependencies, false, `${forbiddenPkg} must not be in devDependencies`);
+  }
+
+  for (const scriptName of ["type-check", "type-check:e2e"]) {
+    assert.match(scripts[scriptName] ?? "", /--max-old-space-size=4096/u, `${scriptName} must set 4096 MB heap limit`);
+  }
+
+  const releaseTypeCheckStep = releaseWorkflow.jobs.release.steps.find((step) => step.name === "Verify TypeScript");
+  assert.ok(releaseTypeCheckStep, "release.yml must include Verify TypeScript step");
+  assert.equal(releaseTypeCheckStep.run, "npm run type-check");
+  assert.equal(releaseTypeCheckStep.env?.NODE_OPTIONS, undefined);
+
+  for (const docPath of ["../AGENTS.md", "../CONTRIBUTING.md", "../docs/development.md"]) {
+    const content = await readFile(new URL(docPath, import.meta.url), "utf8");
+    assert.match(content, /\bverify:static\b/u, `${docPath} must document verify:static`);
+    assert.match(content, /\.githooks\b/u, `${docPath} must document .githooks`);
+    for (const gate of ciStaticAndPolicyGates) {
+      assert.ok(content.includes(gate), `${docPath} must document ${gate}`);
+    }
+  }
+
+  const hooksDoc = await readFile(new URL("../docs/hooks.md", import.meta.url), "utf8");
+  assert.match(hooksDoc, /\.githooks\b/u, "docs/hooks.md must clarify repository .githooks");
+  assert.match(hooksDoc, /\bverify:static\b/u, "docs/hooks.md must reference verify:static");
+});
+
 test("iOS-only PRs retain shipping and TestFlight policy checks when desktop lanes skip", async () => {
   const { jobs } = parse(await readFile(workflowUrl, "utf8"));
   const selection = "${{ needs.changes.outputs.desktop == 'false' }}";
