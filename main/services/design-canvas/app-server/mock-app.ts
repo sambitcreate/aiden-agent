@@ -8,7 +8,7 @@
 // the install is the caller's, after the person's Allow.
 
 import { createHash } from "node:crypto";
-import { lstat, readdir, realpath, rmdir, symlink, unlink } from "node:fs/promises";
+import { lstat, readdir, realpath, symlink } from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "../../../shared/path-containment.js";
 import { inspectCanvasConfig, readCanvasConfigText, saveCanvasConfigApp, type CanvasConfigInspection } from "../canvas-config.js";
@@ -284,11 +284,13 @@ function foldersOf(files: Iterable<string>): string[] {
 
 /**
  * Writes `files` into `folder`, which must not exist yet. Every folder is made
- * by this call, one level at a time, and every file create-only; then each is
- * re-read no-follow and must hold exactly what was written. Any failure, or
- * the admission's signal (a folder-path change or lost access), rolls back:
- * each file still holding its written bytes is removed, then the folders this
- * call made if empty. A file that changed is kept and named in `kept`.
+ * by this call, one level at a time, and every file create-only, with
+ * `package.json` last; then each is re-read no-follow and must hold exactly
+ * what was written. Any failure, or the admission's signal (a folder-path
+ * change or lost access), stops there. Aiden never deletes a file on rollback
+ * (as 3c's page copies): what was written stays, named in `kept`. Because the
+ * marker is written last, a folder left by a failed write is never taken for
+ * a design app; it counts as taken, so the next scaffold uses the next folder.
  * Last, canvas.json gains `{root: folder, script: "dev"}`; a failure there
  * leaves the design app in place (`not-saved`), since detection finds it alone.
  */
@@ -312,20 +314,11 @@ export async function writeMockApp(
   } catch {
     return { ok: false, step: "write", kept: [] };
   }
-  const madeFolders: string[] = [];
   const written: Array<{ rel: string; absolute: string; sha: string }> = [];
   const aborted = () => options.admission.signal.aborted;
 
-  const rollback = async (step: "write" | "verify"): Promise<MockWriteResult> => {
-    const kept: string[] = [];
-    for (const file of [...written].reverse()) {
-      const read = await readRegularFileBytes(file.absolute, TEMPLATE_LIMITS.fileBytes);
-      if (read.ok && sha256(read.bytes) === file.sha) await unlink(file.absolute).catch(() => kept.push(file.rel));
-      else if (!(read.ok === false && read.reason === "missing")) kept.push(file.rel);
-    }
-    for (const made of [...madeFolders].reverse()) await rmdir(made).catch(() => undefined);
-    return { ok: false, step, kept: kept.sort() };
-  };
+  // Nothing is removed: a path checked and then removed could be the person's file by then.
+  const rollback = async (step: "write" | "verify"): Promise<MockWriteResult> => ({ ok: false, step, kept: written.map((file) => file.rel).sort() });
 
   for (const sub of foldersOf(files.keys())) {
     if (aborted()) return rollback("write");
@@ -333,10 +326,11 @@ export async function writeMockApp(
     // The probe name is never created: it makes `rel` the one folder confinedTarget may create.
     const target = await confinedTarget(workspaceReal, `${rel}/.aiden-new-folder`, { create: true, ...(options.fs ? { fs: options.fs } : {}) });
     if (!target.ok || !target.createdFolder) return rollback("write");
-    madeFolders.push(target.createdFolder);
     await options.afterFolder?.(rel);
   }
-  for (const [rel, bytes] of files) {
+  // The marker goes last, so a partial write is never a design app.
+  const ordered = [...files].sort(([a], [b]) => Number(a === "package.json") - Number(b === "package.json"));
+  for (const [rel, bytes] of ordered) {
     if (aborted()) return rollback("write");
     const result = await writeConfinedFile(workspaceReal, `${folder}/${rel}`, bytes, FILE_MODE, { create: false, ...(options.fs ? { fs: options.fs } : {}) });
     if (!result.ok) return rollback("write");
@@ -354,7 +348,7 @@ export async function writeMockApp(
   } catch {
     canvasConfig = "not-saved";
   }
-  return { ok: true, written: written.map((file) => file.rel), canvasConfig };
+  return { ok: true, written: written.map((file) => file.rel).sort(), canvasConfig };
 }
 
 // ---- E2E only (unpackaged builds) ----

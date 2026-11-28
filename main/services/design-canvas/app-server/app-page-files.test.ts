@@ -236,7 +236,7 @@ test("confinedTarget refuses a link anywhere on the path and creates one folder 
   }
 });
 
-test("writeConfinedFile writes wx, never over a file, and removes a folder it made when the write fails", async (t) => {
+test("writeConfinedFile writes wx, never over a file, and removes nothing when the write fails", async (t) => {
   const root = await workspace(t, { "app/pricing/page.tsx": "pricing" });
   const written = await writeConfinedFile(root, "app/pricing-v2/page.tsx", Buffer.from([0xff, 0x01]), 0o600, { create: true });
   assert.deepEqual(written, { ok: true, absolute: path.resolve(root, "app/pricing-v2/page.tsx"), createdFolder: path.resolve(root, "app/pricing-v2") });
@@ -253,14 +253,15 @@ test("writeConfinedFile writes wx, never over a file, and removes a folder it ma
     fs: { writeFile: async () => Promise.reject(clash) },
   });
   assert.deepEqual(caseInsensitive, { ok: false, reason: "exists" });
-  assert.equal(await exists(path.join(root, "app/pricing-v3")), false, "the folder it made is removed");
+  // Aiden removes nothing on cleanup (Pullfrog r4724929189): the empty folder it made stays.
+  assert.deepEqual(await readdir(path.join(root, "app/pricing-v3")), []);
 
   const failing = await writeConfinedFile(root, "app/pricing-v4/page.tsx", Buffer.from("x"), 0o644, {
     create: true,
     fs: { writeFile: async () => Promise.reject(Object.assign(new Error("disk"), { code: "EIO" })) },
   });
   assert.deepEqual(failing, { ok: false, reason: "io" });
-  assert.equal(await exists(path.join(root, "app/pricing-v4")), false);
+  assert.deepEqual(await readdir(path.join(root, "app/pricing-v4")), []);
 });
 
 /** Whether `dir`'s volume finds a name under another case (APFS, NTFS), probed rather than assumed. */
@@ -323,33 +324,53 @@ test("confinement: a folder above a new page linked out while the page is create
   assert.equal(await exists(path.join(root, "app/routes/pricing-v2.tsx")), false);
 });
 
-test("confinement: a folder above a new page linked out between the folder's check and the create gets none of its bytes", async (t) => {
-  const outside = await workspace(t, { "routes/keep.tsx": "" });
-  const root = await workspace(t, { "app/routes/home.tsx": "" });
-  const racing = {
-    writeFile: (file: string, bytes: Buffer, mode: number) =>
-      createPageFile(file, bytes, mode, async () => {
-        // Linked out from here until the create is done, then put back.
-        await rename(path.join(root, "app"), path.join(root, "app-aside"));
-        await symlink(outside, path.join(root, "app"));
-        restore = async () => {
-          await rm(path.join(root, "app"));
-          await rename(path.join(root, "app-aside"), path.join(root, "app"));
-        };
-      }),
-  };
-  let restore = async () => undefined;
-  const written = await writeConfinedFile(root, "app/routes/pricing-v2.tsx", Buffer.from("the copy"), 0o644, { create: false, fs: racing }).finally(() => restore());
-  assert.equal(await outsideBytes(path.join(outside, "routes/pricing-v2.tsx")), 0, "no byte outside the workspace");
-  if (written.ok) {
-    // Linux creates through the folder's own handle, so the copy lands in the workspace whatever the path names meanwhile.
-    // check-aiden-rules: allow no-source-grep-test reads a page file in a temp workspace, not Aiden source
-    assert.equal(await readFile(path.join(root, "app/routes/pricing-v2.tsx"), "utf8"), "the copy");
-  } else {
-    assert.deepEqual(written, { ok: false, reason: "link" });
-    assert.equal(await exists(path.join(root, "app/routes/pricing-v2.tsx")), false);
-  }
-});
+/** Every entry under `dir`, recursively: what a create sent outside would leave, an empty file included. */
+const entriesUnder = async (dir: string) => (await readdir(dir, { recursive: true })).sort();
+
+for (const putBack of ["after the create", "at the end"] as const) {
+  test(`confinement: a folder above a new page linked out from the folder's check until ${putBack} leaves nothing outside`, async (t) => {
+    // Pullfrog r4724600691: the path names the outside for the create (and any check by path right after it), then is put back.
+    const outside = await workspace(t, { "routes/keep.tsx": "" });
+    const root = await workspace(t, { "app/routes/home.tsx": "" });
+    let linked = false;
+    const restore = async () => {
+      if (!linked) return;
+      linked = false;
+      await rm(path.join(root, "app"));
+      await rename(path.join(root, "app-aside"), path.join(root, "app"));
+    };
+    const racing = {
+      writeFile: (file: string, bytes: Buffer, mode: number) =>
+        createPageFile(file, bytes, mode, {
+          beforeCreate: async () => {
+            await rename(path.join(root, "app"), path.join(root, "app-aside"));
+            await symlink(outside, path.join(root, "app"));
+            linked = true;
+          },
+          ...(putBack === "after the create" ? { afterCreate: restore } : {}),
+        }),
+    };
+    const written = await writeConfinedFile(root, "app/routes/pricing-v2.tsx", Buffer.from("the copy"), 0o644, { create: false, fs: racing }).finally(restore);
+    assert.deepEqual(await entriesUnder(outside), ["routes", "routes/keep.tsx"], "nothing made outside the workspace, not even an empty file");
+    // check-aiden-rules: allow no-source-grep-test reads page files in a temp workspace, not Aiden source
+    assert.deepEqual([await readFile(path.join(outside, "routes/keep.tsx"), "utf8"), await readFile(path.join(root, "app/routes/home.tsx"), "utf8")], ["", ""], "and no other file changed or went");
+    if (written.ok) {
+      // Linux creates through the folder's own handle: put back before the checks, the copy is in the workspace.
+      assert.equal(putBack, "after the create");
+      // check-aiden-rules: allow no-source-grep-test reads a page file in a temp workspace, not Aiden source
+      assert.equal(await readFile(path.join(root, "app/routes/pricing-v2.tsx"), "utf8"), "the copy");
+    } else {
+      if ("empty" in written) {
+        // Linux made it in the held folder before the folder's check failed: emptied through its own handle and left, never removed.
+        assert.deepEqual(written, { ok: false, reason: "link", empty: "app/routes/pricing-v2.tsx" });
+        assert.equal((await lstat(path.join(root, "app/routes/pricing-v2.tsx"))).size, 0, "no byte of the copy");
+      } else {
+        assert.deepEqual(written, { ok: false, reason: "link" });
+        assert.deepEqual(await readdir(path.join(root, "app/routes")), ["home.tsx"], "nothing made in the workspace");
+      }
+    }
+  });
+}
 
 test("3d: a mock app's pages walk by TanStack's flat rule, and Trash finds the single owner of /settings", async (t) => {
   const root = await workspace(t, {

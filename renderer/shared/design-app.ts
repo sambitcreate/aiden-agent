@@ -487,7 +487,7 @@ function problemSentence(problem: DesignAppProblem): string {
         case "template":
           return "Aiden couldn't read its design app template, so nothing was written. Reinstall Aiden, then try again.";
         case "write":
-          return "Aiden couldn't write the design app, so it removed what it had written. Check the folder, then try again.";
+          return "Aiden couldn't finish writing the design app and left what it wrote in its folder. Delete that folder, then try again.";
         case "verify":
           return "A design app file changed while Aiden was writing it, so Aiden didn't start it. Start it again to review it.";
         case "design-md":

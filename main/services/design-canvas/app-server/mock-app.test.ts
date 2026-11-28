@@ -122,10 +122,12 @@ test("nothing is overwritten: a folder or file that appears first makes the writ
       if (rel === "design-app") await writeFile(path.join(raced, "design-app/README.md"), "mine\n");
     },
   });
-  assert.deepEqual(result, { ok: false, step: "write", kept: [] });
+  assert.equal(result.ok, false);
   // check-aiden-rules: allow no-source-grep-test reads the person's file in a temp workspace
   assert.equal(await readFile(path.join(raced, "design-app/README.md"), "utf8"), "mine\n");
-  assert.deepEqual(await listAll(path.join(raced, "design-app")), ["README.md"], "everything written before it is gone");
+  // What was written before it stays, named, and never the marker.
+  assert.deepEqual(await listAll(path.join(raced, "design-app")), ["README.md", ...(result.ok ? [] : result.kept)].sort());
+  assert.equal(result.ok ? true : result.kept.includes("package.json"), false);
 });
 
 test("a link anywhere on the path refuses and leaves its target untouched", async (t) => {
@@ -149,10 +151,10 @@ test("a link anywhere on the path refuses and leaves its target untouched", asyn
   assert.deepEqual(await readdir(outside), [], "nothing went through the link");
 });
 
-test("a failure halfway removes only what was written and unchanged, and reports the rest", async (t) => {
+test("a failure halfway removes nothing, names what was written, and leaves no marker, so the folder isn't a design app", async (t) => {
   const files = await template();
   const ws = await tempDir(t);
-  const order = [...files.keys()];
+  const order = [...files.keys()].filter((rel) => rel !== "package.json");
   let calls = 0;
   const result = await writeMockApp(ws, "design-app", files, {
     admission: admission(),
@@ -167,17 +169,20 @@ test("a failure halfway removes only what was written and unchanged, and reports
       },
     },
   });
-  assert.deepEqual(result, { ok: false, step: "write", kept: [order[1]] });
-  assert.deepEqual(await listAll(path.join(ws, "design-app")), [order[1]]);
+  const firstFour = order.slice(0, 4).sort();
+  assert.deepEqual(result, { ok: false, step: "write", kept: firstFour });
+  assert.deepEqual(await listAll(path.join(ws, "design-app")), firstFour);
   // check-aiden-rules: allow no-source-grep-test reads the changed file in a temp workspace
   assert.equal(await readFile(path.join(ws, "design-app", order[1]!), "utf8"), "changed meanwhile\n");
+  assert.equal(await exists(path.join(ws, "design-app/package.json")), false, "the marker is written last");
+  assert.equal(await exists(path.join(ws, ".aiden/canvas.json")), false);
 });
 
-test("rollback never follows a link swapped in for a written file", async (t) => {
+test("a failed write never follows a link swapped in for a written file", async (t) => {
   const files = await template();
   const outside = await tempDir(t, { "secret.txt": "outside\n" });
   const ws = await tempDir(t);
-  const order = [...files.keys()];
+  const order = [...files.keys()].filter((rel) => rel !== "package.json");
   let calls = 0;
   const result = await writeMockApp(ws, "design-app", files, {
     admission: admission(),
@@ -193,7 +198,7 @@ test("rollback never follows a link swapped in for a written file", async (t) =>
       },
     },
   });
-  assert.deepEqual(result, { ok: false, step: "write", kept: [order[0]] });
+  assert.deepEqual(result, { ok: false, step: "write", kept: order.slice(0, 3).sort() });
   assert.ok((await lstat(path.join(ws, "design-app", order[0]!))).isSymbolicLink(), "the link is left alone");
   // check-aiden-rules: allow no-source-grep-test reads a file outside the temp workspace
   assert.equal(await readFile(path.join(outside, "secret.txt"), "utf8"), "outside\n");
@@ -206,12 +211,14 @@ test("verification fails when a written file changed before it was checked", asy
     admission: admission(),
     beforeVerify: async () => writeFile(path.join(ws, "design-app/vite.config.js"), "export default {};\n"),
   });
-  assert.deepEqual(result, { ok: false, step: "verify", kept: ["vite.config.js"] });
-  assert.deepEqual(await listAll(path.join(ws, "design-app")), ["vite.config.js"]);
+  assert.deepEqual(result, { ok: false, step: "verify", kept: [...files.keys()].sort() });
+  assert.deepEqual(await listAll(path.join(ws, "design-app")), [...files.keys()].sort(), "nothing is removed");
+  // check-aiden-rules: allow no-source-grep-test reads the changed file in a temp workspace
+  assert.equal(await readFile(path.join(ws, "design-app/vite.config.js"), "utf8"), "export default {};\n");
   assert.equal(await exists(path.join(ws, ".aiden/canvas.json")), false, "no entry for a failed scaffold");
 });
 
-test("a folder-path change mid-write aborts and rolls back", async (t) => {
+test("a folder-path change mid-write stops before any file, leaving only the folders made", async (t) => {
   const files = await template();
   const ws = await tempDir(t);
   const controller = new AbortController();
@@ -222,7 +229,7 @@ test("a folder-path change mid-write aborts and rolls back", async (t) => {
     },
   });
   assert.deepEqual(result, { ok: false, step: "write", kept: [] });
-  assert.equal(await exists(path.join(ws, "design-app")), false);
+  assert.deepEqual(await listAll(path.join(ws, "design-app")), [], "no file was written");
 });
 
 test("a canvas.json that can't be saved leaves the design app in place", async (t) => {

@@ -2207,42 +2207,33 @@ test("3c: a locked or full canvas refuses before any file is written", async (t)
   assert.deepEqual(spy.touched, []);
 });
 
-test("3c: a lock that appears after the write rolls the unchanged copy back, and its new folder, and answers locked", async (t) => {
-  let workspaceStore: DesignCanvasStore | undefined;
-  const { invoke, store, workspace, trashed, workspaceStore: ws } = await pageFixture(t, {
-    files: { "src/routes/pricing/route.tsx": PLAIN_PAGE },
-    pageFs: {
-      writeFile: async (file, bytes, mode) => {
-        await fs.writeFile(file, bytes, { flag: "wx", mode });
-        // The person locks the frame while the copy lands.
-        await workspaceStore!.update("workspace-1", (doc) => ({ ...doc, frames: doc.frames.map((frame) => (frame.id === "app-1" ? { ...frame, locked: true } : frame)) }));
+/** Makes the handler's next canvas update fail once its `beforeWrite` has run, as a full disk would. */
+function canvasWriteFails(store: unknown) {
+  type Options = { beforeWrite?: () => Promise<void> | void } & Record<string, unknown>;
+  const internals = store as { update: (chatId: unknown, mutate: unknown, options?: Options) => Promise<unknown> };
+  const update = internals.update.bind(store);
+  internals.update = async (chatId, mutate, options) => {
+    internals.update = update;
+    return update(chatId, mutate, {
+      ...options,
+      beforeWrite: async () => {
+        await options?.beforeWrite?.();
+        throw new Error("The disk is full.");
       },
-    },
-  });
-  workspaceStore = ws;
-  await seedFrames(store, pageApp());
-  assert.deepEqual(await invoke("designCanvas:appPageVariant", "chat-1", { frameId: "app-1" }), { error: "locked" });
-  assert.deepEqual(trashed, [path.join(workspace, "src/routes/pricing-v2/route.tsx")]);
-  assert.equal(await exists(path.join(workspace, "src/routes/pricing-v2")), false, "the folder it made is gone");
-});
+    });
+  };
+}
 
-test("3c: a copy edited before the rollback is kept, and the reply says so", async (t) => {
-  let workspaceStore: DesignCanvasStore | undefined;
-  const { invoke, store, workspace, trashed, workspaceStore: ws } = await pageFixture(t, {
-    files: { "src/routes/pricing.tsx": PLAIN_PAGE },
-    pageFs: {
-      writeFile: async (file, bytes, mode) => {
-        await fs.writeFile(file, bytes, { flag: "wx", mode });
-        await fs.appendFile(file, "// edited\n");
-        await workspaceStore!.update("workspace-1", (doc) => ({ ...doc, frames: doc.frames.map((frame) => (frame.id === "app-1" ? { ...frame, locked: true } : frame)) }));
-      },
-    },
-  });
-  workspaceStore = ws;
+test("3c: a canvas write that fails after the copy leaves the copy where it is, removes nothing, and says where it is", async (t) => {
+  // Aiden removes nothing it wrote (Pullfrog r4724929189): no unlink, no Trash, no folder removal.
+  const { invoke, store, workspace, trashed } = await pageFixture(t, { files: { "src/routes/pricing/route.tsx": PLAIN_PAGE } });
   await seedFrames(store, pageApp());
-  assert.deepEqual(await invoke("designCanvas:appPageVariant", "chat-1", { frameId: "app-1" }), { error: "locked", kept: "src/routes/pricing-v2.tsx" });
+  canvasWriteFails(store);
+  assert.deepEqual(await invoke("designCanvas:appPageVariant", "chat-1", { frameId: "app-1" }), { error: "io", kept: "src/routes/pricing-v2/route.tsx" });
+  // check-aiden-rules: allow no-source-grep-test reads a page file the handler wrote in a temp workspace, not Aiden source
+  assert.equal(await fs.readFile(path.join(workspace, "src/routes/pricing-v2/route.tsx"), "utf8"), PLAIN_PAGE, "a complete copy of the page");
   assert.deepEqual(trashed, []);
-  assert.ok(await exists(path.join(workspace, "src/routes/pricing-v2.tsx")));
+  assert.deepEqual(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).frames.map((frame) => frame.id), ["app-1"], "no variant placed");
 });
 
 test("3c: appPageVariant refuses and writes nothing", async (t) => {
@@ -2309,20 +2300,28 @@ function saveLandsFirst(store: unknown, retarget: (frame: DesignFrame) => Design
   };
 }
 
-test("3c: a frame another save pointed at another page meanwhile gets no copy and no Trash", async (t) => {
-  for (const retarget of [(frame: DesignFrame) => ({ ...frame, route: "/about" }), (frame: DesignFrame) => ({ ...frame, appRoot: "web" })]) {
-    const copy = await pageFixture(t, { files: { "src/routes/pricing.tsx": PLAIN_PAGE, "src/routes/about.tsx": PLAIN_PAGE } });
+test("3c: a frame another save pointed at another page, or locked, meanwhile gets no copy and no Trash", async (t) => {
+  const changes: Array<{ change: (frame: DesignFrame) => DesignFrame; want: string }> = [
+    { change: (frame) => ({ ...frame, route: "/about" }), want: "not-found" },
+    { change: (frame) => ({ ...frame, appRoot: "web" }), want: "not-found" },
+    { change: (frame) => ({ ...frame, locked: true }), want: "locked" },
+  ];
+  for (const { change: retarget, want } of changes) {
+    // Pullfrog r4724600701: the copy is written only once the canvas update has seen the frame as it is.
+    const spy = refusingFs();
+    const copy = await pageFixture(t, { files: { "src/routes/pricing.tsx": PLAIN_PAGE, "src/routes/about.tsx": PLAIN_PAGE }, pageFs: spy.pageFs });
     await seedFrames(copy.store, pageApp());
     saveLandsFirst(copy.store, retarget);
-    assert.deepEqual(await copy.invoke("designCanvas:appPageVariant", "chat-1", { frameId: "app-1" }), { error: "not-found" });
+    assert.deepEqual(await copy.invoke("designCanvas:appPageVariant", "chat-1", { frameId: "app-1" }), { error: want });
     const frames = ((await copy.invoke("designCanvas:get", "chat-1")) as DesignCanvas).frames;
     assert.deepEqual(frames.map((frame) => frame.id), ["app-1"], "no variant placed");
-    assert.equal(await exists(path.join(copy.workspace, "src/routes/pricing-v2.tsx")), false, "the written copy is taken back");
+    assert.deepEqual(spy.touched, [], "nothing written, so nothing to take back");
+    assert.deepEqual(copy.trashed, []);
 
     const trash = await pageFixture(t, { files: { "src/routes/pricing.tsx": PLAIN_PAGE, "src/routes/about.tsx": PLAIN_PAGE } });
     await seedFrames(trash.store, pageApp());
     saveLandsFirst(trash.store, retarget);
-    assert.deepEqual(await trash.invoke("designCanvas:appPageTrash", "chat-1", { frameId: "app-1" }), { error: "not-found" });
+    assert.deepEqual(await trash.invoke("designCanvas:appPageTrash", "chat-1", { frameId: "app-1" }), { error: want });
     assert.deepEqual(trash.trashed, [], "no file trashed");
   }
 });

@@ -139,10 +139,14 @@ export type DesignCanvasAddAppViewResult =
   | { placed: string; pageId: string }
   | { error: "unavailable" | "not-found" | "locked" | "full" | "bad-size" };
 
-/** `designCanvas:appPageVariant` reply (3c, S95). `kept` says a copy written before the canvas refused stays on disk, because it changed. */
+/**
+ * `designCanvas:appPageVariant` reply (3c, S95). Aiden removes nothing it wrote (Pullfrog r4724929189): `kept` names a
+ * complete copy left on disk because the canvas couldn't be saved after it, and `empty` an empty file left where a copy
+ * failed part-way.
+ */
 export type DesignCanvasAppPageVariantResult =
   | { placed: string; pageId: string; route: string; file: string }
-  | { error: "unavailable" | "not-found" | "locked" | "full" | "io" | AppPageRefusal; kept?: string };
+  | { error: "unavailable" | "not-found" | "locked" | "full" | "io" | AppPageRefusal; kept?: string; empty?: string };
 
 /** `designCanvas:appPageTrash` reply (3c, S96). `restore: "failed"` means the file is in the Trash though the canvas kept its frames. */
 export type DesignCanvasAppPageTrashResult =
@@ -1118,8 +1122,13 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     const siblings = await walk.siblings(owner.appRelPath);
     const base = variantBase(page.path);
 
-    let written: { n: number; route: string; file: string; absolute: string; bytes: Buffer; createdFolder?: string } | undefined;
-    for (let n = 2; n <= 9 && !written; n += 1) {
+    // The copy is written inside the canvas update, once its mutator has seen the frame as it is now (Pullfrog
+    // r4724600701): a frame another save retargeted or locked meanwhile gets nothing written. Only a canvas write that
+    // fails after the copy leaves a file to take back.
+    const state: { copy?: { n: number; route: string; file: string; absolute: string; bytes: Buffer; createdFolder?: string } } = {};
+    let outcome: DesignCanvasAppPageVariantResult = { error: "too-many" };
+    let saved: DesignCanvas | undefined;
+    for (let n = 2; n <= 9; n += 1) {
       const wanted = `${base}-v${n}`;
       if (walk.files.has(wanted) || walk.layouts.has(wanted)) continue;
       const candidate = variantPathCandidates(owner, n).find((entry) => routeFromFile(owner.convention, entry.appRelPath) === wanted);
@@ -1134,81 +1143,78 @@ export function registerDesignCanvasHandlers<Event>(deps: {
         const rewritten = rewriteTanstackLiteral(read.bytes, from, to);
         if ("refused" in rewritten) return { error: "route-literal" };
         bytes = rewritten.bytes;
-        // A longer literal can take the copy past what its own undo (and a rollback) may read back.
+        // A longer literal can take the copy past what its own undo may read back.
         if (bytes.length > DESIGN_SOURCE_MAX_BYTES) return { error: "too-large" };
       }
       const file = workspaceRelPath(appRoot, candidate.appRelPath);
       const absolute = path.resolve(real, file);
-      // Every gate again under the file's lock, as the Trash does: the walk and read above took time.
-      const result = await withFileLock(absolute, async () => {
-        if (!(await stillFraming(chat.id, workspaceId))) return { ok: false as const, refused: "unavailable" as const };
-        const folder = await writableWorkspace(chat);
-        if (folder === "read-only") return { ok: false as const, refused: "read-only" as const };
-        if (folder === null || folder.real !== real) return { ok: false as const, refused: "unavailable" as const };
-        return writeConfinedFile(real, file, bytes, read.mode, { create: candidate.newFolder !== undefined, ...(deps.pageFs ? { fs: deps.pageFs } : {}) });
-      });
-      if ("refused" in result) return { error: result.refused };
-      if (!result.ok) {
-        // Taken on disk (a case-insensitive clash, or a concurrent copy): the next number.
-        if (result.reason === "exists") continue;
-        return { error: result.reason === "io" ? "io" : "not-regular" };
-      }
-      written = { n, route: `${wanted}${page.query}`, file, absolute, bytes, ...(result.createdFolder ? { createdFolder: result.createdFolder } : {}) };
-    }
-    if (!written) return { error: "too-many" };
-    const copy = written;
-
-    let outcome: DesignCanvasAppPageVariantResult = { error: "io" };
-    let saved: DesignCanvas | undefined;
-    try {
-      const update = await deps.store.update(
-        chat.id,
-        (latest) => {
-          const current = latest.frames.find((entry) => entry.id === frame.id);
-          // Another save may have pointed the frame at another page since the file was chosen.
-          if (!current || !showsSamePage(current, appRoot, page)) {
-            outcome = { error: "not-found" };
-            throw UNCHANGED;
-          }
-          const placed = placeAppVariant(latest, variantRootOf(latest, current), variantInput(copy.route, copy.n));
-          if ("error" in placed) {
-            outcome = { error: placeVariantRefusal(placed.error) };
-            throw UNCHANGED;
-          }
-          outcome = { placed: placed.frameId, pageId: current.pageId, route: copy.route, file: copy.file };
-          return placed.doc;
-        },
-        {
-          workspaceId,
-          beforeWrite: async () => {
-            if (!(await stillFraming(chat.id, workspaceId))) {
-              outcome = { error: "unavailable" };
+      const route = `${wanted}${page.query}`;
+      let taken = false;
+      try {
+        const update = await deps.store.update(
+          chat.id,
+          (latest) => {
+            const current = latest.frames.find((entry) => entry.id === frame.id);
+            // Another save may have pointed the frame at another page since the file was chosen.
+            if (!current || !showsSamePage(current, appRoot, page)) {
+              outcome = { error: "not-found" };
               throw UNCHANGED;
             }
+            const placed = placeAppVariant(latest, variantRootOf(latest, current), variantInput(route, n));
+            if ("error" in placed) {
+              outcome = { error: placeVariantRefusal(placed.error) };
+              throw UNCHANGED;
+            }
+            outcome = { placed: placed.frameId, pageId: current.pageId, route, file };
+            return placed.doc;
           },
-        },
-      );
-      saved = update.doc;
-    } catch (error) {
-      if (error !== UNCHANGED) outcome = { error: "io" };
+          {
+            workspaceId,
+            // Every gate again under the file's lock, as the Trash does: the walk and read above took time.
+            beforeWrite: () =>
+              withFileLock(absolute, async () => {
+                if (!(await stillFraming(chat.id, workspaceId))) {
+                  outcome = { error: "unavailable" };
+                  throw UNCHANGED;
+                }
+                const folder = await writableWorkspace(chat);
+                if (folder === "read-only" || folder === null || folder.real !== real) {
+                  outcome = { error: folder === "read-only" ? "read-only" : "unavailable" };
+                  throw UNCHANGED;
+                }
+                const written = await writeConfinedFile(real, file, bytes, read.mode, { create: candidate.newFolder !== undefined, ...(deps.pageFs ? { fs: deps.pageFs } : {}) });
+                if (!written.ok) {
+                  // Taken on disk (a case-insensitive clash, or a concurrent copy): the next number.
+                  taken = written.reason === "exists";
+                  outcome = { error: written.reason === "io" ? "io" : "not-regular", ...(written.empty ? { empty: written.empty } : {}) };
+                  throw UNCHANGED;
+                }
+                state.copy = {
+                  n,
+                  route,
+                  file,
+                  absolute,
+                  bytes,
+                  ...(written.createdFolder ? { createdFolder: written.createdFolder } : {}),
+                };
+              }),
+          },
+        );
+        saved = update.doc;
+      } catch (error) {
+        if (error !== UNCHANGED) outcome = { error: "io" };
+      }
+      if (!taken) break;
+      outcome = { error: "too-many" };
     }
     const result = outcome as DesignCanvasAppPageVariantResult;
+    const copy = state.copy;
+    if (!copy) return result;
     if (!saved || !("placed" in result)) {
-      // Rolled back: the copy goes to the Trash only while it is exactly what was written.
-      const refusal = "error" in result ? result.error : "io";
-      const kept = await withFileLock(copy.absolute, async () => {
-        const now = await readRegularFileBytes(copy.absolute, DESIGN_SOURCE_MAX_BYTES);
-        if (!now.ok) return now.reason !== "missing";
-        if (pageDigest(now.bytes) !== pageDigest(copy.bytes)) return true;
-        try {
-          await context.trash(copy.absolute);
-        } catch {
-          return true;
-        }
-        if (copy.createdFolder) await (deps.pageFs?.rmdir ?? rmdir)(copy.createdFolder).catch(() => undefined);
-        return false;
-      });
-      return kept ? { error: refusal, kept: copy.file } : { error: refusal };
+      // The canvas write failed after the copy landed. The copy is a complete, valid copy of the page, and Aiden removes
+      // nothing it wrote: POSIX has no unlink bound to an inode, so any check before a removal (or a Trash by path) could
+      // be raced into taking someone else's file (Pullfrog r4724929189). The reply names where it is.
+      return { error: "error" in result ? result.error : "io", kept: copy.file };
     }
     deps.broadcast({ workspaceId, chatId: chat.id, revision: saved.revision, step: `app-page-variant:${saved.revision}` });
     pageLedger!.record({

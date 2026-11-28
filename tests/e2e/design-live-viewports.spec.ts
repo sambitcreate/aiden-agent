@@ -38,6 +38,8 @@ async function addRoute(page: Page, filterText: string): Promise<void> {
   await page.getByRole("menuitem", { name: /^Page from app/u }).click();
   await expect(picker(page)).toBeVisible();
   await picker(page).getByRole("combobox", { name: "Filter routes" }).fill(filterText);
+  // Enter adds the highlighted route, and does nothing until the routes have loaded: wait for one to be highlighted.
+  await expect(picker(page).getByRole("option", { selected: true })).toHaveCount(1);
   await picker(page).getByRole("combobox", { name: "Filter routes" }).press("Enter");
   await expect(picker(page)).toBeHidden();
 }
@@ -127,6 +129,9 @@ live.describe("with live apps on", () => {
     await expect.poll(async () => (await onlyFrame(userDataDir, "/pricing")).scale).toBe(scale);
 
     // C. The device menu, by keyboard: iPad, then Custom… 500 × 900, and focus comes back to the button.
+    // Every key waits for the focus its previous key moves. Radix moves an arrow key's (or End's, from an item) focus in a
+    // setTimeout, and Chromium runs queued input before timers, so an Enter sent right behind ArrowDown can still land on
+    // the item ArrowDown left: iPhone, not iPad (the CI flake on run 46087050991).
     await frameGroup(page, "/pricing").click();
     const device = frameGroup(page, "/pricing").getByRole("button", { name: /^Viewport/u });
     await expect(device).toHaveAccessibleName("Viewport, Laptop, 1280 by 800");
@@ -135,6 +140,7 @@ live.describe("with live apps on", () => {
     await expect(page.getByRole("menuitemradio", { name: /iPhone/u })).toBeFocused();
     await shoot(page, testInfo, "design-live-device-menu");
     await page.keyboard.press("ArrowDown");
+    await expect(page.getByRole("menuitemradio", { name: /iPad/u })).toBeFocused();
     await page.keyboard.press("Enter");
     await expect.poll(async () => (await onlyFrame(userDataDir, "/pricing")).viewport).toEqual({ width: 768, height: 1024 });
     await expect(layout(page, "/pricing")).toHaveAttribute("data-width", "768");
@@ -142,7 +148,6 @@ live.describe("with live apps on", () => {
     await expect(device).toHaveAccessibleName("Viewport, iPad, 768 by 1024");
     await expect(device).toBeFocused();
 
-    // Each key waits for the menu to hold focus, or it lands on the button.
     await page.keyboard.press("Enter");
     await expect(page.getByRole("menuitemradio", { name: /iPhone/u })).toBeFocused();
     await page.keyboard.press("End");
@@ -162,8 +167,11 @@ live.describe("with live apps on", () => {
     // D. More ▸ Add view at width ▸ iPhone adds a second frame of the page at 390, in its variant set.
     await waitForToastsToClear(page);
     await frameGroup(page, "/pricing").getByRole("button", { name: "More actions for /pricing" }).click();
+    // A menu opened by pointer focuses itself once it mounts; only then is the submenu row focused for ArrowRight.
+    await expect(page.getByRole("menu")).toBeFocused();
     const sub = page.getByRole("menuitem", { name: "Add view at width" });
     await sub.focus();
+    await expect(sub).toBeFocused();
     await page.keyboard.press("ArrowRight");
     await expect(page.getByRole("menuitem", { name: /iPhone/u })).toBeVisible();
     await shoot(page, testInfo, "design-live-more-menu");
