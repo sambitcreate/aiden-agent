@@ -1,5 +1,7 @@
 import { createHmac } from "node:crypto";
 import { types as utilTypes } from "node:util";
+import { hasExactKeys } from "../shared/guards.js";
+import { isUnproxiedPlainObject, snapshotPlainRecord } from "../shared/plain-record.js";
 import { botConnectionCapabilityIdentity, isComposioServiceCapability, parseBotConnectionAccessIdentity, type BotConnectionAccessIdentity } from "./bot-connection-capability-identity.js";
 import {
   BOT_CAPABILITY_LIMITS,
@@ -232,31 +234,17 @@ function storedRecord(
   required: readonly string[],
   optional: readonly string[] = [],
 ): Record<string, unknown> {
-  if (
-    !value ||
-    typeof value !== "object" ||
-    Array.isArray(value) ||
-    utilTypes.isProxy(value) ||
-    (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)
-  ) {
+  if (!isUnproxiedPlainObject(value)) {
     throw new Error(`${label} must be plain private data.`);
   }
-  const allowed = new Set([...required, ...optional]);
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  for (const key of Reflect.ownKeys(descriptors)) {
-    if (
-      typeof key !== "string" ||
-      !allowed.has(key) ||
-      !("value" in descriptors[key]!) ||
-      descriptors[key]!.enumerable !== true
-    ) {
-      throw new Error(`${label} contains an unsafe or unexpected field.`);
-    }
+  const snapshot = snapshotPlainRecord(value);
+  if (!snapshot || !hasExactKeys(snapshot, [], [...required, ...optional])) {
+    throw new Error(`${label} contains an unsafe or unexpected field.`);
   }
-  if (!required.every((key) => Object.prototype.hasOwnProperty.call(value, key))) {
+  if (!hasExactKeys(snapshot, required, optional)) {
     throw new Error(`${label} is incomplete.`);
   }
-  return value as Record<string, unknown>;
+  return value;
 }
 
 function storedArray(value: unknown, label: string, maximum: number): unknown[] {

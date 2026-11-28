@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { DataStore } from "../data-store.js";
+import { isRecord } from "../../shared/guards.js";
 import { assertArtifactFilePath } from "./file-policy.js";
 import type { ChatUiVisualV1 } from "../../../renderer/shared/aiden-ui/types.js";
 import {
@@ -87,10 +88,6 @@ function emptySnapshots(): WorkspaceArtifactSnapshotsDocument {
 
 function emptyHistory(): WorkspaceArtifactHistoryDocument {
   return { version: 1, revisions: {} };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 /**

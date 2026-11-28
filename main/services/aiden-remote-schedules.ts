@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { hasExactKeys, isRecord } from "../shared/guards.js";
 import { redactCredentialTokens } from "../shared/redaction.js";
 import { executeAidenDurableOperation } from "./aiden-remote-durable-operation.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
@@ -54,22 +55,6 @@ export interface AidenRemoteScheduledTaskProjection {
   lastResult?: string;
   createdAt: string;
   updatedAt: string;
-}
-
-function ownRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function exactKeys(
-  record: Record<string, unknown>,
-  required: readonly string[],
-  optional: readonly string[] = [],
-): boolean {
-  const allowed = new Set([...required, ...optional]);
-  return required.every((key) => Object.prototype.hasOwnProperty.call(record, key))
-    && Object.keys(record).every((key) => allowed.has(key));
 }
 
 function boundedString(value: unknown, maximum: number): value is string {
@@ -304,8 +289,8 @@ export class AidenRemoteScheduleService {
   }
 
   private async mutation(deviceId: string, value: unknown): Promise<ScheduledTaskInput> {
-    const record = ownRecord(value);
-    if (!record || !exactKeys(record,
+    const record = isRecord(value) ? value : null;
+    if (!record || !hasExactKeys(record,
       ["name", "schedule", "timezone", "mode", "permission", "confirmedForeground"],
       ["workspaceId", "providerId", "modelId", "mcpServerIds", "scriptId", "prompt", "notify"],
     ) || record.confirmedForeground !== true || !boundedString(record.name, 120)
@@ -499,8 +484,8 @@ export class AidenRemoteScheduleService {
   }
 
   preview(value: unknown) {
-    const record = ownRecord(value);
-    if (!record || !exactKeys(record, ["cron", "timezone"], ["count"])
+    const record = isRecord(value) ? value : null;
+    if (!record || !hasExactKeys(record, ["cron", "timezone"], ["count"])
       || !boundedString(record.cron, 500) || !boundedString(record.timezone, 120)
       || (record.count !== undefined && (!Number.isInteger(record.count) || (record.count as number) < 1 || (record.count as number) > 20))) {
       throw new AidenRemoteServiceError("invalid_request", "The schedule preview request is invalid.", 400);
@@ -536,8 +521,8 @@ export class AidenRemoteScheduleService {
   }
 
   async updateSettings(revision: string, value: unknown) {
-    const record = ownRecord(value);
-    if (!record || record.confirmedForeground !== true || !exactKeys(record, ["confirmedForeground"], ["enabled", "defaultMode", "defaultPermission", "defaultMcpEnabled", "defaultNotify", "defaultTimezone"]) || Object.keys(record).length < 2) {
+    const record = isRecord(value) ? value : null;
+    if (!record || record.confirmedForeground !== true || !hasExactKeys(record, ["confirmedForeground"], ["enabled", "defaultMode", "defaultPermission", "defaultMcpEnabled", "defaultNotify", "defaultTimezone"]) || Object.keys(record).length < 2) {
       throw new AidenRemoteServiceError("permission_confirmation_required", "Scheduled-task settings require explicit foreground confirmation.", 409);
     }
     if ((record.enabled !== undefined && typeof record.enabled !== "boolean")

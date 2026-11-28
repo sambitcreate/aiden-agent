@@ -31,16 +31,17 @@ import {
   type BotSettingsField,
 } from "../../renderer/shared/bot-settings-changes.js";
 import type { BotPreset } from "../../renderer/shared/bot-presets.js";
+import { hasExactKeys, isRecord } from "../shared/guards.js";
 import { parseAidenRemoteBotPresetList, type AidenRemoteBotPreset } from "./aiden-remote-protocol.js";
 
 // ---------------------------------------------------------------------------
 // Strict-parse helpers
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function exactKeys(value: Record<string, unknown>, allowed: readonly string[], label: string): void {
-  for (const key of Object.keys(value)) if (!allowed.includes(key)) throw new Error(`${label} has an unknown field: ${key}.`);
+function assertAllowedKeys(value: Record<string, unknown>, allowed: readonly string[], label: string): void {
+  if (!hasExactKeys(value, [], allowed)) {
+    const key = Object.keys(value).find((candidate) => !allowed.includes(candidate))!;
+    throw new Error(`${label} has an unknown field: ${key}.`);
+  }
 }
 function has(value: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
@@ -85,13 +86,13 @@ function clip(value: string, max: number): string {
 
 function parseCardText(value: unknown, label: string): { format: "command" | "text"; text: string } {
   if (!isRecord(value)) throw new Error(`${label} must be an object.`);
-  exactKeys(value, ["format", "text"], label);
+  assertAllowedKeys(value, ["format", "text"], label);
   return { format: member(value.format, ["command", "text"] as const, `${label} format`), text: text(value.text, `${label} text`, APPROVAL_CARD_LIMITS.body) };
 }
 
 function parseCardButton(value: unknown, index: number): ApprovalCardButton {
   if (!isRecord(value)) throw new Error("Approval card button must be an object.");
-  exactKeys(value, ["label", "decision", "scope", "answered"], "Approval card button");
+  assertAllowedKeys(value, ["label", "decision", "scope", "answered"], "Approval card button");
   const decision = member(value.decision, ["allow", "deny"] as const, "Approval card button decision");
   if (has(value, "scope") && decision !== "allow") throw new Error("Only an allow button carries a scope.");
   if (index === 0 && decision !== "deny") throw new Error("An approval card's first button is its deny.");
@@ -106,7 +107,7 @@ function parseCardButton(value: unknown, index: number): ApprovalCardButton {
 /** Strict parse of the typed card, as a revision-61 client decodes it. */
 export function parseAidenRemoteApprovalCard(value: unknown): ApprovalCard {
   if (!isRecord(value)) throw new Error("Approval card must be an object.");
-  exactKeys(value, ["kind", "mac", "title", "arguments", "body", "explanation", "tags", "previous", "rows", "notes", "buttons", "allowOnMac"], "Approval card");
+  assertAllowedKeys(value, ["kind", "mac", "title", "arguments", "body", "explanation", "tags", "previous", "rows", "notes", "buttons", "allowOnMac"], "Approval card");
   const kind = member(value.kind, APPROVAL_CARD_KINDS, "Approval card kind");
   if (has(value, "mac") && kind !== "mac") throw new Error("Only a Mac card names a part of the Mac.");
   const buttons = list(value.buttons, "Approval card buttons", 5, parseCardButton);
@@ -119,7 +120,7 @@ export function parseAidenRemoteApprovalCard(value: unknown): ApprovalCard {
     title: text(value.title, "Approval card title", APPROVAL_CARD_LIMITS.title),
     arguments: list(value.arguments, "Approval card arguments", APPROVAL_CARD_LIMITS.argumentCount, (entry) => {
       if (!isRecord(entry)) throw new Error("Approval card argument must be an object.");
-      exactKeys(entry, ["key", "value"], "Approval card argument");
+      assertAllowedKeys(entry, ["key", "value"], "Approval card argument");
       return { key: text(entry.key, "Approval card argument key", APPROVAL_CARD_LIMITS.key), value: text(entry.value, "Approval card argument value", APPROVAL_CARD_LIMITS.value) };
     }),
     ...(has(value, "body") ? { body: parseCardText(value.body, "Approval card body") } : {}),
@@ -130,7 +131,7 @@ export function parseAidenRemoteApprovalCard(value: unknown): ApprovalCard {
     ...(has(value, "rows") ? {
       rows: list(value.rows, "Approval card rows", APPROVAL_CARD_LIMITS.rows, (row) => {
         if (!isRecord(row)) throw new Error("Approval card row must be an object.");
-        exactKeys(row, ["label", "value"], "Approval card row");
+        assertAllowedKeys(row, ["label", "value"], "Approval card row");
         return { label: text(row.label, "Approval card row label", APPROVAL_CARD_LIMITS.key * 2), value: text(row.value, "Approval card row value", APPROVAL_CARD_LIMITS.value, { blank: true }) };
       }),
     } : {}),
@@ -152,7 +153,7 @@ function parseCardTags(card: Record<string, unknown>): CommandTag[] {
   plainWordsCard(card);
   const tags = list(card.tags, "Approval card tags", APPROVAL_CARD_LIMITS.tags, (entry) => {
     if (!isRecord(entry)) throw new Error("Approval card tag must be an object.");
-    exactKeys(entry, ["label", "tone"], "Approval card tag");
+    assertAllowedKeys(entry, ["label", "tone"], "Approval card tag");
     return { label: text(entry.label, "Approval card tag label", APPROVAL_CARD_LIMITS.tagLabel), tone: member(entry.tone, ["calm", "risk"] as const, "Approval card tag tone") };
   });
   if (tags.length === 0) throw new Error("Approval card tags, when sent, are not empty.");
@@ -332,7 +333,7 @@ export function parseAidenRemoteBotUxEntry(value: unknown): AidenRemoteBotUxEntr
   const createdAt = has(value, "createdAt") ? { createdAt: iso(value.createdAt, "Bot session entry createdAt") } : {};
   switch (value.type) {
     case "settings_change": {
-      exactKeys(value, ["type", "id", "changeId", "mode", "status", "title", "fields", "lines", "heldReason", "instructions", "previousInstructions", "instructionsDiff", "undoable", "createdAt"], "Settings change entry");
+      assertAllowedKeys(value, ["type", "id", "changeId", "mode", "status", "title", "fields", "lines", "heldReason", "instructions", "previousInstructions", "instructionsDiff", "undoable", "createdAt"], "Settings change entry");
       const mode = member(value.mode, ["applied", "held"] as const, "Settings change mode");
       if (mode === "applied" && (has(value, "heldReason") || has(value, "instructions") || has(value, "previousInstructions"))) {
         throw new Error("Only a held change carries a reason and proposed instructions.");
@@ -352,7 +353,7 @@ export function parseAidenRemoteBotUxEntry(value: unknown): AidenRemoteBotUxEntr
         ...(has(value, "instructionsDiff") ? {
           instructionsDiff: list(value.instructionsDiff, "Settings change instructionsDiff", DIFF_LINES_MAX, (line) => {
             if (!isRecord(line)) throw new Error("Instructions diff line must be an object.");
-            exactKeys(line, ["kind", "text"], "Instructions diff line");
+            assertAllowedKeys(line, ["kind", "text"], "Instructions diff line");
             return { kind: member(line.kind, ["same", "added", "removed"] as const, "Instructions diff kind"), text: text(line.text, "Instructions diff text", 4_000, { blank: true }) };
           }),
         } : {}),
@@ -361,7 +362,7 @@ export function parseAidenRemoteBotUxEntry(value: unknown): AidenRemoteBotUxEntr
       };
     }
     case "skill_proposal":
-      exactKeys(value, ["type", "id", "proposalId", "name", "description", "reason", "update", "preview", "previewTruncated", "status", "createdAt"], "Skill proposal entry");
+      assertAllowedKeys(value, ["type", "id", "proposalId", "name", "description", "reason", "update", "preview", "previewTruncated", "status", "createdAt"], "Skill proposal entry");
       if (has(value, "previewTruncated") && value.previewTruncated !== true) throw new Error("Skill proposal previewTruncated must be true when present.");
       return {
         type: "skill_proposal",
@@ -377,7 +378,7 @@ export function parseAidenRemoteBotUxEntry(value: unknown): AidenRemoteBotUxEntr
         ...createdAt,
       };
     case "lesson": {
-      exactKeys(value, ["type", "id", "lessonId", "kind", "text", "routineName", "runs", "status", "createdAt"], "Lesson entry");
+      assertAllowedKeys(value, ["type", "id", "lessonId", "kind", "text", "routineName", "runs", "status", "createdAt"], "Lesson entry");
       if (has(value, "runs") && (!Number.isSafeInteger(value.runs) || (value.runs as number) < 0)) throw new Error("Lesson runs must be a count.");
       return {
         type: "lesson",
@@ -392,7 +393,7 @@ export function parseAidenRemoteBotUxEntry(value: unknown): AidenRemoteBotUxEntr
       };
     }
     case "memory_tidy":
-      exactKeys(value, ["type", "id", "changeId", "createdAt"], "Memory tidy entry");
+      assertAllowedKeys(value, ["type", "id", "changeId", "createdAt"], "Memory tidy entry");
       return { type: "memory_tidy", id, ...(has(value, "changeId") ? { changeId: opaque(value.changeId, "Memory tidy changeId") } : {}), ...createdAt };
     default:
       throw new Error("Bot session entry type is not a revision-61 type.");
@@ -402,7 +403,7 @@ export function parseAidenRemoteBotUxEntry(value: unknown): AidenRemoteBotUxEntr
 /** Exactly `{decision}` from one of `decisions`. */
 export function parseBotUxDecision<T extends string>(value: unknown, decisions: readonly T[], label: string): T {
   if (!isRecord(value)) throw new Error(`${label} must be an object.`);
-  exactKeys(value, ["decision"], label);
+  assertAllowedKeys(value, ["decision"], label);
   return member(value.decision, decisions, `${label} decision`);
 }
 
@@ -455,7 +456,7 @@ export function parseAidenRemoteBotTemplateFields(value: Record<string, unknown>
  */
 export function parseAidenRemoteBotTemplateList(value: unknown): { presets: Array<AidenRemoteBotPreset & AidenRemoteBotTemplateFields> } {
   if (!isRecord(value)) throw new Error("Template list must be an object.");
-  exactKeys(value, ["presets"], "Template list");
+  assertAllowedKeys(value, ["presets"], "Template list");
   if (!Array.isArray(value.presets)) throw new Error("Template list presets must be an array.");
   const rows = value.presets.map((row) => {
     if (!isRecord(row)) throw new Error("Template must be an object.");
@@ -469,7 +470,7 @@ export function parseAidenRemoteBotTemplateList(value: unknown): { presets: Arra
 /** `POST /bots/from-preset` for a `bot:templates` holder: `{presetId, version}`. */
 export function parseAidenRemoteBotTemplateCreateRequest(value: unknown): { presetId: string; version: number } {
   if (!isRecord(value)) throw new Error("Template create request must be an object.");
-  exactKeys(value, ["presetId", "version"], "Template create request");
+  assertAllowedKeys(value, ["presetId", "version"], "Template create request");
   if (!Number.isSafeInteger(value.version) || (value.version as number) < 1) throw new Error("Template version must be a positive integer.");
   return { presetId: opaque(value.presetId, "Template presetId"), version: value.version as number };
 }
@@ -486,12 +487,12 @@ export interface AidenRemoteApprovalModeView {
 
 export function parseAidenRemoteApprovalModeView(value: unknown): AidenRemoteApprovalModeView {
   if (!isRecord(value)) throw new Error("Approval mode must be an object.");
-  exactKeys(value, ["mode", "autoAvailable"], "Approval mode");
+  assertAllowedKeys(value, ["mode", "autoAvailable"], "Approval mode");
   return { mode: member(value.mode, APPROVAL_MODES, "Approval mode"), autoAvailable: bool(value.autoAvailable, "Approval mode autoAvailable") };
 }
 
 export function parseAidenRemoteApprovalModeRequest(value: unknown): ApprovalMode {
   if (!isRecord(value)) throw new Error("Approval mode request must be an object.");
-  exactKeys(value, ["mode"], "Approval mode request");
+  assertAllowedKeys(value, ["mode"], "Approval mode request");
   return member(value.mode, APPROVAL_MODES, "Approval mode");
 }

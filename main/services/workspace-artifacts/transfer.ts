@@ -20,6 +20,7 @@ import { safeExportFileName } from "../chat-export.js";
 import { readRegularFile } from "../regular-file-read.js";
 import { assertArtifactFilePath } from "./file-policy.js";
 import type { WorkspaceArtifactContent } from "./store.js";
+import { isRecord } from "../../shared/guards.js";
 
 /**
  * Export and import of one workspace artifact page as a file the person keeps
@@ -108,10 +109,6 @@ export function workspaceArtifactPageFile(artifact: WorkspaceArtifactV1): Worksp
 /** `<title>.aiden-page.json`, with characters file systems reject or hide replaced. */
 export function workspaceArtifactPageFileName(title: string): string {
   return safeExportFileName(title, { fallback: "Aiden page", extension: ".aiden-page.json" });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function cannotImport(reason: string): never {

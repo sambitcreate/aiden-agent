@@ -1,4 +1,5 @@
 import { isSubagentRunStoreGeneration as safeGeneration } from "./subagent-run-store-io.js";
+import { hasExactKeys, isRecord } from "../../shared/guards.js";
 import { createHash } from "node:crypto";
 import { TextDecoder } from "node:util";
 import {
@@ -72,17 +73,6 @@ export interface SubagentRunStoreV1CheckpointEvidenceV2 {
   sourceSha256: string;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value);
-  return actual.length === keys.length && actual.every((key) => keys.includes(key));
-}
-
-
-
 function safeTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
@@ -90,7 +80,7 @@ function safeTimestamp(value: unknown): value is number {
 function parseMigration(value: unknown): SubagentRunMigrationV2 | undefined {
   if (
     !isRecord(value) ||
-    !exactKeys(value, [
+    !hasExactKeys(value, [
       "status",
       "adapterVersion",
       "source",
@@ -123,7 +113,7 @@ function parseMigration(value: unknown): SubagentRunMigrationV2 | undefined {
 function parseManifest(value: unknown): SubagentPrivateRunManifestV2 | undefined {
   if (
     !isRecord(value) ||
-    !exactKeys(value, [
+    !hasExactKeys(value, [
       "version",
       "provenance",
       "runId",
@@ -163,7 +153,7 @@ function parseManifest(value: unknown): SubagentPrivateRunManifestV2 | undefined
 export function parseSubagentRunDatabaseV2(value: unknown): SubagentRunDatabaseV2 | undefined {
   if (
     !isRecord(value) ||
-    !exactKeys(value, [
+    !hasExactKeys(value, [
       "version",
       "storeRevision",
       "migration",

@@ -26,6 +26,7 @@ import {
 } from "../../../renderer/shared/check-backs.js";
 import { resolveWakeUpTime, WAKE_UP_INVALID_TIME_MESSAGE, type WakeUpWhen } from "../wake-up-time.js";
 import type { AgentNoticeOutcome } from "./notice-delivery.js";
+import { isRecord } from "../../shared/guards.js";
 
 export type CheckBackState = "pending" | "claimed" | "fired" | "cancelled";
 
@@ -109,10 +110,6 @@ function dueAt(record: CheckBackRecord): number {
 
 function sentence(note: string): string {
   return /[.!?]$/u.test(note) ? note : `${note}.`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** One saved record, or undefined when it is not one this release wrote. */

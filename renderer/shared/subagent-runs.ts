@@ -1,6 +1,7 @@
 import { sanitizeSubagentSnapshotText } from "./subagent-safe-text.js";
 import { boundedUnicodePrefix } from "./unicode-prefix.js";
 import { isGenerationThinkingLevel, type GenerationThinkingLevel } from "./generation-thinking.js";
+import { hasExactKeys, isRecord, snapshotPlainDataRecord } from "../../main/shared/guards.js";
 
 export const SUBAGENT_RUN_SNAPSHOT_VERSION = 1 as const;
 export const MAX_SUBAGENT_RUNS_PER_GENERATION = 8;
@@ -197,10 +198,6 @@ const OPTIONAL_SNAPSHOT_KEYS = new Set([
   "modelSelection",
 ]);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function finiteTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
@@ -273,19 +270,11 @@ function safeText(
   );
 }
 
-function hasExactSnapshotKeys(value: Record<string, unknown>): boolean {
-  const keys = Object.keys(value);
-  return (
-    REQUIRED_SNAPSHOT_KEYS.size <= keys.length &&
-    keys.length <= REQUIRED_SNAPSHOT_KEYS.size + OPTIONAL_SNAPSHOT_KEYS.size &&
-    [...REQUIRED_SNAPSHOT_KEYS].every((key) => key in value) &&
-    keys.every((key) => REQUIRED_SNAPSHOT_KEYS.has(key) || OPTIONAL_SNAPSHOT_KEYS.has(key))
-  );
-}
-
 /** Reject malformed or non-redacted values before they cross IPC or replay from disk. */
 export function parseSubagentRunSnapshotV1(value: unknown): SubagentRunSnapshotV1 | undefined {
-  if (!isRecord(value) || !hasExactSnapshotKeys(value)) return undefined;
+  if (!isRecord(value) || !hasExactKeys(value, REQUIRED_SNAPSHOT_KEYS, OPTIONAL_SNAPSHOT_KEYS)) {
+    return undefined;
+  }
   if (
     value.version !== SUBAGENT_RUN_SNAPSHOT_VERSION ||
     !isSafeSubagentIdentifier(value.runId) ||
@@ -651,16 +640,6 @@ const V2_STATES = new Set<SubagentRunStateV2>([
 const V2_EXECUTION_MODES = new Set<SubagentExecutionModeV2>(["foreground", "background"]);
 const V2_CONTEXT_MODES = new Set<SubagentContextModeV2>(["fresh", "fork"]);
 
-function hasExactV2SnapshotKeys(value: Record<string, unknown>): boolean {
-  const keys = Object.keys(value);
-  return (
-    V2_REQUIRED_SNAPSHOT_KEYS.size <= keys.length &&
-    keys.length <= V2_REQUIRED_SNAPSHOT_KEYS.size + V2_OPTIONAL_SNAPSHOT_KEYS.size &&
-    [...V2_REQUIRED_SNAPSHOT_KEYS].every((key) => key in value) &&
-    keys.every((key) => V2_REQUIRED_SNAPSHOT_KEYS.has(key) || V2_OPTIONAL_SNAPSHOT_KEYS.has(key))
-  );
-}
-
 function v2StateAsV1(state: SubagentRunStateV2): SubagentRunState {
   return state === "needs_attention"
     ? "running"
@@ -713,7 +692,7 @@ function v2BaseProjection(
 export function parseSubagentRunSnapshotV2(value: unknown): SubagentRunSnapshotV2 | undefined {
   if (
     !isRecord(value) ||
-    !hasExactV2SnapshotKeys(value) ||
+    !hasExactKeys(value, V2_REQUIRED_SNAPSHOT_KEYS, V2_OPTIONAL_SNAPSHOT_KEYS) ||
     value.version !== SUBAGENT_RUN_SNAPSHOT_VERSION_V2 ||
     typeof value.state !== "string" ||
     !V2_STATES.has(value.state as SubagentRunStateV2) ||
@@ -921,65 +900,47 @@ const EFFECT_STATES = new Set<SubagentEffectActivityStateV1>([
   "unknown",
 ]);
 
-function hasExactPlainDataKeys(
-  value: unknown,
-  expected: readonly string[],
-): value is Record<string, unknown> {
-  if (!isRecord(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return false;
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  const keys = Reflect.ownKeys(descriptors);
-  return (
-    keys.length === expected.length &&
-    keys.every(
-      (key) =>
-        typeof key === "string" &&
-        expected.includes(key) &&
-        descriptors[key]?.enumerable === true &&
-        "value" in descriptors[key]!,
-    )
-  );
-}
-
 export function parseSubagentEffectActivityV1(
   value: unknown,
 ): SubagentEffectActivityV1 | undefined {
-  if (!hasExactPlainDataKeys(value, ["version", "kind", "state", "label", "updatedAt"])) {
+  const record = snapshotPlainDataRecord(value);
+  if (!record || !hasExactKeys(record, ["version", "kind", "state", "label", "updatedAt"])) {
     return undefined;
   }
   if (
-    value.version !== 1 ||
-    typeof value.kind !== "string" ||
-    !EFFECT_KINDS.has(value.kind as SubagentEffectActivityKindV1) ||
-    typeof value.state !== "string" ||
-    !EFFECT_STATES.has(value.state as SubagentEffectActivityStateV1) ||
-    typeof value.label !== "string" ||
-    value.label.length === 0 ||
-    value.label.length > MAX_SUBAGENT_ACTIVITY_CHARS ||
-    sanitizeSubagentSnapshotText(value.label) !== value.label ||
-    !finiteTimestamp(value.updatedAt)
+    record.version !== 1 ||
+    typeof record.kind !== "string" ||
+    !EFFECT_KINDS.has(record.kind as SubagentEffectActivityKindV1) ||
+    typeof record.state !== "string" ||
+    !EFFECT_STATES.has(record.state as SubagentEffectActivityStateV1) ||
+    typeof record.label !== "string" ||
+    record.label.length === 0 ||
+    record.label.length > MAX_SUBAGENT_ACTIVITY_CHARS ||
+    sanitizeSubagentSnapshotText(record.label) !== record.label ||
+    !finiteTimestamp(record.updatedAt)
   )
     return undefined;
   return {
     version: 1,
-    kind: value.kind as SubagentEffectActivityKindV1,
-    state: value.state as SubagentEffectActivityStateV1,
-    label: value.label,
-    updatedAt: value.updatedAt,
+    kind: record.kind as SubagentEffectActivityKindV1,
+    state: record.state as SubagentEffectActivityStateV1,
+    label: record.label,
+    updatedAt: record.updatedAt,
   };
 }
 
 export function parseSubagentHistoryDetailV1(value: unknown): SubagentHistoryDetailV1 | undefined {
+  const record = snapshotPlainDataRecord(value);
   if (
-    !hasExactPlainDataKeys(value, ["version", "snapshot", "effects"]) ||
-    value.version !== 1 ||
-    !Array.isArray(value.effects) ||
-    value.effects.length > MAX_SUBAGENT_EFFECT_ACTIVITY
+    !record ||
+    !hasExactKeys(record, ["version", "snapshot", "effects"]) ||
+    record.version !== 1 ||
+    !Array.isArray(record.effects) ||
+    record.effects.length > MAX_SUBAGENT_EFFECT_ACTIVITY
   )
     return undefined;
-  const snapshot = parseSubagentRunSnapshot(value.snapshot);
-  const effects = value.effects.map(parseSubagentEffectActivityV1);
+  const snapshot = parseSubagentRunSnapshot(record.snapshot);
+  const effects = record.effects.map(parseSubagentEffectActivityV1);
   if (!snapshot || effects.some((effect) => effect === undefined)) return undefined;
   return {
     version: 1,

@@ -1,4 +1,5 @@
 import { parseChatInputSource } from "../../renderer/shared/chat-input-source.js";
+import { hasExactKeys, isRecord } from "../shared/guards.js";
 import { BOT_STARTER_INSTRUCTIONS } from "../../renderer/shared/bot-presets.js";
 import {
   AIDEN_REMOTE_BOT_SETTINGS_CHANGE_ENTRY_TYPES,
@@ -3074,10 +3075,6 @@ function assertNoPrivateSummaryProjectionFields(value: unknown, label: string): 
   visit(value, []);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 function isValidJsonString(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const codeUnit = value.charCodeAt(index);
@@ -3278,8 +3275,9 @@ const EVENT_PAYLOAD_KEYS: Record<AidenRemoteEventType, readonly string[]> = {
 const TERMINAL_EVENT_TYPES = new Set<AidenRemoteEventType>(["done", "error", "cancelled"]);
 
 function assertExactKeys(record: Record<string, unknown>, allowed: readonly string[], label: string): void {
-  for (const key of Object.keys(record)) {
-    if (!allowed.includes(key)) throw new Error(`${label} contains unsupported field ${key}.`);
+  if (!hasExactKeys(record, [], allowed)) {
+    const key = Object.keys(record).find((candidate) => !allowed.includes(candidate))!;
+    throw new Error(`${label} contains unsupported field ${key}.`);
   }
 }
 

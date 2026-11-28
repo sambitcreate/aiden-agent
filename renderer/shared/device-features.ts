@@ -7,6 +7,7 @@
  * device offers comes from `deviceFeatureCapabilities`, never from a blanket
  * platform check.
  */
+import { isRecord } from "../../main/shared/guards.js";
 import { DEVICE_HOST_ID_PATTERN, DEVICE_ID_PATTERN, type DevicePlatform } from "./devices.js";
 
 /** Text larger than this is refused by Paste to device and Copy from device. */
@@ -83,10 +84,6 @@ export interface DeviceFeatureTarget {
   platform: DevicePlatform;
   hostId: string;
   deviceId: string;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isPlatform(value: unknown): value is DevicePlatform {

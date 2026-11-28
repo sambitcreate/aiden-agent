@@ -7,6 +7,7 @@ import {
 } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { isPlainObject } from "../shared/guards.js";
 import type { BotCapabilityOpaqueKeyStore } from "./bot-capability-key-store.js";
 import {
   BotCapabilityUnavailableError,
@@ -93,15 +94,6 @@ function unavailable(message: string): BotCapabilityUnavailableError {
   return new BotCapabilityUnavailableError(message);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(
-    value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    Object.getPrototypeOf(value) === Object.prototype,
-  );
-}
-
 function isSequence(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
@@ -156,7 +148,7 @@ function parseHead(bytes: Buffer, key: Uint8Array): StateHead {
   } catch {
     throw unavailable("Bot access rollback checkpoint is invalid.");
   }
-  if (!isRecord(value) || value.version !== VERSION || !isDigest(value.mac)) {
+  if (!isPlainObject(value) || value.version !== VERSION || !isDigest(value.mac)) {
     throw unavailable("Bot access rollback checkpoint is invalid.");
   }
   let head: StateHead;

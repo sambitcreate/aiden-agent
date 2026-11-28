@@ -11,6 +11,7 @@
 // file while it is unreadable, so fixing or removing it takes effect at once.
 
 import { BOT_LIMITS } from "../../renderer/shared/bots.js";
+import { isRecord } from "../shared/guards.js";
 import { DataStore } from "./data-store.js";
 
 export const BOT_PAUSES_FILE = "bot-pauses.json";
@@ -73,10 +74,6 @@ function isBotId(value: string): boolean {
       return code <= 0x1f || code === 0x7f;
     })
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function hasOwn(value: object, key: string): boolean {

@@ -50,11 +50,11 @@ import {
   isCoalescibleDelta,
   MAX_COALESCED_DELTA_EVENT_BYTES,
   mergeDeltaPayload,
-  ownRecord,
   projectApprovalDetails,
   projectRunContentNotification,
   type RunProjectionState,
 } from "./run-event-projection.js";
+import { hasExactKeys, isRecord } from "../shared/guards.js";
 import {
   AidenIdempotencyLedger,
   type AidenIdempotencySnapshot,
@@ -321,9 +321,10 @@ function terminal(state: AidenRemoteStreamState): boolean {
  * current Remote wire contract or relaxing validation for any other field.
  */
 function normalizeLegacyTimelineEvent(value: unknown): unknown {
-  const event = ownRecord(value);
-  const payload = ownRecord(event?.payload);
-  if (event?.type !== "timeline" || !payload || !("label" in payload)) return value;
+  if (!isRecord(value) || value.type !== "timeline" || !isRecord(value.payload)) return value;
+  const event = value;
+  const payload = value.payload;
+  if (!("label" in payload)) return value;
 
   const keys = Object.keys(payload);
   if (
@@ -388,7 +389,7 @@ function normalizeLegacyTimelineEvent(value: unknown): unknown {
 }
 
 function parseSnapshot(value: unknown): AidenRemoteStreamSnapshot {
-  const record = ownRecord(value);
+  const record = isRecord(value) ? value : null;
   if (
     !record ||
     record.version !== 1 ||
@@ -401,11 +402,10 @@ function parseSnapshot(value: unknown): AidenRemoteStreamSnapshot {
   const streamIds = new Set<string>();
   const streams: AidenRemoteStreamSnapshot["streams"] = [];
   for (const raw of record.streams) {
-    const stream = ownRecord(raw);
+    const stream = isRecord(raw) ? raw : null;
     if (
       !stream ||
-      Object.keys(stream).some((key) => !["streamId", "chatId", "turnId", "deviceId", "state", "updatedAt", "events"].includes(key)) ||
-      !["streamId", "chatId", "turnId", "deviceId", "state", "updatedAt", "events"].every((key) => Object.prototype.hasOwnProperty.call(stream, key)) ||
+      !hasExactKeys(stream, ["streamId", "chatId", "turnId", "deviceId", "state", "updatedAt", "events"]) ||
       typeof stream.streamId !== "string" ||
       !/^[A-Za-z0-9._:-]{1,128}$/u.test(stream.streamId) ||
       streamIds.has(stream.streamId) ||
@@ -428,8 +428,8 @@ function parseSnapshot(value: unknown): AidenRemoteStreamSnapshot {
     let previous = 0;
     const events = stream.events.map((rawEvent) => {
       const normalizedEvent = normalizeLegacyTimelineEvent(rawEvent);
-      const event = ownRecord(normalizedEvent);
-      const payload = ownRecord(event?.payload);
+      const event = isRecord(normalizedEvent) ? normalizedEvent : null;
+      const payload = isRecord(event?.payload) ? event.payload : null;
       if (
         !event ||
         !payload ||
@@ -471,10 +471,10 @@ function parseSnapshot(value: unknown): AidenRemoteStreamSnapshot {
     }
     const indexed = new Set<string>();
     for (const rawEntry of record.turnIndex) {
-      const entry = ownRecord(rawEntry);
+      const entry = isRecord(rawEntry) ? rawEntry : null;
       if (
         !entry ||
-        Object.keys(entry).some((key) => !["streamId", "chatId", "turnId"].includes(key)) ||
+        !hasExactKeys(entry, [], ["streamId", "chatId", "turnId"]) ||
         typeof entry.streamId !== "string" ||
         !identifier.test(entry.streamId) ||
         indexed.has(entry.streamId) ||
@@ -1301,7 +1301,7 @@ export class AidenRemoteStreamService {
     channel: NotificationChannel,
     rawPayload: unknown,
   ): void {
-    const payload = ownRecord(rawPayload) ?? {};
+    const payload = isRecord(rawPayload) ? rawPayload : {};
     if (channel === "chat:approval") {
       const approvalId = boundedText(payload.approvalId, 128);
       if (!approvalId) return;
@@ -1311,7 +1311,7 @@ export class AidenRemoteStreamService {
       const toolCallId = boundedText(payload.toolCallId, 128) || "remote-tool";
       const toolName = boundedText(payload.toolName, 120) || "Tool";
       const details = projectApprovalDetails(payload.details);
-      const claimsStructuredDetails = ownRecord(payload.details)?.kind !== undefined;
+      const claimsStructuredDetails = isRecord(payload.details) && payload.details.kind !== undefined;
       const scopes = offeredScopes(payload.scopes);
       // Only the plain words cross from the host's prompt, never its preview.
       const reading = parseCommandReading(payload.reading);

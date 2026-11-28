@@ -1,3 +1,4 @@
+import { isRecord } from "../../../main/shared/guards.js";
 import { AIDEN_UI_CATALOG, isAidenUiIcon, type CatalogEntry, type PropKind } from "./catalog.js";
 import { INLINE_ELEMENTS, MAX_RUN_ARGUMENTS, MAX_TEXT_CHARS, RESERVED_DATA_NAMES, RUN_ACTION_NAME } from "./compile.js";
 import { AIDEN_UI_BINARY_OPERATORS, AIDEN_UI_FUNCTIONS, AIDEN_UI_NAME } from "./expression.js";
@@ -40,10 +41,6 @@ class Invalid extends Error {}
 
 function fail(message: string): never {
   throw new Invalid(message);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 /** A name from the page, shown only when it reads as one. */

@@ -7,6 +7,7 @@ import {
   type WebSearchResultSet,
 } from "../web-search-core.js";
 import type { WebSearchAvailability, WebSearchSearchOptions } from "../web-search.js";
+import { hasExactKeys, isRecord } from "../../shared/guards.js";
 import { createSubagentAuthorityV2, type SubagentAuthorityV2 } from "./authority-v2.js";
 
 export const SUBAGENT_WEB_PROXY_TIMEOUT_MS = 20_000;
@@ -60,21 +61,12 @@ export type ConsumeSubagentNetworkOperation = (authority: SubagentAuthorityV2) =
 
 class SafeWebProxyError extends Error {}
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function exactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
-  const actual = Object.keys(value);
-  return actual.length === expected.length && actual.every((key) => expected.includes(key));
-}
-
 /** Rebuild an exact immutable authority instead of trusting a typed caller. */
 function exactSubagentAuthorityV2(value: unknown): SubagentAuthorityV2 | null {
   if (!isRecord(value) || value.version !== 2) return null;
   const expected =
     value.parentRunId === undefined ? AUTHORITY_KEYS : [...AUTHORITY_KEYS, "parentRunId"];
-  if (!exactKeys(value, expected)) return null;
+  if (!hasExactKeys(value, expected)) return null;
   try {
     const authority = createSubagentAuthorityV2({
       grantId: value.grantId as string,

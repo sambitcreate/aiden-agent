@@ -10,6 +10,7 @@ import {
 } from "../../renderer/shared/assistant.js";
 import { isComputerUseAccessApprovalDetails } from "../../renderer/shared/computer-use-access.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
+import { isRecord } from "../shared/guards.js";
 import type { AidenRemoteStreamState } from "./aiden-remote-streams.js";
 
 /** Bound on one delta event's text, whether projected or coalesced. */
@@ -81,12 +82,6 @@ export type RunContentProjection =
   | { kind: "ignored" }
   /** Caller owns this channel (chat:approval, chat:questionnaire, anything unknown). */
   | { kind: "unhandled" };
-
-export function ownRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 const ASSISTANT_AUTOMATION_DETAIL_KEYS = [
   "kind", "action", "taskId", "enabled", "name", "prompt", "cron", "timezone", "nextRunAt",
@@ -170,7 +165,8 @@ export function boundedText(value: unknown, maximum: number): string {
 /** Newest assistant message, scanning back without copying the transcript. */
 function lastAssistantMessage(messages: readonly unknown[]): unknown {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (ownRecord(messages[index])?.role === "assistant") return messages[index];
+    const candidate = messages[index];
+    if (isRecord(candidate) && candidate.role === "assistant") return candidate;
   }
   return undefined;
 }
@@ -270,10 +266,12 @@ export function projectRunContentNotification(
   if (channel === "chat:done") {
     const cancelled = cancelledProjection(payload, context);
     if (cancelled) return cancelled;
-    const chat = ownRecord(payload.chat);
+    const chat = isRecord(payload.chat) ? payload.chat : null;
     const messages = Array.isArray(chat?.messages) ? chat.messages : [];
     const assistant = lastAssistantMessage(messages);
-    const messageId = boundedText(ownRecord(assistant)?.id, 128) || `assistant_${context.turnId}`;
+    const messageId =
+      boundedText(isRecord(assistant) ? assistant.id : undefined, 128) ||
+      `assistant_${context.turnId}`;
     return event("done", { messageId }, true, "done");
   }
   return { kind: "unhandled" };

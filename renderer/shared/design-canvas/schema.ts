@@ -6,6 +6,7 @@
 // It also reads version 1 documents (one page, no page ids) and returns them
 // as version 2, so the next save writes the new shape.
 
+import { isRecord } from "../../../main/shared/guards.js";
 import { syncConnectors } from "./connectors.js";
 import {
   parseDesignTweakValues,
@@ -749,10 +750,6 @@ function parseMarks(value: unknown): DesignComment["marks"] {
     if (points.length > 0) marks.push({ points });
   }
   return marks.length > 0 ? marks : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function identifier(value: unknown): string | undefined {

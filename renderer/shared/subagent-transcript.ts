@@ -1,4 +1,9 @@
 import {
+  hasExactKeys,
+  isPlainObject,
+  snapshotPlainDataRecord,
+} from "../../main/shared/guards.js";
+import {
   GENERATION_TIMELINE_VERSION,
   MAX_GENERATION_TIMELINE_STEPS,
   parseGenerationTimeline,
@@ -78,25 +83,6 @@ export interface SubagentTranscriptNotification {
   update: SubagentTranscriptUpdateV1;
 }
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
-
-function hasOnlyKeys(
-  value: Record<string, unknown>,
-  required: readonly string[],
-  optional: readonly string[] = [],
-): boolean {
-  const keys = Object.keys(value);
-  return (
-    Reflect.ownKeys(value).length === keys.length &&
-    required.every((key) => Object.prototype.hasOwnProperty.call(value, key)) &&
-    keys.every((key) => required.includes(key) || optional.includes(key))
-  );
-}
-
 function finiteTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
@@ -125,113 +111,117 @@ function parseSteps(value: unknown, textLength: number): AgentStep[] | undefined
   if (!parsed || parsed.steps.length !== value.length) return undefined;
   for (const [index, step] of parsed.steps.entries()) {
     const raw = value[index];
-    if (!isPlainRecord(raw) || Object.keys(raw).length !== Object.keys(step).length) return undefined;
+    if (!isPlainObject(raw) || Object.keys(raw).length !== Object.keys(step).length) return undefined;
   }
   return parsed.steps;
 }
 
 function parseEntry(value: unknown, index: number): SubagentTranscriptEntry | undefined {
-  if (!isPlainRecord(value)) return undefined;
+  const record = snapshotPlainDataRecord(value);
+  if (!record) return undefined;
   if (index === 0) {
-    if (!hasOnlyKeys(value, ["kind", "text"]) || value.kind !== "task" || !boundedText(value.text)) {
+    if (!hasExactKeys(record, ["kind", "text"]) || record.kind !== "task" || !boundedText(record.text)) {
       return undefined;
     }
-    return { kind: "task", text: value.text };
+    return { kind: "task", text: record.text };
   }
   if (
-    !hasOnlyKeys(value, ["kind", "text", "steps", "startedAt"], ["finishedAt"]) ||
-    value.kind !== "message" ||
-    !boundedText(value.text) ||
-    !finiteTimestamp(value.startedAt) ||
-    (value.finishedAt !== undefined &&
-      (!finiteTimestamp(value.finishedAt) || value.finishedAt < value.startedAt))
+    !hasExactKeys(record, ["kind", "text", "steps", "startedAt"], ["finishedAt"]) ||
+    record.kind !== "message" ||
+    !boundedText(record.text) ||
+    !finiteTimestamp(record.startedAt) ||
+    (record.finishedAt !== undefined &&
+      (!finiteTimestamp(record.finishedAt) || record.finishedAt < record.startedAt))
   ) {
     return undefined;
   }
-  const steps = parseSteps(value.steps, value.text.length);
+  const steps = parseSteps(record.steps, record.text.length);
   if (!steps) return undefined;
   return {
     kind: "message",
-    text: value.text,
+    text: record.text,
     steps,
-    startedAt: value.startedAt,
-    ...(value.finishedAt === undefined ? {} : { finishedAt: value.finishedAt }),
+    startedAt: record.startedAt,
+    ...(record.finishedAt === undefined ? {} : { finishedAt: record.finishedAt }),
   };
 }
 
 export function parseSubagentTranscript(value: unknown): SubagentTranscriptV1 | undefined {
+  const record = snapshotPlainDataRecord(value);
   if (
-    !isPlainRecord(value) ||
-    !hasOnlyKeys(value, ["version", "runId", "revision", "trimmed", "entries"]) ||
-    value.version !== SUBAGENT_TRANSCRIPT_VERSION ||
-    !isSafeSubagentIdentifier(value.runId) ||
-    !revisionNumber(value.revision) ||
-    value.revision < 1 ||
-    typeof value.trimmed !== "boolean" ||
-    !Array.isArray(value.entries) ||
-    value.entries.length === 0 ||
-    value.entries.length > MAX_SUBAGENT_TRANSCRIPT_ENTRIES
+    !record ||
+    !hasExactKeys(record, ["version", "runId", "revision", "trimmed", "entries"]) ||
+    record.version !== SUBAGENT_TRANSCRIPT_VERSION ||
+    !isSafeSubagentIdentifier(record.runId) ||
+    !revisionNumber(record.revision) ||
+    record.revision < 1 ||
+    typeof record.trimmed !== "boolean" ||
+    !Array.isArray(record.entries) ||
+    record.entries.length === 0 ||
+    record.entries.length > MAX_SUBAGENT_TRANSCRIPT_ENTRIES
   ) {
     return undefined;
   }
   const entries: SubagentTranscriptEntry[] = [];
-  for (const [index, raw] of value.entries.entries()) {
+  for (const [index, raw] of record.entries.entries()) {
     const entry = parseEntry(raw, index);
     if (!entry) return undefined;
     entries.push(entry);
   }
   return {
     version: SUBAGENT_TRANSCRIPT_VERSION,
-    runId: value.runId,
-    revision: value.revision,
-    trimmed: value.trimmed,
+    runId: record.runId,
+    revision: record.revision,
+    trimmed: record.trimmed,
     entries,
   };
 }
 
 export function parseSubagentTranscriptUpdate(value: unknown): SubagentTranscriptUpdateV1 | undefined {
+  const record = snapshotPlainDataRecord(value);
   if (
-    !isPlainRecord(value) ||
-    !hasOnlyKeys(value, ["version", "runId", "baseRevision", "revision", "trimmed", "entryCount", "changes"]) ||
-    value.version !== SUBAGENT_TRANSCRIPT_VERSION ||
-    !isSafeSubagentIdentifier(value.runId) ||
-    !revisionNumber(value.baseRevision) ||
-    !revisionNumber(value.revision) ||
-    value.revision <= value.baseRevision ||
-    typeof value.trimmed !== "boolean" ||
-    !Number.isSafeInteger(value.entryCount) ||
-    (value.entryCount as number) < 1 ||
-    (value.entryCount as number) > MAX_SUBAGENT_TRANSCRIPT_ENTRIES ||
-    !Array.isArray(value.changes) ||
-    value.changes.length > (value.entryCount as number)
+    !record ||
+    !hasExactKeys(record, ["version", "runId", "baseRevision", "revision", "trimmed", "entryCount", "changes"]) ||
+    record.version !== SUBAGENT_TRANSCRIPT_VERSION ||
+    !isSafeSubagentIdentifier(record.runId) ||
+    !revisionNumber(record.baseRevision) ||
+    !revisionNumber(record.revision) ||
+    record.revision <= record.baseRevision ||
+    typeof record.trimmed !== "boolean" ||
+    !Number.isSafeInteger(record.entryCount) ||
+    (record.entryCount as number) < 1 ||
+    (record.entryCount as number) > MAX_SUBAGENT_TRANSCRIPT_ENTRIES ||
+    !Array.isArray(record.changes) ||
+    record.changes.length > (record.entryCount as number)
   ) {
     return undefined;
   }
   const changes: SubagentTranscriptChange[] = [];
   let previousIndex = -1;
-  for (const raw of value.changes) {
+  for (const raw of record.changes) {
+    const change = snapshotPlainDataRecord(raw);
     if (
-      !isPlainRecord(raw) ||
-      !hasOnlyKeys(raw, ["index", "entry"]) ||
-      !Number.isSafeInteger(raw.index) ||
-      (raw.index as number) <= previousIndex ||
-      (raw.index as number) >= (value.entryCount as number)
+      !change ||
+      !hasExactKeys(change, ["index", "entry"]) ||
+      !Number.isSafeInteger(change.index) ||
+      (change.index as number) <= previousIndex ||
+      (change.index as number) >= (record.entryCount as number)
     ) {
       return undefined;
     }
-    const index = raw.index as number;
-    const entry = parseEntry(raw.entry, index);
+    const index = change.index as number;
+    const entry = parseEntry(change.entry, index);
     if (!entry) return undefined;
     changes.push({ index, entry });
     previousIndex = index;
   }
   return {
     version: SUBAGENT_TRANSCRIPT_VERSION,
-    runId: value.runId,
-    baseRevision: value.baseRevision,
-    revision: value.revision,
-    trimmed: value.trimmed,
-    entryCount: value.entryCount as number,
+    runId: record.runId,
+    baseRevision: record.baseRevision,
+    revision: record.revision,
+    trimmed: record.trimmed,
+    entryCount: record.entryCount as number,
     changes,
   };
 }
@@ -239,12 +229,13 @@ export function parseSubagentTranscriptUpdate(value: unknown): SubagentTranscrip
 export function parseSubagentTranscriptNotification(
   value: unknown,
 ): SubagentTranscriptNotification | undefined {
-  if (!isPlainRecord(value) || !hasOnlyKeys(value, ["streamId", "update"])) return undefined;
-  if (typeof value.streamId !== "string" || value.streamId.length === 0 || value.streamId.length > 256) {
+  const record = snapshotPlainDataRecord(value);
+  if (!record || !hasExactKeys(record, ["streamId", "update"])) return undefined;
+  if (typeof record.streamId !== "string" || record.streamId.length === 0 || record.streamId.length > 256) {
     return undefined;
   }
-  const update = parseSubagentTranscriptUpdate(value.update);
-  return update ? { streamId: value.streamId, update } : undefined;
+  const update = parseSubagentTranscriptUpdate(record.update);
+  return update ? { streamId: record.streamId, update } : undefined;
 }
 
 /**
@@ -290,9 +281,10 @@ export interface SubagentHistoryDetailWithTranscriptV1 extends SubagentHistoryDe
 export function parseSubagentHistoryDetailWithTranscript(
   value: unknown,
 ): SubagentHistoryDetailWithTranscriptV1 | undefined {
-  if (!isPlainRecord(value) || Reflect.ownKeys(value).length !== Object.keys(value).length) return undefined;
-  if (!Object.prototype.hasOwnProperty.call(value, "transcript")) return parseSubagentHistoryDetailV1(value);
-  const { transcript: rawTranscript, ...rest } = value;
+  const record = snapshotPlainDataRecord(value);
+  if (!record) return undefined;
+  if (!Object.prototype.hasOwnProperty.call(record, "transcript")) return parseSubagentHistoryDetailV1(record);
+  const { transcript: rawTranscript, ...rest } = record;
   const detail = parseSubagentHistoryDetailV1(rest);
   const transcript = parseSubagentTranscript(rawTranscript);
   if (!detail || !transcript || transcript.runId !== detail.snapshot.runId) return undefined;

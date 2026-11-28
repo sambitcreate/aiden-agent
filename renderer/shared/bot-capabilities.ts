@@ -4,6 +4,7 @@
  * fingerprints, credentials, and filesystem paths are main-process only.
  */
 
+import { hasExactKeys, isRecord } from "../../main/shared/guards.js";
 import { localComputerNoun, runtimeComputerPlatform } from "./computer-noun.js";
 
 export const BOT_CAPABILITY_STORE_VERSION = 3 as const;
@@ -191,15 +192,6 @@ export class BotCapabilityValidationError extends Error {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const allowed = new Set(keys);
-  return Object.keys(value).every((key) => allowed.has(key));
-}
-
 function hasWellFormedUtf16(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const unit = value.charCodeAt(index);
@@ -279,7 +271,7 @@ function parseUniqueOpaqueIds(value: unknown, maximum: number, label: string): s
 export function parseBotCustomSelection(value: unknown): BotCustomSelection {
   if (
     !isRecord(value) ||
-    !hasOnlyKeys(value, [
+    !hasExactKeys(value, [], [
       "providerId",
       "modelId",
       "fileScopeIds",
@@ -323,7 +315,7 @@ function validOptionalModelSelection(value: Record<string, unknown>, key: string
   const selection = value[key];
   return (
     isRecord(selection) &&
-    hasOnlyKeys(selection, ["providerId", "modelId"]) &&
+    hasExactKeys(selection, [], ["providerId", "modelId"]) &&
     Object.keys(selection).length === 2 &&
     isBoundedBotText(selection.providerId, BOT_CAPABILITY_LIMITS.providerIdChars) &&
     isBoundedBotText(selection.modelId, BOT_CAPABILITY_LIMITS.modelIdChars)
@@ -346,7 +338,7 @@ export function parseBotAccessUpdate(value: unknown): BotAccessUpdate {
     const hasProviderId = Object.prototype.hasOwnProperty.call(value, "providerId");
     const hasModelId = Object.prototype.hasOwnProperty.call(value, "modelId");
     if (
-      !hasOnlyKeys(value, [
+      !hasExactKeys(value, [], [
         "accessMode",
         "catalogRevision",
         "confirmedForeground",
@@ -383,7 +375,7 @@ export function parseBotAccessUpdate(value: unknown): BotAccessUpdate {
   }
   if (
     value.accessMode !== "custom" ||
-    !hasOnlyKeys(value, ["accessMode", "catalogRevision", "custom", "visionModel"]) ||
+    !hasExactKeys(value, [], ["accessMode", "catalogRevision", "custom", "visionModel"]) ||
     !validOptionalModelSelection(value, "visionModel")
   ) {
     throw new BotCapabilityValidationError("Invalid Bot access update.");
@@ -404,7 +396,7 @@ export function parseBotChatAccessUpdate(value: unknown): BotChatAccessUpdate {
   }
   if (value.mode === "inherit") {
     if (
-      !hasOnlyKeys(value, ["mode", "catalogRevision", "expectedBotPolicyRevision"]) ||
+      !hasExactKeys(value, [], ["mode", "catalogRevision", "expectedBotPolicyRevision"]) ||
       Object.keys(value).length !== 3
     ) {
       throw new BotCapabilityValidationError("Invalid inherited Bot chat access update.");
@@ -420,7 +412,7 @@ export function parseBotChatAccessUpdate(value: unknown): BotChatAccessUpdate {
   }
   if (
     value.mode !== "custom" ||
-    !hasOnlyKeys(value, ["mode", "catalogRevision", "expectedBotPolicyRevision", "custom"]) ||
+    !hasExactKeys(value, [], ["mode", "catalogRevision", "expectedBotPolicyRevision", "custom"]) ||
     Object.keys(value).length !== 4
   ) {
     throw new BotCapabilityValidationError("Invalid Custom Bot chat access update.");
@@ -439,7 +431,7 @@ export function parseBotChatAccessUpdate(value: unknown): BotChatAccessUpdate {
 export function parseBotNoticeAcknowledgement(value: unknown): BotNoticeAcknowledgement {
   if (
     !isRecord(value) ||
-    !hasOnlyKeys(value, ["version", "decision", "confirmedForeground"]) ||
+    !hasExactKeys(value, [], ["version", "decision", "confirmedForeground"]) ||
     Object.keys(value).length !== 3 ||
     value.version !== BOT_FULL_ACCESS_NOTICE_VERSION ||
     (value.decision !== "continue_full" && value.decision !== "customize_first") ||

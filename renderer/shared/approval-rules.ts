@@ -18,6 +18,7 @@
 //
 // Shared by the main process (store, resolver, IPC) and the renderer (page).
 
+import { hasExactKeys } from "../../main/shared/guards.js";
 import { BOT_RULE_TEXT_MAX_CHARS, normalizeBotRuleText } from "./bot-rules.js";
 
 export const APPROVAL_RULE_DECISIONS = ["allow", "ask", "block"] as const;
@@ -486,10 +487,6 @@ export const APPROVAL_RULE_CHANNELS = {
 
 const MAC_GRANTS = new Set(["shell", "files", "computer-use"]);
 
-function exactKeys(record: Record<string, unknown>, keys: readonly string[]): boolean {
-  return Object.keys(record).every((key) => keys.includes(key));
-}
-
 /** Strict parse of a row reference from the renderer. */
 export function parseApprovalRuleRowRef(value: unknown): ApprovalRuleRowRef {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid rule.");
@@ -497,33 +494,33 @@ export function parseApprovalRuleRowRef(value: unknown): ApprovalRuleRowRef {
   switch (record.source) {
     case "rule":
     case "workspace-exact":
-      if (exactKeys(record, ["source", "id"]) && typeof record.id === "string" && RULE_ID.test(record.id)) {
+      if (hasExactKeys(record, [], ["source", "id"]) && typeof record.id === "string" && RULE_ID.test(record.id)) {
         return { source: record.source, id: record.id };
       }
       break;
     case "bot-allow":
     case "bot-folder":
-      if (exactKeys(record, ["source", "botId", "entryId"]) && validId(record.botId) && validId(record.entryId)) {
+      if (hasExactKeys(record, [], ["source", "botId", "entryId"]) && validId(record.botId) && validId(record.entryId)) {
         return { source: record.source, botId: record.botId, entryId: record.entryId };
       }
       break;
     case "bot-rule":
-      if (exactKeys(record, ["source", "botId", "ruleId"]) && validId(record.botId) && validId(record.ruleId)) {
+      if (hasExactKeys(record, [], ["source", "botId", "ruleId"]) && validId(record.botId) && validId(record.ruleId)) {
         return { source: "bot-rule", botId: record.botId, ruleId: record.ruleId };
       }
       break;
     case "workspace-mac":
-      if (exactKeys(record, ["source", "workspaceId", "grant"]) && validId(record.workspaceId) && MAC_GRANTS.has(record.grant as string)) {
+      if (hasExactKeys(record, [], ["source", "workspaceId", "grant"]) && validId(record.workspaceId) && MAC_GRANTS.has(record.grant as string)) {
         return { source: "workspace-mac", workspaceId: record.workspaceId, grant: record.grant as "shell" | "files" | "computer-use" };
       }
       break;
     case "bot-chat-mac":
-      if (exactKeys(record, ["source", "botId", "grantId"]) && validId(record.botId) && typeof record.grantId === "string" && RULE_ID.test(record.grantId)) {
+      if (hasExactKeys(record, [], ["source", "botId", "grantId"]) && validId(record.botId) && typeof record.grantId === "string" && RULE_ID.test(record.grantId)) {
         return { source: "bot-chat-mac", botId: record.botId, grantId: record.grantId };
       }
       break;
     case "computer-use-everywhere":
-      if (exactKeys(record, ["source"])) return { source: "computer-use-everywhere" };
+      if (hasExactKeys(record, [], ["source"])) return { source: "computer-use-everywhere" };
       break;
   }
   throw new Error("Invalid rule.");
@@ -532,7 +529,7 @@ export function parseApprovalRuleRowRef(value: unknown): ApprovalRuleRowRef {
 export function parseApprovalRuleAddInput(value: unknown): ApprovalRuleAddInput {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid rule.");
   const record = value as Record<string, unknown>;
-  if (!exactKeys(record, ["target", "decision", "owner", "handOff", "label"])) throw new Error("Invalid rule.");
+  if (!hasExactKeys(record, [], ["target", "decision", "owner", "handOff", "label"])) throw new Error("Invalid rule.");
   const target = parseApprovalRuleTarget(record.target);
   const decision = parseApprovalRuleDecision(record.decision);
   if (!target) throw new Error(target === undefined && (record.target as { kind?: unknown } | undefined)?.kind === "text"
@@ -557,7 +554,7 @@ export function parseApprovalRuleAddInput(value: unknown): ApprovalRuleAddInput 
 export function parseApprovalRuleChangeInput(value: unknown): ApprovalRuleChangeInput {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid rule.");
   const record = value as Record<string, unknown>;
-  if (!exactKeys(record, ["ref", "decision", "handOff"])) throw new Error("Invalid rule.");
+  if (!hasExactKeys(record, [], ["ref", "decision", "handOff"])) throw new Error("Invalid rule.");
   const ref = parseApprovalRuleRowRef(record.ref);
   const decision = record.decision === undefined ? undefined : parseApprovalRuleDecision(record.decision);
   if (record.decision !== undefined && !decision) throw new Error("Invalid rule.");

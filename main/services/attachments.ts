@@ -5,6 +5,7 @@
 import * as fs from "fs/promises";
 import { constants as fsConstants } from "node:fs";
 import * as path from "path";
+import { hasExactKeys } from "../shared/guards.js";
 import type { Attachment } from "./types.js";
 import {
   type CanonicalRasterImageMimeType,
@@ -132,19 +133,6 @@ function positiveSafeInteger(value: number, name: string): number {
     throw new Error(`Invalid attachment admission ${name}.`);
   }
   return value;
-}
-
-function hasExactObjectKeys(
-  value: Record<string, unknown>,
-  expected: ReadonlySet<string>,
-): boolean {
-  let count = 0;
-  for (const key in value) {
-    if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
-    count += 1;
-    if (count > expected.size || !expected.has(key)) return false;
-  }
-  return count === expected.size;
 }
 
 /** Process-owned accounting for renderer-triggered picker, drop, and clipboard ingestion. */
@@ -625,7 +613,7 @@ export function validateClipboardAttachmentPayload(
     }
     const record = candidate as Record<string, unknown>;
     if (
-      !hasExactObjectKeys(record, CLIPBOARD_IMAGE_KEYS) ||
+      !hasExactKeys(record, CLIPBOARD_IMAGE_KEYS) ||
       !isCanonicalRasterImageMimeType(record.mimeType) ||
       !(record.bytes instanceof Uint8Array) ||
       record.bytes.byteLength === 0 ||

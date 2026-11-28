@@ -12,6 +12,7 @@
  * result, including the hinge angle the 3D viewer can render.
  */
 import * as React from "react";
+import { isRecord } from "../../main/shared/guards.js";
 import type { DeviceStreamGrant } from "../shared/devices";
 import { deviceHubUrl } from "./device-stream";
 
@@ -30,9 +31,6 @@ export const ANDROID_FOLD_TIMEOUT_MS = 12_000;
 export const ANDROID_FOLD_TIMEOUT_MESSAGE = "Fold command timed out.";
 
 const POSTURES: readonly AndroidFoldReportedPosture[] = ["closed", "half_opened", "opened", "flipped", "tent"];
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 export function parseAndroidFold(payload: unknown): AndroidFoldState {
   if (!isRecord(payload) || payload.ok !== true || !isRecord(payload.fold)) {

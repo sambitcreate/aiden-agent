@@ -1,3 +1,4 @@
+import { isRecord } from "../../main/shared/guards.js";
 import { isHtmlArtifactTitle } from "./generative-ui.js";
 import { AIDEN_UI_LIMITS, type ChatUiVisualV1 } from "./aiden-ui/types.js";
 import { isWireSafeKey, parseAidenUiState, parseChatUiVisualV1 } from "./aiden-ui/visual.js";
@@ -215,10 +216,6 @@ const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const ARTIFACT_ID = /^[A-Za-z0-9_-]{1,64}$/u;
 const WORKSPACE_ID = /^[A-Za-z0-9_-]{1,128}$/u;
 const RESERVED_NAMES = new Set(["__proto__", "constructor", "prototype"]);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 /** Format, default-ignorable and bidi-control characters: zero-width marks, joiners, overrides, BOM. */
 const INVISIBLE = /[\p{Cf}\p{Default_Ignorable_Code_Point}\p{Bidi_Control}]/u;

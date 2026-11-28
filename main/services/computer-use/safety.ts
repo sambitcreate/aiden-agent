@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isRecord } from "../../shared/guards.js";
 import type { ComputerUseAction, ComputerUseArgs } from "./schema.js";
 
 export const COMPUTER_USE_READ_ONLY_ACTIONS: ReadonlySet<ComputerUseAction> = new Set([
@@ -158,12 +159,6 @@ const ACTION_KEYS: Readonly<Record<ComputerUseAction, ReadonlySet<string>>> = {
 const MAX_VERIFY_PREDICATES = 8;
 const FRAME_LIMIT = 100_000;
 
-function plainObject(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function onlyKeys(value: Record<string, unknown>, allowed: readonly string[], name: string): void {
   for (const key of Object.keys(value)) {
     if (!allowed.includes(key)) fail("invalid_predicate", `${name}.${key} is not supported.`);
@@ -195,14 +190,14 @@ function optionalBoolean(
 /** Mirror cua-driver 0.36.0 `verify_state` predicate validation (`expectation.rs`). */
 function normalizeVerifyPredicate(value: unknown, index: number): Record<string, unknown> {
   const name = `expect[${index}]`;
-  const predicate = plainObject(value);
+  const predicate = isRecord(value) ? value : null;
   if (!predicate) fail("invalid_predicate", `${name} must be an object.`);
   onlyKeys(predicate, ["element", "window"], name);
   if (own(predicate, "element") === own(predicate, "window")) {
     fail("invalid_predicate", `${name} needs exactly one of element or window.`);
   }
   if (own(predicate, "element")) {
-    const element = plainObject(predicate.element);
+    const element = isRecord(predicate.element) ? predicate.element : null;
     if (!element) fail("invalid_predicate", `${name}.element must be an object.`);
     onlyKeys(
       element,
@@ -234,13 +229,13 @@ function normalizeVerifyPredicate(value: unknown, index: number): Record<string,
     optionalBoolean(element, "selected", `${name}.element`, result);
     return { element: result };
   }
-  const window = plainObject(predicate.window);
+  const window = isRecord(predicate.window) ? predicate.window : null;
   if (!window) fail("invalid_predicate", `${name}.window must be an object.`);
   onlyKeys(window, ["exists", "bounds"], `${name}.window`);
   const result: Record<string, unknown> = {};
   optionalBoolean(window, "exists", `${name}.window`, result);
   if (own(window, "bounds")) {
-    const bounds = plainObject(window.bounds);
+    const bounds = isRecord(window.bounds) ? window.bounds : null;
     if (!bounds) fail("invalid_predicate", `${name}.window.bounds must be an object.`);
     onlyKeys(bounds, ["x", "y", "width", "height", "tolerance_px"], `${name}.window.bounds`);
     const normalized: Record<string, unknown> = {};

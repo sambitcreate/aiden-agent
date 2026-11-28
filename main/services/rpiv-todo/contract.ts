@@ -1,4 +1,6 @@
 import { types as utilTypes } from "node:util";
+import { hasExactKeys } from "../../shared/guards.js";
+import { snapshotPlainRecord } from "../../shared/plain-record.js";
 
 export const TODO_TOOL_NAME = "todo";
 export const TODO_EXTENSION_ID = "aiden.productivity.todo";
@@ -109,40 +111,6 @@ export function todoUtf8Bytes(value: string): number {
   return Buffer.byteLength(value, "utf8");
 }
 
-function plainRecord(value: unknown): Record<string, unknown> | undefined {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    Array.isArray(value) ||
-    utilTypes.isProxy(value)
-  ) {
-    return undefined;
-  }
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return undefined;
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  const result: Record<string, unknown> = {};
-  for (const key of Reflect.ownKeys(descriptors)) {
-    if (typeof key !== "string") return undefined;
-    const descriptor = descriptors[key];
-    if (!descriptor || descriptor.enumerable !== true || !("value" in descriptor)) return undefined;
-    result[key] = descriptor.value;
-  }
-  return result;
-}
-
-function hasExactKeys(
-  value: Record<string, unknown>,
-  required: readonly string[],
-  optional: readonly string[] = [],
-): boolean {
-  const keys = Object.keys(value);
-  return (
-    required.every((key) => key in value) &&
-    keys.every((key) => required.includes(key) || optional.includes(key))
-  );
-}
-
 function cloneTodoJson(
   value: unknown,
   budget: { nodes: number; seen: Set<object> },
@@ -180,11 +148,16 @@ function cloneTodoJson(
         return cloneTodoJson(descriptor.value, budget, depth + 1);
       });
     }
-    const record = plainRecord(value);
+    const record = snapshotPlainRecord(value);
     if (!record) throw new TodoSnapshotError();
     const clone: Record<string, TodoJson> = {};
     for (const key of Object.keys(record).sort()) {
-      clone[key] = cloneTodoJson(record[key], budget, depth + 1);
+      Object.defineProperty(clone, key, {
+        value: cloneTodoJson(record[key], budget, depth + 1),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
     }
     return clone;
   } finally {
@@ -194,7 +167,7 @@ function cloneTodoJson(
 
 export function parseTodoMetadata(value: unknown): Record<string, TodoJson> | undefined {
   if (value === undefined) return undefined;
-  const record = plainRecord(value);
+  const record = snapshotPlainRecord(value);
   if (!record) throw new TodoSnapshotError("Todo metadata must be a plain JSON object.");
   const clone = cloneTodoJson(record, { nodes: 0, seen: new Set() });
   if (Array.isArray(clone) || clone === null || typeof clone !== "object") {
@@ -236,7 +209,7 @@ function parseDependencyList(value: unknown): number[] | undefined {
 }
 
 function parseTodoTask(value: unknown): TodoTask {
-  const task = plainRecord(value);
+  const task = snapshotPlainRecord(value);
   if (
     !task ||
     !hasExactKeys(
@@ -290,7 +263,7 @@ function assertTaskGraph(tasks: readonly TodoTask[]): void {
 }
 
 export function validateTodoState(value: unknown): TodoState {
-  const state = plainRecord(value);
+  const state = snapshotPlainRecord(value);
   if (!state || !hasExactKeys(state, ["tasks", "nextId"]) || !Array.isArray(state.tasks)) {
     throw new TodoSnapshotError();
   }
@@ -308,7 +281,7 @@ export function validateTodoState(value: unknown): TodoState {
 }
 
 export function parseTodoToolDetails(value: unknown): TodoToolDetailsV1 {
-  const details = plainRecord(value);
+  const details = snapshotPlainRecord(value);
   if (
     !details ||
     !hasExactKeys(details, ["kind", "version", "action", "tasks", "nextId"], ["error"]) ||

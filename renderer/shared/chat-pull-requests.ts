@@ -3,6 +3,8 @@
 // linked to a chat; the link is never the identity of a chat, workspace,
 // branch, or worktree.
 
+import { isRecord } from "../../main/shared/guards.js";
+
 export const CHAT_PULL_REQUEST_SCHEMA_VERSION = 1;
 export const MAX_CHAT_PULL_REQUEST_LINKS = 64;
 export const MAX_CHAT_PULL_REQUEST_STRING_CHARS = 2_048;
@@ -156,10 +158,6 @@ const GITHUB_REPO_PATTERN = /^[a-z0-9._-]{1,100}$/u;
 const HOSTNAME_PATTERN = /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/u;
 const BRANCH_PATTERN = /^[^\s~^:?*[\]\\]{1,256}$/u;
 const SHA_PATTERN = /^[0-9a-f]{4,64}$/iu;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function boundedText(value: unknown, maxLength: number): string | undefined {
   if (typeof value !== "string") return undefined;

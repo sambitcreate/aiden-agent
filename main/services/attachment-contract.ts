@@ -1,4 +1,5 @@
 import type { Attachment } from "./types.js";
+import { hasExactKeys } from "../shared/guards.js";
 import { isImageSha256 } from "./chat-image-store.js";
 import {
   imageBytesMatchMime,
@@ -64,16 +65,6 @@ function boundedString(
     throw new Error(`Invalid attachment ${field}.`);
   }
   return value;
-}
-
-function hasExactKeys(value: Record<string, unknown>, expected: ReadonlySet<string>): boolean {
-  let count = 0;
-  for (const key in value) {
-    if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
-    count += 1;
-    if (count > expected.size || !expected.has(key)) return false;
-  }
-  return count === expected.size;
 }
 
 function decodedBase64Prefix(value: string): Buffer {

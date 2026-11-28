@@ -2,6 +2,7 @@
 // on-device speech worker (Electron utility process or CLI worker thread).
 // Audio crosses as binary PCM16 (or Ogg/Opus bytes) via structured clone.
 
+import { isRecord } from "../shared/guards.js";
 import type { SpeechModelFamily, SpeechModelSpec } from "./local-speech-catalog.js";
 
 export const LOCAL_SPEECH_PROTOCOL_VERSION = 2 as const;
@@ -73,10 +74,6 @@ const FAILURE_CODES: readonly LocalSpeechFailureCode[] = [
   "invalid-request",
 ];
 const LANGUAGE = /^[a-z]{2,3}$/;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;

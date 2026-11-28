@@ -3,6 +3,7 @@ import { capturePeerProjectRoot, assertPeerProjectRoot, createPeerProjectFile } 
 import { peerProjectGit } from "./peer-project-source.js";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
+import { hasExactKeys, isRecord } from "../shared/guards.js";
 import { parsePeerProjectClone, PEER_PROJECT_CLONE_TIMEOUT_MS, type PeerProjectCloneRequest } from "../../renderer/shared/peer-project-clone.js";
 import { parseCloneUrl } from "../../renderer/shared/workspace-intake.js";
 import type { WorkspaceIntakeService } from "./workspace-intake.js";
@@ -40,24 +41,6 @@ export interface AidenRemoteWorkspaceProjection {
 }
 
 type WorkspaceApplicationService = ReturnType<typeof createWorkspaceApplicationService>;
-
-function ownRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function exactKeys(
-  record: Record<string, unknown>,
-  required: readonly string[],
-  optional: readonly string[] = [],
-): boolean {
-  const allowed = new Set([...required, ...optional]);
-  return (
-    required.every((key) => Object.prototype.hasOwnProperty.call(record, key)) &&
-    Object.keys(record).every((key) => allowed.has(key))
-  );
-}
 
 function boundedString(value: unknown, maximum: number): value is string {
   return typeof value === "string" && value.length > 0 && [...value].length <= maximum;
@@ -128,7 +111,7 @@ function parseCreate(value: unknown):
   | { mode: "scratch" }
   | { mode: "selected-folder"; selection: string; name?: string }
   | PeerProjectCloneRequest {
-  const record = ownRecord(value);
+  const record = isRecord(value) ? value : null;
   if (!record || typeof record.mode !== "string") {
     throw new AidenRemoteServiceError("invalid_request", "The workspace creation request is invalid.", 400);
   }
@@ -137,20 +120,20 @@ function parseCreate(value: unknown):
     catch { throw new AidenRemoteServiceError("invalid_request", "The project clone or environment file selection is invalid.", 400); }
   }
   if (record.mode === "folderless") {
-    if (!exactKeys(record, ["mode", "name"]) || !boundedString(record.name, 120)) {
+    if (!hasExactKeys(record, ["mode", "name"]) || !boundedString(record.name, 120)) {
       throw new AidenRemoteServiceError("invalid_request", "A folderless workspace requires a valid name.", 400);
     }
     return { mode: "folderless", name: record.name.trim() };
   }
   if (record.mode === "scratch") {
-    if (!exactKeys(record, ["mode"])) {
+    if (!hasExactKeys(record, ["mode"])) {
       throw new AidenRemoteServiceError("invalid_request", "The scratch workspace request is invalid.", 400);
     }
     return { mode: "scratch" };
   }
   if (record.mode === "selected-folder") {
     if (
-      !exactKeys(record, ["mode", "selection"], ["name"]) ||
+      !hasExactKeys(record, ["mode", "selection"], ["name"]) ||
       typeof record.selection !== "string" ||
       !/^sel_[A-Za-z0-9_-]{43}$/u.test(record.selection) ||
       (record.name !== undefined && !boundedString(record.name, 120))
@@ -173,10 +156,10 @@ function parsePatch(value: unknown): {
   approvalMode?: "ask";
   clearMacGrants?: true;
 } {
-  const record = ownRecord(value);
+  const record = isRecord(value) ? value : null;
   if (
     !record ||
-    !exactKeys(record, ["confirmedForeground"], ["name", "permission", "memoryEnabled"]) ||
+    !hasExactKeys(record, ["confirmedForeground"], ["name", "permission", "memoryEnabled"]) ||
     record.confirmedForeground !== true ||
     (record.name === undefined && record.permission === undefined && record.memoryEnabled === undefined) ||
     (record.name !== undefined && !boundedString(record.name, 120)) ||

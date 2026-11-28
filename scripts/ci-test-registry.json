@@ -347,6 +347,7 @@
         "main/services/workspace-schedule-restoration.test.ts",
         "main/shared/bounded-body.test.ts",
         "main/shared/guards.test.ts",
+        "main/shared/plain-record.test.ts",
         "main/shared/path-containment.test.ts",
         "main/shared/redaction.test.ts",
         "main/shared/process-group.test.ts",

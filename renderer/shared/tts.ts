@@ -4,6 +4,8 @@
 // renderer. No Electron, no SDK, no secrets. Providers and credentials are
 // referenced only through opaque main-owned identifiers.
 
+import { hasExactKeys, isPlainObject } from "../../main/shared/guards.js";
+
 export type TtsModelId = "gemini-3.8-flash-tts" | "gemini-3.8-flash-lite-tts";
 
 export const TTS_MODEL_IDS: readonly TtsModelId[] = [
@@ -55,19 +57,6 @@ export function defaultTtsSettings(): TtsSettingsV1 {
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
-  );
-}
-
-function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  return Object.keys(value).every((key) => keys.includes(key));
-}
-
 /**
  * Canonicalize a persisted/patched settings document onto a valid v1 shape.
  * Unknown fields are ignored (fail closed); unknown enum values fall back to
@@ -75,10 +64,10 @@ function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): b
  */
 export function normalizeTtsSettings(value: unknown): TtsSettingsV1 {
   const defaults = defaultTtsSettings();
-  if (!isRecord(value)) return defaults;
-  const delivery = isRecord(value.delivery) ? value.delivery : {};
-  const reading = isRecord(value.reading) ? value.reading : {};
-  const voice = isRecord(value.selectedVoice) ? value.selectedVoice : null;
+  if (!isPlainObject(value)) return defaults;
+  const delivery = isPlainObject(value.delivery) ? value.delivery : {};
+  const reading = isPlainObject(value.reading) ? value.reading : {};
+  const voice = isPlainObject(value.selectedVoice) ? value.selectedVoice : null;
   return {
     version: 1,
     enabled: value.enabled === true,
@@ -139,11 +128,9 @@ export function parseTtsSettingsPatch(value: unknown): {
   delivery?: { preset: TtsDeliveryPreset; note: string };
   reading?: { inlineCode: boolean; fencedCode: boolean };
 } {
-  if (!isRecord(value)) throw new Error("Invalid TTS settings patch.");
-  for (const key of Object.keys(value)) {
-    if (!TTS_SETTINGS_PATCH_KEYS.has(key)) {
-      throw new Error("Invalid TTS settings patch field.");
-    }
+  if (!isPlainObject(value)) throw new Error("Invalid TTS settings patch.");
+  if (!hasExactKeys(value, [], TTS_SETTINGS_PATCH_KEYS)) {
+    throw new Error("Invalid TTS settings patch field.");
   }
   const patch: Record<string, unknown> = {};
   if ("enabled" in value) {
@@ -163,8 +150,8 @@ export function parseTtsSettingsPatch(value: unknown): {
     if (value.selectedVoice !== null) {
       const voice = value.selectedVoice;
       if (
-        !isRecord(voice) ||
-        !hasOnlyKeys(voice, ["kind", "localVoiceId"]) ||
+        !isPlainObject(voice) ||
+        !hasExactKeys(voice, [], ["kind", "localVoiceId"]) ||
         (voice.kind !== "prebuilt" && voice.kind !== "prompted" && voice.kind !== "replicated") ||
         typeof voice.localVoiceId !== "string" ||
         voice.localVoiceId.length === 0 ||
@@ -182,8 +169,8 @@ export function parseTtsSettingsPatch(value: unknown): {
   if ("delivery" in value) {
     const delivery = value.delivery;
     if (
-      !isRecord(delivery) ||
-      !hasOnlyKeys(delivery, ["preset", "note"]) ||
+      !isPlainObject(delivery) ||
+      !hasExactKeys(delivery, [], ["preset", "note"]) ||
       (delivery.preset !== "neutral" &&
         delivery.preset !== "conversational" &&
         delivery.preset !== "calm") ||
@@ -199,8 +186,8 @@ export function parseTtsSettingsPatch(value: unknown): {
   if ("reading" in value) {
     const reading = value.reading;
     if (
-      !isRecord(reading) ||
-      !hasOnlyKeys(reading, ["inlineCode", "fencedCode"]) ||
+      !isPlainObject(reading) ||
+      !hasExactKeys(reading, [], ["inlineCode", "fencedCode"]) ||
       typeof reading.inlineCode !== "boolean" ||
       typeof reading.fencedCode !== "boolean"
     )
@@ -223,8 +210,8 @@ export interface TtsSourceRef {
 
 export function parseTtsSourceRef(value: unknown): TtsSourceRef {
   if (
-    !isRecord(value) ||
-    !hasOnlyKeys(value, ["chatId", "messageId", "sourceRevision"]) ||
+    !isPlainObject(value) ||
+    !hasExactKeys(value, [], ["chatId", "messageId", "sourceRevision"]) ||
     typeof value.chatId !== "string" ||
     value.chatId.length === 0 ||
     value.chatId.length > 200 ||
@@ -253,8 +240,8 @@ export interface TtsStartRequest {
 
 export function parseTtsStartRequest(value: unknown): TtsStartRequest {
   if (
-    !isRecord(value) ||
-    !hasOnlyKeys(value, ["requestId", "source", "settingsRevision"]) ||
+    !isPlainObject(value) ||
+    !hasExactKeys(value, [], ["requestId", "source", "settingsRevision"]) ||
     typeof value.requestId !== "string" ||
     value.requestId.length === 0 ||
     value.requestId.length > 128 ||

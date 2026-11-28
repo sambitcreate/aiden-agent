@@ -1,10 +1,8 @@
+import { isRecord } from "../shared/guards.js";
+
 /** Text blocks examined, and the longest text parsed, when looking for a serialized copy. */
 const MAX_TEXT_PARTS = 64;
 const MAX_TEXT_CHARS = 2_000_000;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 const MAX_EQUALITY_NODES = 20_000;
 

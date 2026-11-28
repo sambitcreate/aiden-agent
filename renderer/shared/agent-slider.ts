@@ -3,6 +3,7 @@
 // (settings normalization, provider remap, the settings patch), the renderer
 // and the CLI bundle, so it stays pure: no DOM, no Node APIs.
 
+import { isRecord } from "../../main/shared/guards.js";
 import { BOT_THINKING_LEVEL_LABELS } from "./bot-routine-models.js";
 import { MAX_MODEL_ID_CHARS, MAX_PROVIDER_ID_CHARS } from "./chat-message-contract.js";
 import {
@@ -46,10 +47,6 @@ function isForbiddenLabelCodePoint(codePoint: number): boolean {
     (codePoint >= 0x202a && codePoint <= 0x202e) ||
     (codePoint >= 0x2066 && codePoint <= 0x2069)
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 export type AgentSliderLabelProblem = "empty" | "too-long" | "control-characters";

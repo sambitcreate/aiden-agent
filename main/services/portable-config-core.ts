@@ -1,4 +1,5 @@
 import { validateLocalClassifierPreference } from "../../renderer/shared/local-classifier.js";
+import { isRecord } from "../shared/guards.js";
 import { validateMcpServerMetadata } from "../../renderer/shared/mcp-oauth-config.js";
 import { withoutRetiredMcpServers } from "../../renderer/shared/mcp-retired-servers.js";
 import { parseCustomModelOptions } from "../../renderer/shared/custom-model-options.js";
@@ -152,10 +153,6 @@ export const LEGACY_CONFIG_ARCHIVE_SUFFIX = ".pre-aiden-dir";
 
 export function emptyPortableConfig(): PortableConfigShape {
   return { providers: [], providerIdAliases: {}, mcpServers: [], skills: [] };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function isStringMap(value: unknown): value is Record<string, string> {

@@ -8,6 +8,7 @@ import { linkSync, unlinkSync, type Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { hasExactKeys, isRecord } from "../../shared/guards.js";
 
 export const SUBAGENT_PACKAGED_SOAK_ENV = "AIDEN_SUBAGENT_SOAK";
 export const SUBAGENT_PACKAGED_SOAK_CONTROL_SWITCH = "--aiden-subagent-soak-control";
@@ -86,15 +87,6 @@ export type SubagentPackagedSoakAction =
   | { kind: "renderer_stop" }
   | { kind: "main_navigate"; path: typeof SUBAGENT_PACKAGED_SOAK_NAVIGATION_PATH }
   | { kind: "normal_quit" };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value);
-  return actual.length === keys.length && actual.every((key) => keys.includes(key));
-}
 
 function nonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;

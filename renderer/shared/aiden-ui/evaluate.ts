@@ -1,3 +1,4 @@
+import { isRecord } from "../../../main/shared/guards.js";
 import { hasOwn } from "./own.js";
 import type { AidenUiExprV1 } from "./types.js";
 
@@ -31,10 +32,6 @@ class BudgetExceeded extends Error {}
 export function truthy(value: unknown): boolean {
   if (typeof value === "number") return value !== 0 && !Number.isNaN(value);
   return value !== undefined && value !== null && value !== false && value !== "";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function readMember(base: unknown, key: unknown): unknown {

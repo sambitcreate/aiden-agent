@@ -9,6 +9,7 @@
  * grows the drawer without limit. Android emulators show logcat in the same
  * buffer, from serve-emu's `/api/logcat` stream.
  */
+import { isRecord } from "../../main/shared/guards.js";
 import type { DeviceStreamGrant } from "../shared/devices";
 import { createSseParser } from "./device-foreground";
 import { deviceHubUrl } from "./device-stream";
@@ -25,9 +26,6 @@ export const DEVICE_EVENT_LOG_LIMIT = 500;
 /** History requested when the panel opens. */
 export const DEVICE_EVENT_LOG_SEED = 100;
 const MAX_TEXT = 512;
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const text = (value: unknown) => (typeof value === "string" ? value.slice(0, MAX_TEXT) : "");
 

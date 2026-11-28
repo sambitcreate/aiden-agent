@@ -1,3 +1,4 @@
+import { hasExactKeys, isRecord } from "../../main/shared/guards.js";
 import type { CompactionEngine } from "./compaction";
 import type { CommandId } from "./keybindings";
 import type { SettingsSection } from "./settings-section";
@@ -620,28 +621,12 @@ export const SLASH_COMMANDS = Object.freeze([
   }),
 ] satisfies readonly SlashCommandDefinition[]);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 const OPAQUE_SKILL_INVOCATION_ID = /^sk1_[A-Za-z0-9_-]{43}$/u;
 
 const UNSAFE_DISPLAY_CHARACTER = /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}]/u;
 
 function hasUnsafeDisplayCharacter(value: string): boolean {
   return UNSAFE_DISPLAY_CHARACTER.test(value);
-}
-
-function exactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
-  const expectedKeys = new Set(expected);
-  let count = 0;
-  for (const key in value) {
-    if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
-    count += 1;
-    if (count > expected.length || !expectedKeys.has(key)) return false;
-  }
-  if (count !== expected.length) return false;
-  return expected.every((key) => Object.prototype.hasOwnProperty.call(value, key));
 }
 
 export function normalizeSafeSkillText(
@@ -672,7 +657,7 @@ export function parseSkillInvocationV1(value: unknown): SkillInvocationV1 {
   if (!isRecord(value) || value.version !== 1 || !isSkillSource(value.source)) {
     throw new SkillInvocationError("invalid_reference", "Invalid skill invocation reference.");
   }
-  if (!exactKeys(value, ["displayName", "invocationId", "source", "version"])) {
+  if (!hasExactKeys(value, ["displayName", "invocationId", "source", "version"])) {
     throw new SkillInvocationError("invalid_reference", "Invalid skill invocation fields.");
   }
   if (!isOpaqueSkillInvocationId(value.invocationId)) {
@@ -696,7 +681,7 @@ export function parseSkillCatalogEntry(value: unknown): SkillCatalogEntry {
   }
   const expected = ["available", "description", "invocationId", "name", "source"];
   if (value.unavailableReason !== undefined) expected.push("unavailableReason");
-  if (!exactKeys(value, expected) || !isOpaqueSkillInvocationId(value.invocationId)) {
+  if (!hasExactKeys(value, expected) || !isOpaqueSkillInvocationId(value.invocationId)) {
     throw new SkillInvocationError("invalid_reference", "Invalid skill catalog fields.");
   }
   if (value.available && value.unavailableReason !== undefined) {
@@ -752,7 +737,7 @@ export function skillProvenance(name: string, source: SkillSource): SkillProvena
 
 export function parseSkillProvenanceV1(value: unknown): SkillProvenanceV1 | undefined {
   if (!isRecord(value) || value.version !== 1 || !isSkillSource(value.source)) return undefined;
-  if (!exactKeys(value, ["name", "source", "version"])) return undefined;
+  if (!hasExactKeys(value, ["name", "source", "version"])) return undefined;
   try {
     return skillProvenance(value.name as string, value.source);
   } catch {

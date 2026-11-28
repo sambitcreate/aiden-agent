@@ -1,3 +1,4 @@
+import { isRecord } from "../../../main/shared/guards.js";
 import { isHtmlArtifactTitle } from "../generative-ui.js";
 import {
   AIDEN_UI_CATALOG_VERSION,
@@ -39,10 +40,6 @@ export function isWireSafeKey(name: string): boolean {
   const normalized = name.replace(/[-_.\s]/gu, "").toLowerCase();
   if (PRIVATE_KEYS.has(normalized)) return false;
   return !PRIVATE_PREFIXES.some((prefix) => normalized.startsWith(prefix));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 /** Every object key reachable from `value` is wire-safe. */

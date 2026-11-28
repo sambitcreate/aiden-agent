@@ -1,6 +1,7 @@
 // Shared contracts and strict runtime parsers for the Floating Chat Starter
 // (Quick Chat) window and IPC bridge.
 
+import { isRecord } from "../../main/shared/guards.js";
 import type { HandoffQueuedMessage } from "./chat-handoff.js";
 
 export type QuickChatWindowMode = "starter" | "starter-popover" | "modal";
@@ -64,10 +65,6 @@ export function parseQuickChatDefaultPersistence(
     return value as QuickChatDefaultPersistence;
   }
   return undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function parseQuickChatWindowMode(value: unknown): QuickChatWindowMode {

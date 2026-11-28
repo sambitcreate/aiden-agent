@@ -8,6 +8,7 @@
 // credentials, other Bots, Bot messaging, the computer, approvals or hooks:
 // a Bot never widens its own powers from chat.
 
+import { isRecord } from "../../main/shared/guards.js";
 import {
   BOT_AVATAR_COLOR_LABELS,
   BOT_AVATAR_COLORS,
@@ -264,10 +265,6 @@ function boundedText(value: unknown, maximum: number, allowEmpty: boolean): stri
     if ((code < 0x20 && character !== "\n" && character !== "\r" && character !== "\t") || code === 0x7f) return undefined;
   }
   return trimmed;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 /**

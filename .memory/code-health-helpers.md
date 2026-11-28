@@ -3,7 +3,8 @@
 Branch `refactor/code-health-helpers` (2026-10). Audit findings MAIN-39 (dead code) and MAIN-40 (duplicated helpers).
 
 ## Shared helpers in `main/shared/`
-- `guards.ts`: `isRecord`, `hasExactKeys(record, required, optional)` (own keys only, no unknown keys).
+- `guards.ts` (Node-free, shared across `main/`, `renderer/` and CLI via relative `.js` imports): `isRecord`, `isPlainObject`, `snapshotPlainDataRecord` (enumerable own string data properties only, preserving `"__proto__"` via `Object.defineProperty`), `hasExactKeys(record, required, optional)` (own keys only, no unknown keys; accepts `Iterable<string>`).
+- `plain-record.ts` (Node-only): `isUnproxiedPlainObject`, `snapshotPlainRecord`, `snapshotExactPlainRecord` — pairs `node:util` `types.isProxy` rejection with `guards.ts` for durable/IPC boundaries. Enforced across `main/` and `renderer/` by `no-local-structural-guard` in `scripts/check-aiden-rules.mjs`.
 - `path-containment.ts`: `isPathInside(root, candidate, { allowRoot, pathApi })`, `assertPathInside`, async `resolveRealPathInside` (realpaths both sides, so symlink escapes are caught). Uses `path.relative`; rejects `..`, `../x` and absolute (cross-drive) results but accepts in-root names like `..cache`. Use `allowRoot: false` where the root itself must not be a target.
 - `redaction.ts`: `CREDENTIAL_TOKEN_PATTERNS` (one table), `redactCredentialTokens(text, placeholder)`, `redactUrlCredentials(text)` (userinfo and token-like query params). Callers keep their own placeholder and any local path or keyword rules.
 - `bounded-body.ts`: `readBoundedBody(response, { maxBytes, signal?, errors })`. Rejects a declared oversize and cancels; counts streamed bytes; rejects non-byte chunks; cancels on any error; releases the lock; optional abort race. Callers keep their own error types and messages; omit `errors.missingBody` to read a missing body as empty.
@@ -20,7 +21,6 @@ Branch `refactor/code-health-helpers` (2026-10). Audit findings MAIN-39 (dead co
 - `git.ts` path-containment sites and `managed-worktree-admission.ts` / `browser/files.ts` (they return relative paths with custom errors).
 - `advisor-context.ts` `redactAdvisorText`: vendored into the CLI with a drift test; the CLI bundle branch removes the vendor copy.
 - `web-search-response.ts` and `models-dev-cache-core.ts` bounded readers (provider-specific errors and abort semantics).
-- The remaining local `isRecord` copies outside web search.
 
 ## Dead code (MAIN-39)
 Removed unused exports with `npx knip` (not a dependency), checking imports, build scripts, IPC, preload, the CLI and `scripts/`. Kept on purpose: `parseAidenRemotePendingQuestionResponse` (protocol), `FORM_FILL_CONTEXT_BYTES`/`FORM_FILL_OPTION_BYTES` (Swift contract), `subagentBackgroundEnabled` (rollback flag), pi-vcc vendor, durable-jobs, and files owned by in-flight branches.

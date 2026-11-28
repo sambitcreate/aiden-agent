@@ -6,6 +6,8 @@
  * surfaces (MIT, see THIRD_PARTY_NOTICES.md).
  */
 
+import { isRecord } from "../../main/shared/guards.js";
+
 export interface DeviceTarget {
   hostId: string;
   deviceId: string;
@@ -169,10 +171,6 @@ export function pruneDismissedDeviceTabs(
   const live = new Set(sessions.map(deviceTabKey));
   const dismissed = tabs.dismissed.filter((key) => live.has(key));
   return dismissed.length === tabs.dismissed.length ? tabs : { ...tabs, dismissed };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function keyList(value: unknown): string[] {
