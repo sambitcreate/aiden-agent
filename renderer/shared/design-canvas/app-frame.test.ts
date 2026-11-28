@@ -6,6 +6,8 @@ import test from "node:test";
 import {
   APP_FRAME_ALLOW,
   APP_FRAME_SANDBOX,
+  appEdgeBounds,
+  appEdgeResize,
   appFrameBox,
   appFrameName,
   appSourcePath,
@@ -15,6 +17,7 @@ import {
   isAppSourcePath,
   parseAppFrameName,
   roundAppScale,
+  withAppViewport,
 } from "./app-frame.js";
 import { canDesignGuide, designMinSize, isDesignPrintable } from "./schema.js";
 import { parseDesignAppFrameEvent, parseDesignAppFrameMountResult } from "./app-frame-events.js";
@@ -182,4 +185,59 @@ test("parseDesignAppFrameMountResult accepts a loopback origin or a known error"
   assert.deepEqual(parseDesignAppFrameMountResult({ error: "too-many-frames" }), { error: "too-many-frames" });
   assert.deepEqual(parseDesignAppFrameMountResult({ error: "nope" }), { error: "unavailable" });
   assert.deepEqual(parseDesignAppFrameMountResult(undefined), { error: "unavailable" });
+});
+
+// ── 3c (S89, S92): edge drags change the viewport; the keep-scale viewport rule ──
+
+const WIDE = { x: 0, y: 0, w: 640, h: 436, viewport: { width: 1280, height: 800 }, scale: 0.5 };
+
+test("a right-edge drag changes the viewport width and keeps the scale", () => {
+  const next = appEdgeResize(WIDE, "right", { w: 590 }, 8000);
+  assert.deepEqual(next.viewport, { width: 1180, height: 800 });
+  assert.deepEqual({ x: next.x, y: next.y, w: next.w, h: next.h }, { x: 0, y: 0, w: 590, h: 436 });
+});
+
+test("a left-edge drag keeps the right edge fixed", () => {
+  const next = appEdgeResize({ ...WIDE, x: 100 }, "left", { x: 150, w: 590 }, 8000);
+  assert.equal(next.x + next.w, 740);
+  assert.equal(next.viewport.width, 1180);
+});
+
+test("a bottom-edge drag changes the height less the title row, and a top drag keeps the bottom", () => {
+  const bottom = appEdgeResize(WIDE, "bottom", { h: 336 }, 8000);
+  assert.deepEqual(bottom.viewport, { width: 1280, height: 600 });
+  assert.equal(bottom.h, 336);
+  const top = appEdgeResize({ ...WIDE, y: 50 }, "top", { y: 150, h: 336 }, 8000);
+  assert.equal(top.y + top.h, 50 + 436);
+});
+
+test("an edge drag stops at 200 and at the box limit", () => {
+  const narrow = appEdgeResize({ ...WIDE, x: 100 }, "left", { x: 700, w: 10 }, 8000);
+  assert.equal(narrow.viewport.width, 200);
+  assert.equal(narrow.w, 100);
+  assert.equal(narrow.x + narrow.w, 740, "the right edge stays put past the clamp");
+  const big = { x: 0, y: 0, w: 2560, h: 1636, viewport: { width: 1280, height: 800 }, scale: 2 };
+  const wide = appEdgeResize(big, "right", { w: 9000 }, 8000);
+  assert.equal(wide.viewport.width, 4000);
+  assert.ok(wide.w <= 8000);
+  const tall = appEdgeResize(big, "bottom", { h: 9000 }, 8000);
+  assert.ok(tall.h <= 8000 && tall.viewport.height <= 4000);
+  assert.equal(tall.viewport.height, Math.floor((8000 - DESIGN_FRAME_HEADER_PX) / 2));
+});
+
+test("edge bounds match the viewport limits", () => {
+  assert.deepEqual(appEdgeBounds(0.5, 10, 8000), { minWidth: 100, maxWidth: 2000, minHeight: 136, maxHeight: 2036 });
+  // A large scale meets the box limit before the viewport's.
+  assert.deepEqual(appEdgeBounds(2, 10, 8000), { minWidth: 400, maxWidth: 8000, minHeight: 436, maxHeight: 8000 });
+});
+
+test("withAppViewport keeps the scale when the box fits and shrinks it when not", () => {
+  const kept = withAppViewport({ viewport: { width: 1280, height: 800 }, scale: 0.5 }, { width: 768, height: 1024 }, 8000);
+  assert.deepEqual(kept, { viewport: { width: 768, height: 1024 }, scale: 0.5, w: 384, h: 512 + DESIGN_FRAME_HEADER_PX });
+  const shrunk = withAppViewport({ viewport: { width: 1280, height: 800 }, scale: 2 }, { width: 4000, height: 4000 }, 8000);
+  assert.ok(shrunk.scale < 2);
+  assert.ok(shrunk.w <= 8000 && shrunk.h <= 8000);
+  assert.deepEqual({ w: shrunk.w, h: shrunk.h }, appFrameBox({ width: 4000, height: 4000 }, shrunk.scale));
+  // A frame with no scale yet draws at 0.5.
+  assert.equal(withAppViewport({}, { width: 390, height: 844 }, 8000).scale, 0.5);
 });

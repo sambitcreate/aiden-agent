@@ -82,6 +82,81 @@ test("a resize is clamped to 40-8000 px on each side", () => {
   assert.deepEqual(box(byId(small, "a")), { x: 120, y: 140, w: 40, h: 8000 });
 });
 
+// ── 3c (S89): an edge reflows, a corner scales ──
+
+const liveApp = (overrides: Partial<DesignFrame> = {}) =>
+  canvas(frame("app", { kind: "app", appRoot: ".", route: "/pricing", viewport: { width: 1280, height: 800 }, scale: 0.5, x: 1000, w: 640, h: 436, ...overrides }));
+
+test("an app frame's edge resize changes its viewport and keeps its scale", () => {
+  const next = applyNodeChanges(
+    liveApp(),
+    [{ type: "dimensions", id: "app", dimensions: { width: 590, height: 436 }, resizing: true, setAttributes: true }],
+    new Map([["app", "right"]]),
+  );
+  const resized = byId(next, "app")!;
+  assert.deepEqual(resized.viewport, { width: 1180, height: 800 });
+  assert.equal(resized.scale, 0.5);
+  assert.deepEqual(box(resized), { x: 1000, y: 0, w: 590, h: 436 });
+});
+
+test("an app frame's corner resize still scales: the corner mode and no map both match today's call", () => {
+  const change = [{ type: "dimensions" as const, id: "app", dimensions: { width: 800, height: 536 }, resizing: true, setAttributes: true }];
+  const today = applyNodeChanges(liveApp(), change);
+  assert.equal(byId(today, "app")!.scale, 0.625);
+  assert.deepEqual(byId(today, "app")!.viewport, { width: 1280, height: 800 });
+  assert.deepEqual(applyNodeChanges(liveApp(), change, new Map([["app", "corner"]])), today);
+  assert.deepEqual(applyNodeChanges(liveApp(), change, new Map()), today);
+  // A mode for another frame changes nothing here.
+  assert.deepEqual(applyNodeChanges(liveApp(), change, new Map([["other", "right"]])), today);
+});
+
+test("a left-edge batch of position and dimensions keeps the right edge, even past the clamp", () => {
+  const next = applyNodeChanges(
+    liveApp(),
+    [
+      { type: "position", id: "app", position: { x: 1600, y: 0 } },
+      { type: "dimensions", id: "app", dimensions: { width: 40, height: 436 }, resizing: true, setAttributes: true },
+    ],
+    new Map([["app", "left"]]),
+  );
+  const resized = byId(next, "app")!;
+  assert.equal(resized.viewport!.width, 200);
+  assert.equal(resized.w, 100);
+  assert.equal(resized.x, 1000 + 640 - 100);
+  assert.equal(resized.scale, 0.5);
+});
+
+test("the final resizing:false change in edge mode keeps the scale", () => {
+  const modes = new Map([["app", "left" as const]]);
+  const dragged = applyNodeChanges(
+    liveApp(),
+    [
+      { type: "position", id: "app", position: { x: 1600, y: 0 } },
+      { type: "dimensions", id: "app", dimensions: { width: 40, height: 436 }, resizing: true, setAttributes: true },
+    ],
+    modes,
+  );
+  // xyflow ends with the last size it computed, and no position.
+  const ended = applyNodeChanges(dragged, [{ type: "dimensions", id: "app", dimensions: { width: 40, height: 436 }, resizing: false }], modes);
+  const final = byId(ended, "app")!;
+  assert.equal(final.scale, 0.5);
+  assert.deepEqual(final.viewport, { width: 200, height: 800 });
+  assert.equal(final.x + final.w, 1640, "the right edge is where it started");
+});
+
+test("a viewport change that rounds to the same box is still saved", () => {
+  const modes = new Map([["app", "right" as const]]);
+  const quarter = liveApp({ scale: 0.25, w: 320, h: 236 });
+  // 320.1 / 0.25 rounds back to 1280: nothing changed, so the same document comes back.
+  const same = applyNodeChanges(quarter, [{ type: "dimensions", id: "app", dimensions: { width: 320.1, height: 236 }, resizing: true, setAttributes: true }], modes);
+  assert.equal(same, quarter);
+  // 320.2 / 0.25 is 1281: the box still rounds to 320, but the viewport moved.
+  const moved = applyNodeChanges(quarter, [{ type: "dimensions", id: "app", dimensions: { width: 320.2, height: 236 }, resizing: true, setAttributes: true }], modes);
+  assert.notEqual(moved, quarter);
+  assert.equal(byId(moved, "app")!.w, 320);
+  assert.equal(byId(moved, "app")!.viewport!.width, 1281);
+});
+
 test("a corner resize of a live app frame keeps its aspect: the width sets the scale, the viewport stays", () => {
   const app = canvas(
     frame("app", { kind: "app", appRoot: ".", route: "/pricing", viewport: { width: 1280, height: 800 }, scale: 0.5, w: 640, h: 436 }),

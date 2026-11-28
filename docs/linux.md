@@ -77,6 +77,11 @@ without a usable FUSE mount can still use AppImage's extraction fallback:
 - `tar` for on-device speech-model installation and `openssl` only when the
   optional nearby Aiden On The Go listener creates its local TLS identity.
 - Tailscale only when the optional private-tailnet remote route is selected.
+- `gio` (GLib's `libglib2.0-bin` on Debian and Ubuntu, `glib2` on Fedora and
+  RHEL) only for design mode's experimental live apps, whose Move page file to
+  Trash and the undo of a Duplicate page as variant move a file to the Trash.
+  Without it, Move page file to Trash leaves the file and its frames as they
+  were, and undoing a copy leaves the copy on disk.
 
 Aiden deliberately refuses to save secrets when Electron reports the Linux
 `basic_text` backend. Unlock or configure the desktop keyring and restart Aiden;

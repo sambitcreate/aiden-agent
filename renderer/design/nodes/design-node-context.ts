@@ -5,6 +5,8 @@
 import * as React from "react";
 import type { DesignPoint } from "../../shared/design-canvas/connectors";
 import type { DesignBridgeMessage, DesignTextCommand } from "../../shared/design-canvas/bridge-messages";
+import type { AppResizeMode } from "../../shared/design-canvas/app-frame";
+import type { AppViewSize } from "../app-frame-menus";
 import type { DesignPageElement } from "../../shared/design-canvas/comments";
 import type { DesignExportFormat } from "../../shared/design-canvas/frame-export";
 import type { DesignFrame } from "../../shared/design-canvas/schema";
@@ -89,6 +91,26 @@ export type DesignNodeContextValue = {
   renaming: string | null;
   /** Starts editing a frame's title, or stops (null). */
   rename(id: string | null): void;
+  /** 3c (S89): a resize of a live app frame started on this control; an entered frame is left first. */
+  resizeStart(id: string, mode: AppResizeMode): void;
+  /** The live app frame being resized, and by which control, until the resize ends. */
+  activeResize: { frameId: string; side: AppResizeMode } | null;
+  /** 3c (S92): shows a live app frame at another viewport, keeping its scale; one undo step. */
+  setViewport(id: string, viewport: { width: number; height: number }): void;
+  /** 3c (S93): places the frame's page again at a device's size or a typed one, beside its set (main places it). */
+  addAppView(id: string, size: AppViewSize): void;
+  /** 3c (S95): Duplicate page as variant: main copies the page's file as name-vN and places it. */
+  duplicateAppPage(id: string): void;
+  /** 3c (S96): Move page file to Trash, already confirmed: every frame of the route dims until main answers. */
+  trashAppPage(id: string): void;
+  /** The frames dimmed while their page's file goes to the Trash. */
+  trashing: ReadonlySet<string>;
+  /**
+   * Saves the canvas's pending edits now. A live app frame waits for it before
+   * asking main for its origin, since main finds the frame on the saved canvas:
+   * one an undo or redo brought back is otherwise not saved yet.
+   */
+  flushCanvas(): Promise<boolean>;
 };
 
 export const DesignNodeContext = React.createContext<DesignNodeContextValue | null>(null);

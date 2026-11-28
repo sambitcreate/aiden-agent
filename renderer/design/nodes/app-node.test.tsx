@@ -8,6 +8,7 @@ import { emitBotTestNotification, installBotTestIpc, type BotTestIpcCall } from 
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
 import { Toaster } from "../../components/ui";
 import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES } from "../../lib/app-capabilities";
 import { parseAppFrameName } from "../../shared/design-canvas/app-frame";
@@ -15,7 +16,8 @@ import type { DesignFrame } from "../../shared/design-canvas/schema";
 import type { DesignAppsSnapshot, DesignAppStatus } from "../../shared/design-app";
 import { resetDesignAppChipForTests } from "../design-app-chip";
 import { designFrameSnapshots } from "../frame-snapshots";
-import { AppFrame, type AppFrameProps, APP_FRAME_CAPTURE_SETTLE_MS } from "./app-node";
+import type { DesignNode } from "../canvas-adapter-core";
+import { AppFrame, AppNode, type AppFrameProps, APP_FRAME_CAPTURE_SETTLE_MS } from "./app-node";
 import { DesignNodeContext, type DesignNodeContextValue } from "./design-node-context";
 import { FrameActions } from "./frame-actions";
 
@@ -216,6 +218,27 @@ test("no iframe exists until main answers the mount, which names the frame and a
   assert.equal((call.args[1] as MountRequest).frameId, frame.id);
   act(() => answer({ origin: ORIGIN }));
   await liveIframe();
+});
+
+test("3c: a frame the canvas hasn't saved yet (one an undo brought back) is saved before main is asked to mount it", async () => {
+  // Main finds the frame on the saved canvas, so it can't mount one that isn't saved.
+  let saved = false;
+  let finishSave: () => void = noop;
+  const { mounts } = setup({ mount: () => (saved ? { origin: ORIGIN } : { error: "unavailable" }) });
+  const beforeMount = () =>
+    new Promise<void>((resolve) => {
+      finishSave = () => {
+        saved = true;
+        resolve();
+      };
+    });
+  render(<Harness frame={appFrame()} beforeMount={beforeMount} />);
+  await settleFocus();
+  assert.equal(mounts().length, 0, "main isn't asked while the save is pending");
+  act(() => finishSave());
+  await liveIframe();
+  assert.equal(mounts().length, 1);
+  assert.equal(screen.queryByText("This frame can't show the app."), null);
 });
 
 test("an IPv6 origin isn't framed: the frame asks to restart the app on 127.0.0.1", async () => {
@@ -680,6 +703,15 @@ test("3b: a route change drops the old route's path, error and stuck state, and 
 
 // ── The page's bridge: untrusted and bounded ──
 
+test("a page's first message is heard from the moment its frame is in the page", async () => {
+  // The commit that inserts the iframe, before any passive effect: the frame already listens to its page.
+  setup();
+  render(<Harness frame={appFrame()} />);
+  const { guest } = giveWindow(await iframeAsInserted());
+  post(guest, { type: "aiden-app:route", path: "/pricing?tab=2" });
+  assert.ok(screen.getByText("/pricing?tab=2"));
+});
+
 test("the in-app path comes only from this frame's own page, and an error label opens the escaped message", async () => {
   setup();
   render(<Harness frame={appFrame()} />);
@@ -904,6 +936,14 @@ function nodeContext(update: DesignNodeContextValue["update"]): DesignNodeContex
     pageEditComment: noop,
     renaming: null,
     rename: noop,
+    resizeStart: noop,
+    activeResize: null,
+    setViewport: noop,
+    addAppView: noop,
+    duplicateAppPage: noop,
+    trashAppPage: noop,
+    trashing: new Set(),
+    flushCanvas: async () => true,
   };
 }
 
@@ -933,4 +973,141 @@ test("3b: a variant's label shows after the title in the frame's header", async 
   render(<Harness frame={appFrame({ title: "Pricing v2", label: "Calm" })} />);
   assert.ok(screen.getByText("Pricing v2"));
   assert.ok(screen.getByText("Calm"));
+});
+
+// ── 3c: edges reflow, corners scale (S89) ──
+
+function NodeHarness({
+  frame,
+  designLive,
+  resizeStart = noop,
+  activeResize = null,
+}: {
+  frame: DesignFrame;
+  designLive: boolean;
+  resizeStart?(id: string, mode: string): void;
+  activeResize?: DesignNodeContextValue["activeResize"];
+}) {
+  const props = { id: frame.id, data: { frame }, selected: true, type: "app" } as unknown as NodeProps<DesignNode>;
+  return (
+    <AppCapabilitiesProvider capabilities={{ ...DISABLED_APP_CAPABILITIES, designMode: true, designLive }}>
+      {/* xyflow's resizer starts only for a node its store knows. */}
+      <ReactFlowProvider initialNodes={[{ id: frame.id, position: { x: frame.x, y: frame.y }, data: { frame }, width: frame.w, height: frame.h }]}>
+        <DesignNodeContext.Provider value={{ ...nodeContext(noop), resizeStart, activeResize }}>
+          <AppNode {...props} />
+        </DesignNodeContext.Provider>
+      </ReactFlowProvider>
+    </AppCapabilitiesProvider>
+  );
+}
+
+/** What d3-drag listens for on a control: a primary-button mousedown from this window. */
+function press(control: Element) {
+  act(() => {
+    control.dispatchEvent(new window.MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, view: window, clientX: 10, clientY: 10 }));
+  });
+  act(() => {
+    window.dispatchEvent(new window.MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0, view: window, clientX: 10, clientY: 10 }));
+  });
+}
+
+test("3c flag on: an app frame has edge and corner resize controls, each naming its own side", () => {
+  setup();
+  const started: Array<[string, string]> = [];
+  const frame = appFrame();
+  render(<NodeHarness frame={frame} designLive resizeStart={(id, mode) => started.push([id, mode])} />);
+  const lines = Array.from(document.querySelectorAll(".react-flow__resize-control.line"));
+  const handles = Array.from(document.querySelectorAll(".react-flow__resize-control.handle"));
+  assert.equal(lines.length, 4);
+  assert.equal(handles.length, 4);
+  for (const line of lines) press(line);
+  for (const handle of handles) press(handle);
+  assert.deepEqual(
+    started.map(([id]) => id),
+    Array(8).fill(frame.id),
+  );
+  assert.deepEqual(new Set(started.slice(0, 4).map(([, mode]) => mode)), new Set(["top", "right", "bottom", "left"]));
+  assert.deepEqual(started.slice(4).map(([, mode]) => mode), ["corner", "corner", "corner", "corner"]);
+});
+
+test("3c flag off: one aspect-locked resizer, as today, that reports no side", () => {
+  setup();
+  const started: unknown[] = [];
+  render(<NodeHarness frame={appFrame()} designLive={false} resizeStart={(...args) => started.push(args)} />);
+  const controls = Array.from(document.querySelectorAll(".react-flow__resize-control"));
+  assert.equal(controls.length, 8, "NodeResizer's four handles and four lines");
+  for (const control of controls) press(control);
+  assert.deepEqual(started, []);
+});
+
+// ── 3c: breakpoints (S91) ──
+
+test("3c: breakpoints from an earlier route are forgotten", async () => {
+  setup();
+  const frame = appFrame();
+  const ruler = (widths: readonly number[]) => <output aria-label="Breakpoints">{widths.join(",")}</output>;
+  const view = render(<Harness frame={frame} ruler={ruler} />);
+  const iframe = await liveIframe();
+  const { guest } = giveWindow(iframe);
+  fireEvent.load(iframe);
+  post(guest, { type: "aiden-app:breakpoints", widths: [640, 768, 1024] });
+  assert.equal(screen.getByRole("status", { name: "Breakpoints" }).textContent, "640,768,1024");
+  // A list another window posted is never shown.
+  post({ postMessage: noop }, { type: "aiden-app:breakpoints", widths: [500] });
+  assert.equal(screen.getByRole("status", { name: "Breakpoints" }).textContent, "640,768,1024");
+  view.rerender(<Harness frame={{ ...frame, route: "/about" }} ruler={ruler} />);
+  assert.equal(screen.getByRole("status", { name: "Breakpoints" }).textContent, "");
+});
+
+test("3c: the end of a resize announces the final size once", () => {
+  setup();
+  const frame = appFrame();
+  const view = render(<NodeHarness frame={frame} designLive />);
+  const said = () => document.querySelector('[aria-live="polite"]')!.textContent;
+  assert.equal(said(), "");
+  view.rerender(<NodeHarness frame={frame} designLive activeResize={{ frameId: frame.id, side: "right" }} />);
+  const dragged = { ...frame, viewport: { width: 1180, height: 800 }, w: 590 };
+  view.rerender(<NodeHarness frame={dragged} designLive activeResize={{ frameId: frame.id, side: "right" }} />);
+  assert.equal(said(), "", "nothing is said during the drag");
+  view.rerender(<NodeHarness frame={dragged} designLive activeResize={null} />);
+  assert.equal(said(), "Viewport 1180 by 800");
+  // Another frame's resize says nothing here.
+  view.rerender(<NodeHarness frame={dragged} designLive activeResize={{ frameId: "other", side: "right" }} />);
+  assert.equal(said(), "Viewport 1180 by 800");
+});
+
+// ── 3c: the device button in the header (S92) ──
+
+test("3c: with design live on, the device button names the size and the size text isn't shown twice", () => {
+  setup();
+  render(<NodeHarness frame={appFrame({ viewport: { width: 1180, height: 800 }, w: 590 })} designLive />);
+  assert.ok(screen.getByRole("button", { name: "Viewport, 1180 by 800" }));
+  assert.equal(screen.getAllByText("1180 × 800").length, 1);
+});
+
+test("3c flag off: no device button, and the size text stays", () => {
+  setup();
+  render(<NodeHarness frame={appFrame({ viewport: { width: 1180, height: 800 }, w: 590 })} designLive={false} />);
+  assert.equal(screen.queryByRole("button", { name: /^Viewport/u }) === null, true);
+  assert.ok(screen.getByText("1180 × 800"));
+});
+
+test("3c: on a narrow frame every header action stays reachable, Dark and Download through More", async () => {
+  setup();
+  // An iPhone at scale 0.25: a 98 px box. happy-dom lays nothing out, so this checks the DOM and tab
+  // order; the E2E checks the real boxes.
+  render(<NodeHarness frame={appFrame({ viewport: { width: 390, height: 844 }, scale: 0.25, w: 98, h: 247 })} designLive />);
+  const header = document.querySelector<HTMLElement>("[data-canvas-chrome-header]")!;
+  const buttons = Array.from(header.querySelectorAll<HTMLButtonElement>("button"));
+  const device = screen.getByRole<HTMLButtonElement>("button", { name: "Viewport, iPhone, 390 by 844" });
+  const more = screen.getByRole<HTMLButtonElement>("button", { name: /^More actions for/u });
+  assert.equal(device.textContent, "", "an icon only");
+  assert.deepEqual(buttons, [device, more], "only the device button and More fit");
+  for (const button of buttons) {
+    assert.equal(button.disabled, false, button.getAttribute("aria-label") ?? "");
+    assert.notEqual(button.tabIndex, -1, button.getAttribute("aria-label") ?? "");
+  }
+  fireEvent.pointerDown(more, { button: 0, ctrlKey: false, pointerType: "mouse" });
+  assert.ok(await screen.findByRole("menuitemcheckbox", { name: "Dark" }));
+  assert.ok(screen.getByRole("menuitem", { name: "Download" }));
 });

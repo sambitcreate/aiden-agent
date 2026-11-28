@@ -22,6 +22,7 @@ import { parseAppBridgeMessage, postToAppPage } from "../../shared/design-canvas
 import {
   APP_FRAME_ALLOW,
   APP_FRAME_SANDBOX,
+  APP_DEFAULT_SCALE,
   APP_DEFAULT_VIEWPORT,
   appFrameName,
   isAppFrameId,
@@ -37,11 +38,12 @@ import {
 } from "../../shared/design-app";
 import type { DesignNode } from "../canvas-adapter-core";
 import { APP_FRAME_ENTERED_ATTRIBUTE, holdAppFrameFocusGuard } from "../app-frame-focus-guard";
+import { AppViewportRulerToolbar } from "../app-viewport-ruler";
 import { useDesignAppsSnapshot } from "../design-app-chip";
 import { captureFrameSnapshot, designFrameSnapshots, useFrameSnapshot } from "../frame-snapshots";
 import { DESIGN_FRAME_HEADER_PX, useDesignNodeContext } from "./design-node-context";
 import { FrameActions } from "./frame-actions";
-import { DesignNodeResizer, FrameSkeleton, rectOnCanvas, useRetiringFrame } from "./frame-parts";
+import { AppFrameResizers, DesignNodeResizer, FrameSkeleton, rectOnCanvas, useRetiringFrame } from "./frame-parts";
 import { FrameTitle } from "./frame-title";
 import { LayoutGuide } from "./layout-guide";
 
@@ -70,6 +72,13 @@ const PATH_CHARS = 60;
 const IPV6_SENTENCE = "This app runs on IPv6 localhost, which the canvas can't show yet. Restart it on 127.0.0.1.";
 const LOCALHOST_SENTENCE = "Design mode only lets apps reach localhost for now.";
 const ACTION_FAILED = "Aiden couldn't do that.";
+const NO_BREAKPOINTS: readonly number[] = Object.freeze([]);
+/**
+ * Under this box width the header folds (3c, S92): the device button is an
+ * icon. The header is drawn in canvas units, so the box width decides what
+ * fits whatever the zoom.
+ */
+const APP_COMPACT_HEADER_PX = 240;
 
 /** A fixed sentence over the frame's last picture: the app isn't live here. */
 export function AppFrameCard({ title, snapshot, children }: { title: string; snapshot: string | undefined; children: React.ReactNode }) {
@@ -376,6 +385,12 @@ export type AppFrameProps = {
   actions?: React.ReactNode;
   /** A monotonic clock for the restore bound (tests pass their own). */
   now?: () => number;
+  /** 3c (S91): what the frame draws with its page's breakpoints (the resize ruler); display only. */
+  ruler?: (breakpoints: readonly number[]) => React.ReactNode;
+  /** 3c (S96): dimmed while its page's file goes to the Trash. */
+  busy?: boolean;
+  /** Settles once the canvas holding this frame is saved, before main is asked to mount it. */
+  beforeMount?: () => Promise<unknown>;
 };
 
 /** An app frame's body and title row. */
@@ -391,6 +406,9 @@ export function AppFrame({
   titleSlot,
   actions,
   now = monotonicNow,
+  ruler,
+  busy = false,
+  beforeMount,
 }: AppFrameProps) {
   const { designLive } = useAppCapabilities();
   const snapshotOfApps = useDesignAppsSnapshot(chatId, designLive);
@@ -435,6 +453,8 @@ export function AppFrame({
   const [mount, setMount] = React.useState<{ key: string; token: string; revision: number; result: DesignAppFrameMountResult | null } | null>(null);
   const revisionRef = React.useRef(app?.revision ?? 0);
   revisionRef.current = app?.revision ?? 0;
+  const beforeMountRef = React.useRef(beforeMount);
+  beforeMountRef.current = beforeMount;
   React.useEffect(() => {
     if (mountKey === null) {
       setMount(null);
@@ -443,14 +463,18 @@ export function AppFrame({
     let alive = true;
     const token = newMountToken();
     setMount({ key: mountKey, token, revision: revisionRef.current, result: null });
-    designCanvasApi.mountDesignAppFrame(chatId, frame.id, token).then(
-      (result) => {
-        if (alive) setMount((current) => (current?.token === token ? { ...current, result } : current));
-      },
-      () => {
-        if (alive) setMount((current) => (current?.token === token ? { ...current, result: { error: "unavailable" } } : current));
-      },
-    );
+    // Main finds the frame on the saved canvas: a frame an undo or redo brought back is saved first.
+    const saved = beforeMountRef.current ? beforeMountRef.current().catch(() => undefined) : Promise.resolve();
+    void saved
+      .then(() => (alive ? designCanvasApi.mountDesignAppFrame(chatId, frame.id, token) : null))
+      .then(
+        (result) => {
+          if (alive && result) setMount((current) => (current?.token === token ? { ...current, result } : current));
+        },
+        () => {
+          if (alive) setMount((current) => (current?.token === token ? { ...current, result: { error: "unavailable" } } : current));
+        },
+      );
     return () => {
       alive = false;
     };
@@ -527,9 +551,12 @@ export function AppFrame({
   });
   // A new route (3b: canvas_update_frame or the picker retargets the frame)
   // starts clean: the old route's path, error, load and stuck state don't carry over.
+  // 3c (S91): the page's breakpoints, for this mount's page only.
+  const [breakpoints, setBreakpoints] = React.useState<{ key: string | null; widths: readonly number[] }>({ key: null, widths: [] });
   const [routeShown, setRouteShown] = React.useState(route);
   if (routeShown !== route) {
     setRouteShown(route);
+    setBreakpoints({ key: null, widths: [] });
     setPage({ key: "", path: null, error: null });
     setLoadedKey(null);
     setStuckKey(null);
@@ -541,9 +568,13 @@ export function AppFrame({
   });
   const shownKey = shown?.key ?? null;
   const shownOrigin = shown?.origin ?? null;
+  const pageBreakpoints = shownKey !== null && breakpoints.key === shownKey ? breakpoints.widths : NO_BREAKPOINTS;
   /** The scheme this mount's page was last told (a page starts light until told). */
   const postedScheme = React.useRef<{ key: string | null; dark: boolean }>({ key: null, dark: false });
-  React.useEffect(() => {
+  // A layout effect: the frame listens from the commit that shows its page, and a route's old listener never outlives
+  // the commit that replaced it. A passive effect left a gap after the iframe was in the page, in which its first
+  // message was dropped (or read against the old route's key).
+  React.useLayoutEffect(() => {
     if (shownKey === null || shownOrigin === null) return;
     let windowStart = 0;
     let used = 0;
@@ -581,6 +612,9 @@ export function AppFrame({
           return;
         case "escape":
           if (enteredRef.current.entered) enteredRef.current.onLeave();
+          return;
+        case "breakpoints":
+          setBreakpoints({ key: shownKey, widths: message.widths });
           return;
         default:
           // Source replies, picks and anchors are Phase 4's (S68).
@@ -689,7 +723,8 @@ export function AppFrame({
           {shownPath(pageState.path)}
         </span>
       ) : null}
-      <span>{`${viewport.width} × ${viewport.height}`}</span>
+      {/* 3c (S92): with design live on, the device button names the size instead. */}
+      {designLive ? null : <span>{`${viewport.width} × ${viewport.height}`}</span>}
       {pageState.error ? <ErrorLabel error={pageState.error} /> : null}
       <BlockedLabel {...events} />
     </>
@@ -799,22 +834,58 @@ export function AppFrame({
 
   return (
     <div className="h-full w-full" onDoubleClick={enterable ? onEnter : undefined}>
-      <CanvasNodeChrome title={frame.title} titleSlot={titledRow} selected={selected} flush status={statusRow} toolbar={actions}>
+      <CanvasNodeChrome title={frame.title} titleSlot={titledRow} selected={selected} flush status={statusRow} toolbar={actions} busy={busy}>
         <div ref={contentRef} className="relative h-full w-full overflow-hidden rounded-b-button">
           {body}
           {frame.guide ? <LayoutGuide guide={frame.guide} scale={scale} /> : null}
         </div>
       </CanvasNodeChrome>
+      {ruler ? ruler(pageBreakpoints) : null}
     </div>
   );
 }
 
+/**
+ * The final size of a resize, said once politely when it ends (S91): nothing
+ * during the drag, and the region stays mounted so the words are read.
+ */
+function useResizeAnnouncement(resizing: boolean, viewport: { width: number; height: number }): string {
+  const [said, setSaid] = React.useState("");
+  const [was, setWas] = React.useState(resizing);
+  if (was !== resizing) {
+    setWas(resizing);
+    setSaid(resizing ? "" : `Viewport ${viewport.width} by ${viewport.height}`);
+  }
+  return said;
+}
+
 export function AppNode({ id, data, selected }: NodeProps<DesignNode>) {
   const canvas = useDesignNodeContext();
+  const { designLive } = useAppCapabilities();
   const { frame } = data;
+  const resize = designLive && canvas.activeResize?.frameId === id ? canvas.activeResize.side : null;
+  const viewport = frame.viewport ?? APP_DEFAULT_VIEWPORT;
+  const scale = frame.scale ?? APP_DEFAULT_SCALE;
+  const announcement = useResizeAnnouncement(resize !== null, viewport);
+  const ruler = React.useCallback(
+    (breakpoints: readonly number[]) =>
+      resize === null ? null : <AppViewportRulerToolbar nodeId={id} side={resize} viewport={viewport} scale={scale} breakpoints={breakpoints} />,
+    [id, resize, viewport, scale],
+  );
   return (
     <>
-      <DesignNodeResizer selected={selected} minSize={designMinSize("app")} keepAspectRatio />
+      {designLive ? (
+        // 3c (S89): edges change the viewport, corners scale.
+        <AppFrameResizers
+          nodeId={id}
+          selected={selected}
+          minSize={designMinSize("app")}
+          scale={scale}
+          onStart={(mode) => canvas.resizeStart(id, mode)}
+        />
+      ) : (
+        <DesignNodeResizer selected={selected} minSize={designMinSize("app")} keepAspectRatio />
+      )}
       <AppFrame
         frame={frame}
         chatId={canvas.chatId}
@@ -825,8 +896,16 @@ export function AppNode({ id, data, selected }: NodeProps<DesignNode>) {
         onLeave={() => canvas.leave(id)}
         onOpenInBrowser={canvas.openInBrowser}
         titleSlot={<FrameTitle frame={frame} />}
-        actions={<FrameActions frame={frame} />}
+        actions={<FrameActions frame={frame} compact={frame.w < APP_COMPACT_HEADER_PX} />}
+        ruler={designLive ? ruler : undefined}
+        busy={designLive && canvas.trashing.has(id)}
+        beforeMount={canvas.flushCanvas}
       />
+      {designLive ? (
+        <span role="status" aria-live="polite" className="sr-only">
+          {announcement}
+        </span>
+      ) : null}
     </>
   );
 }

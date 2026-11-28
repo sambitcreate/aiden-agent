@@ -1,0 +1,24 @@
+/* Width breakpoints the design canvas reads from the page (Phase 3c, S91):
+   one plain px, one plain min-width and one range in rem. */
+#layout {
+  display: grid;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 640px) {
+  #layout {
+    gap: 16px;
+  }
+}
+
+@media (min-width: 768px) {
+  #layout {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (width >= 64rem) {
+  #layout {
+    grid-template-columns: 1fr 1fr 1fr;
+  }
+}

@@ -7,6 +7,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
 import { Toaster } from "../components/ui";
+import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES } from "../lib/app-capabilities";
 import { isMacPlatform } from "../lib/ghostty-terminal/host-platform";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
 import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../shared/design-canvas/schema";
@@ -67,11 +68,18 @@ function measureCanvasAt1000x800() {
   };
 }
 
-async function mount() {
-  render(
+async function mount(options: { designLive?: boolean } = {}) {
+  const tree = (
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
       <DesignCanvasRegion chatId="chat-1" workspaceId="workspace-1" width={1000} placement="split" hidden={false} />
-    </QueryClientProvider>,
+    </QueryClientProvider>
+  );
+  render(
+    options.designLive === undefined ? (
+      tree
+    ) : (
+      <AppCapabilitiesProvider capabilities={{ ...DISABLED_APP_CAPABILITIES, designMode: true, designLive: options.designLive }}>{tree}</AppCapabilitiesProvider>
+    ),
   );
   // The landmark shows while the canvas loads; wait until the loaded canvas replaces the skeleton.
   await waitFor(() => assert.equal(screen.queryByRole("status", { name: "Loading canvas" }) === null, true), SAVE_WAIT);
@@ -954,4 +962,338 @@ test("while the canvas can't be saved, the Code tab says so instead of reading a
   } finally {
     window.localStorage.removeItem("aiden.design.sidePanel");
   }
+});
+
+// ── 3c: live app frames' edges and corners (S89) ──
+
+const APP_SNAPSHOT = {
+  workspaceId: "workspace-1",
+  target: "single",
+  apps: [{ workspaceId: "workspace-1", appRoot: ".", source: "started", frameworkLabel: "Vite", phase: "stopped", since: 1, revision: 1 }],
+  candidates: [],
+  chosen: [],
+};
+
+function liveAppFrame(overrides: Partial<DesignFrame> = {}): DesignFrame {
+  return {
+    id: "app-1",
+    kind: "app",
+    title: "Pricing",
+    pageId: "page-1",
+    x: 0,
+    y: 0,
+    w: 640,
+    h: 436,
+    createdBy: "aiden",
+    appRoot: ".",
+    route: "/pricing",
+    viewport: { width: 1280, height: 800 },
+    scale: 0.5,
+    ...overrides,
+  };
+}
+
+async function mountLiveApp(doc: DesignCanvas, extra: Record<string, (...args: unknown[]) => unknown> = {}) {
+  const ipc = setup(doc, { "designApp:status:get": () => APP_SNAPSHOT, ...extra });
+  const region = await mount({ designLive: true });
+  return { ...ipc, region };
+}
+
+const mouse = (type: string, target: EventTarget, at: { x: number; y: number } = { x: 10, y: 10 }) =>
+  act(() => {
+    target.dispatchEvent(new window.MouseEvent(type, { bubbles: true, cancelable: true, button: 0, view: window, clientX: at.x, clientY: at.y }));
+  });
+const ruler = () => document.querySelector<HTMLElement>(".design-viewport-ruler");
+const nextTask = () =>
+  act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  });
+
+async function selectedAppControls() {
+  fireEvent.click(screen.getByRole("group", { name: "Pricing" }));
+  await waitFor(() => assert.ok(document.querySelector(".react-flow__resize-control.line.right")));
+  return (position: string) => document.querySelector<HTMLElement>(`.react-flow__resize-control.${position}`)!;
+}
+
+test("3c: a press on a resize control without a drag leaves no resize mode", async () => {
+  await mountLiveApp(canvasWith(liveAppFrame()));
+  const control = await selectedAppControls();
+  mouse("mousedown", control("line.right"));
+  assert.equal(ruler()?.dataset.side, "right", "the readout shows while the control is held");
+  mouse("mouseup", window);
+  // xyflow sends nothing for a press that never moved; the canvas clears the mode a task later.
+  await nextTask();
+  assert.equal(ruler(), null);
+});
+
+test("3c: a real drag clears its mode on the final change, not on a timer", async () => {
+  const { saved } = await mountLiveApp(canvasWith(liveAppFrame()));
+  const control = await selectedAppControls();
+  mouse("mousedown", control("line.right"), { x: 640, y: 200 });
+  mouse("mousemove", window, { x: 600, y: 200 });
+  mouse("mouseup", window, { x: 600, y: 200 });
+  assert.equal(ruler(), null, "cleared before any timer ran");
+  await waitFor(() => {
+    const app = saved()?.frames.find((frame) => frame.id === "app-1");
+    assert.ok(app);
+    assert.equal(app.scale, 0.5, "an edge keeps the scale");
+    assert.notEqual(app.viewport?.width, 1280, "and changes the viewport");
+  }, SAVE_WAIT);
+});
+
+test("3c: a new resize started before the timer fires keeps its mode", async () => {
+  await mountLiveApp(canvasWith(liveAppFrame()));
+  const control = await selectedAppControls();
+  mouse("mousedown", control("line.right"));
+  mouse("mouseup", window);
+  mouse("mousedown", control("line.left"));
+  await nextTask();
+  assert.equal(ruler()?.dataset.side, "left", "the first press's timer leaves the second resize alone");
+  mouse("mouseup", window);
+  await nextTask();
+  assert.equal(ruler(), null);
+});
+
+// ── 3c: the device menu (S92) ──
+
+async function chooseDevice(name: RegExp | string) {
+  const trigger = screen.getByRole("button", { name: /^Viewport/u });
+  fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: "mouse" });
+  fireEvent.click(await screen.findByRole("menuitemradio", { name }));
+}
+
+test("3c: choosing iPad sets 768 × 1024, keeps the scale, and ⌘Z puts it back", async () => {
+  const { saved, region } = await mountLiveApp(canvasWith(liveAppFrame()));
+  await chooseDevice(/iPad/u);
+  await waitFor(() => {
+    const app = saved()?.frames.find((frame) => frame.id === "app-1");
+    assert.deepEqual(app?.viewport, { width: 768, height: 1024 });
+    assert.equal(app?.scale, 0.5);
+    assert.deepEqual({ w: app?.w, h: app?.h }, { w: 384, h: 548 });
+  }, SAVE_WAIT);
+  region.focus();
+  fireEvent.keyDown(region, { key: "z", code: "KeyZ", ...commandKey });
+  await waitFor(() => assert.deepEqual(saved()?.frames.find((frame) => frame.id === "app-1")?.viewport, { width: 1280, height: 800 }), SAVE_WAIT);
+});
+
+test("3c: a grouped frame changed to Desktop still fits its group", async () => {
+  const group: DesignFrame = { id: "g", kind: "group", title: "Set", pageId: "page-1", x: -32, y: -48, w: 704, h: 516, createdBy: "person" };
+  const { saved } = await mountLiveApp(canvasWith(group, liveAppFrame({ groupId: "g" })));
+  await chooseDevice(/Desktop/u);
+  await waitFor(() => {
+    const doc = saved();
+    const app = doc?.frames.find((frame) => frame.id === "app-1");
+    const box = doc?.frames.find((frame) => frame.id === "g");
+    assert.deepEqual(app?.viewport, { width: 1440, height: 900 });
+    assert.ok(app && box);
+    assert.ok(box.x <= app.x && app.x + app.w <= box.x + box.w, "the group holds the wider frame");
+    assert.ok(box.y <= app.y && app.y + app.h <= box.y + box.h, "and the taller one");
+  }, SAVE_WAIT);
+});
+
+// ── 3c: ⌘D, More, the overlay key guard and the page-file actions (S93–S97) ──
+
+const calledWith = (calls: BotTestIpcCall[], channel: string) => calls.filter((call) => call.channel === channel);
+
+/** A canvas whose saves answer from the revision they were based on, so main can move it on between saves. */
+function serverCanvas(initial: DesignCanvas) {
+  let current = initial;
+  return {
+    get: () => current,
+    set: (next: DesignCanvas) => {
+      current = next;
+    },
+    handlers: {
+      "designCanvas:get": () => current,
+      "designCanvas:save": (...args: unknown[]) => {
+        const next = { ...(args[1] as DesignCanvas), revision: (args[2] as number) + 1 };
+        current = next;
+        return { ok: true, revision: next.revision };
+      },
+    },
+  };
+}
+
+async function openMore() {
+  const more = screen.getByRole("button", { name: "More actions for Pricing" });
+  fireEvent.pointerDown(more, { button: 0, ctrlKey: false, pointerType: "mouse" });
+  await screen.findByRole("menuitem", { name: "Move page file to Trash…" });
+  return more;
+}
+
+test("3c: ⌘D with one app frame selected duplicates its page, after saving what's pending", async () => {
+  const { calls, region } = await mountLiveApp(canvasWith(liveAppFrame()), {
+    "designCanvas:appPageVariant": () => ({ placed: "v2", pageId: "page-1", route: "/pricing-v2", file: "src/routes/pricing-v2.tsx" }),
+  });
+  fireEvent.click(screen.getByRole("group", { name: "Pricing" }));
+  await chooseDevice(/iPad/u);
+  region.focus();
+  fireEvent.keyDown(region, { key: "d", code: "KeyD", ...commandKey });
+  await waitFor(() => assert.equal(calledWith(calls, "designCanvas:appPageVariant").length, 1), SAVE_WAIT);
+  const variant = calls.findIndex((call) => call.channel === "designCanvas:appPageVariant");
+  const lastSave = calls.slice(0, variant).filter((call) => call.channel === "designCanvas:save").pop();
+  assert.deepEqual((lastSave?.args[1] as DesignCanvas).frames[0]?.viewport, { width: 768, height: 1024 }, "the device change was saved first");
+  assert.deepEqual(calls[variant]?.args, ["chat-1", { frameId: "app-1" }]);
+});
+
+test("3c: ⌘D with two frames, a non-app frame, or the flag off duplicates as today", async () => {
+  for (const [frames, live, name] of [
+    [[liveAppFrame(), sticky("n1", "Note")], true, "Pricing"],
+    [[sticky("n1", "Note")], true, "Note"],
+    [[liveAppFrame()], false, "Pricing"],
+  ] as const) {
+    const ipc = setup(canvasWith(...frames), { "designApp:status:get": () => APP_SNAPSHOT });
+    const region = await mount({ designLive: live });
+    if (frames.length === 2) {
+      // xyflow adds to the selection while its multi-select key is held down.
+      const held = isMacPlatform() ? "Meta" : "Control";
+      fireEvent.click(screen.getByRole("group", { name: "Pricing" }));
+      fireEvent.keyDown(document, { key: held, code: held === "Meta" ? "MetaLeft" : "ControlLeft" });
+      fireEvent.click(screen.getByRole("group", { name: "Note" }), { metaKey: held === "Meta", ctrlKey: held === "Control" });
+      fireEvent.keyUp(document, { key: held, code: held === "Meta" ? "MetaLeft" : "ControlLeft" });
+    } else {
+      fireEvent.click(screen.getByRole("group", { name }));
+    }
+    region.focus();
+    fireEvent.keyDown(region, { key: "d", code: "KeyD", ...commandKey });
+    await waitFor(() => assert.equal(ipc.saved()?.frames.length, frames.length * 2, "copies on the canvas"), SAVE_WAIT);
+    assert.equal(calledWith(ipc.calls, "designCanvas:appPageVariant").length, 0);
+    cleanup();
+  }
+});
+
+test("3c: ⌘D and ⌫ do nothing while a frame menu or the Trash confirmation is open", async () => {
+  const { calls, saved } = await mountLiveApp(canvasWith(liveAppFrame()));
+  fireEvent.click(screen.getByRole("group", { name: "Pricing" }));
+  await openMore();
+  const item = screen.getByRole("menuitem", { name: "Move page file to Trash…" });
+  fireEvent.keyDown(item, { key: "Backspace", code: "Backspace" });
+  fireEvent.keyDown(item, { key: "d", code: "KeyD", ...commandKey });
+  fireEvent.click(item);
+  const cancel = await screen.findByRole("button", { name: "Cancel" });
+  fireEvent.keyDown(cancel, { key: "Backspace", code: "Backspace" });
+  fireEvent.keyDown(cancel, { key: "d", code: "KeyD", ...commandKey });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, DESIGN_CANVAS_SAVE_DELAY_MS + 50));
+  });
+  assert.ok(screen.getByRole("group", { name: "Pricing" }), "the frame is still there");
+  assert.equal(saved(), undefined, "nothing was changed");
+  assert.equal(calledWith(calls, "designCanvas:appPageVariant").length + calledWith(calls, "designCanvas:appPageTrash").length, 0);
+});
+
+test("3c: ⌫ does nothing while the Download menu is open, with the flag off", async () => {
+  const hero: DesignFrame = { id: "f1", kind: "file", title: "Hero", x: 0, y: 0, w: 640, h: 436, path: "design/hero.html", designWidth: 1280, pageId: "page-1", createdBy: "aiden" };
+  const { saved } = setup(canvasWith(hero));
+  await mount({ designLive: false });
+  fireEvent.click(screen.getByRole("group", { name: "Hero" }));
+  fireEvent.pointerDown(screen.getByRole("button", { name: "Download Hero" }), { button: 0, ctrlKey: false, pointerType: "mouse" });
+  const item = await screen.findByRole("menuitem", { name: "PNG image" });
+  fireEvent.keyDown(item, { key: "Backspace", code: "Backspace" });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, DESIGN_CANVAS_SAVE_DELAY_MS + 50));
+  });
+  // The open menu hides the rest of the window from assistive tech, so the frame is looked up past that.
+  assert.ok(screen.getByRole("group", { name: "Hero", hidden: true }));
+  assert.equal(saved(), undefined);
+});
+
+test("3c: a refusal shows its reason, and Ask Aiden queues a note on the frame", async () => {
+  render(<Toaster />);
+  const { saved } = await mountLiveApp(canvasWith(liveAppFrame()), { "designCanvas:appPageVariant": () => ({ error: "dynamic" }) });
+  fireEvent.click(screen.getByRole("group", { name: "Pricing" }));
+  await openMore();
+  fireEvent.click(screen.getByRole("menuitem", { name: /Duplicate page as variant/u }));
+  assert.ok(await screen.findByText("This page comes from a dynamic route, so copying its file would copy every page it serves.", {}, SAVE_WAIT));
+  fireEvent.click(screen.getByRole("button", { name: "Ask Aiden" }));
+  await waitFor(() => {
+    const note = saved()?.comments[0];
+    assert.deepEqual([note?.note, note?.queued, note?.frameId], ["Duplicate this page as a variant named /pricing-v2.", true, "app-1"]);
+  }, SAVE_WAIT);
+});
+
+test("3c: Trash dims the page's frames at once and puts them back on failure", async () => {
+  render(<Toaster />);
+  let answer: (value: unknown) => void = () => undefined;
+  await mountLiveApp(canvasWith(liveAppFrame(), liveAppFrame({ id: "app-2", x: 700, route: "/pricing?plan=pro", title: "Pro" })), {
+    "designCanvas:appPageTrash": () => new Promise((resolve) => (answer = resolve)),
+  });
+  fireEvent.click(screen.getByRole("group", { name: "Pricing" }));
+  await openMore();
+  fireEvent.click(screen.getByRole("menuitem", { name: "Move page file to Trash…" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Move to Trash" }));
+  await waitFor(() => {
+    assert.equal(screen.getByRole("group", { name: "Pricing" }).getAttribute("aria-busy"), "true");
+    assert.equal(screen.getByRole("group", { name: "Pro" }).getAttribute("aria-busy"), "true", "every frame of that page");
+  }, SAVE_WAIT);
+  await act(async () => answer({ error: "locked" }));
+  assert.ok(await screen.findByText("This frame, or a frame of its page, is locked."));
+  assert.equal(screen.getByRole("group", { name: "Pricing" }).hasAttribute("aria-busy"), false);
+  assert.equal(screen.getByRole("group", { name: "Pro" }).hasAttribute("aria-busy"), false);
+});
+
+test("3c: a Trash that lands after the person moved on leaves their focus where it is", async (t) => {
+  render(<Toaster />);
+  // A field outside the canvas, as the chat composer is.
+  const message = document.createElement("textarea");
+  document.body.append(message);
+  t.after(() => message.remove());
+  let answer: (value: unknown) => void = () => undefined;
+  const { region } = await mountLiveApp(canvasWith(liveAppFrame()), {
+    "designCanvas:appPageTrash": () => new Promise((resolve) => (answer = resolve)),
+  });
+  fireEvent.click(screen.getByRole("group", { name: "Pricing" }));
+  await openMore();
+  fireEvent.click(screen.getByRole("menuitem", { name: "Move page file to Trash…" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Move to Trash" }));
+  // Booleans, so a miss doesn't diff two DOM trees on every mutation.
+  await waitFor(() => assert.ok(document.activeElement === region, "the canvas has focus"), SAVE_WAIT);
+  // While main trashes the file, the person starts writing a message.
+  act(() => message.focus());
+  await act(async () => answer({ trashed: "src/routes/pricing.tsx", route: "/pricing", removed: ["app-1"], revision: 3 }));
+  await nextTask();
+  await nextTask();
+  assert.ok(document.activeElement === message, "focus stays in the message");
+});
+
+test("3c: the Trash toast's Undo waits for the canvas to show the Trash, then undoes that step; focus is on the canvas", async () => {
+  render(<Toaster />);
+  const server = serverCanvas({ ...canvasWith(sticky("n1", "Note"), liveAppFrame()), revision: 1 });
+  const { calls, region } = await mountLiveApp(server.get(), {
+    ...server.handlers,
+    "designCanvas:appPageTrash": () => ({ trashed: "src/routes/pricing.tsx", route: "/pricing", removed: ["app-1"], revision: 3 }),
+  });
+  // Something of the person's before the Trash, which the Undo must leave alone.
+  fireEvent.click(screen.getByRole("group", { name: "Note" }));
+  region.focus();
+  fireEvent.keyDown(region, { key: "d", code: "KeyD", ...commandKey });
+  await waitFor(() => assert.equal(server.get().frames.length, 3), SAVE_WAIT);
+
+  fireEvent.click(screen.getByRole("group", { name: "Pricing" }));
+  await openMore();
+  fireEvent.click(screen.getByRole("menuitem", { name: "Move page file to Trash…" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Move to Trash" }));
+  await waitFor(() => assert.equal(calledWith(calls, "designCanvas:appPageTrash").length, 1), SAVE_WAIT);
+  await waitFor(() => assert.ok(document.activeElement === region, "the canvas has focus"), SAVE_WAIT);
+  await nextTask();
+  assert.equal(screen.queryByText("Moved src/routes/pricing.tsx to the Trash."), null, "no Undo before the canvas has the Trash");
+
+  // Main's commit lands as the person's own step.
+  server.set({ ...server.get(), revision: 3, frames: server.get().frames.filter((frame) => frame.id !== "app-1") });
+  act(() => emitBotTestNotification("designCanvas:updated", { workspaceId: "workspace-1", chatId: "chat-1", revision: 3, step: "app-page-trash:3" }));
+  assert.ok(await screen.findByText("Moved src/routes/pricing.tsx to the Trash.", {}, SAVE_WAIT));
+  await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Pricing" }), null));
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  assert.ok(await screen.findByRole("group", { name: "Pricing" }, SAVE_WAIT), "the Trash is undone");
+  await waitFor(() => assert.equal(server.get().frames.length, 3, "and the copy of the note stays"), SAVE_WAIT);
+});
+
+test("3c: a page-file outcome shows a toast in its own chat only", async () => {
+  render(<Toaster />);
+  await mountLiveApp(canvasWith(liveAppFrame()));
+  act(() => emitBotTestNotification("designCanvas:pageFile", { chatId: "chat-2", file: "src/routes/other.tsx", done: "restore" }));
+  act(() => emitBotTestNotification("designCanvas:pageFile", { chatId: "chat-1", file: "src/routes/pricing.tsx", done: "restore" }));
+  assert.ok(await screen.findByText("Put src/routes/pricing.tsx back."));
+  assert.equal(screen.queryByText("Put src/routes/other.tsx back."), null);
+  act(() => emitBotTestNotification("designCanvas:pageFile", { chatId: "chat-1", file: "src/routes/pricing.tsx", failed: "restore", reason: "exists" }));
+  assert.ok(await screen.findByText("Something is already at src/routes/pricing.tsx, so it wasn't put back."));
 });

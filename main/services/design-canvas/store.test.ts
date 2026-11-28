@@ -774,3 +774,62 @@ test("3b: an update that shows a route again forgets it, and one that removes a 
   await store.update("ws-1", (doc) => ({ ...doc, frames: [] }));
   assert.equal((await store.get("ws-1")).removedAppRoutes, undefined, "Aiden's removal is no person's");
 });
+
+// 3c (S96, S97): a person's update notes its removal, and a save tells who asks what it wrote.
+test("3c: update with byPerson notes a removed app route, and without it notes nothing", async (t) => {
+  const root = await tempRoot(t);
+  const store = new DesignCanvasStore({ root: () => root });
+  await store.update("ws-1", (doc) => withApp(doc, "a", "/pricing"));
+  await store.update("ws-1", (doc) => ({ ...doc, frames: [] }), { byPerson: true });
+  assert.deepEqual((await store.get("ws-1")).removedAppRoutes, [appRouteKey(".", "/pricing")]);
+
+  const other = await tempRoot(t);
+  const plain = new DesignCanvasStore({ root: () => other });
+  await plain.update("ws-1", (doc) => withApp(doc, "a", "/pricing"));
+  await plain.update("ws-1", (doc) => ({ ...doc, frames: [] }));
+  assert.equal((await plain.get("ws-1")).removedAppRoutes, undefined);
+});
+
+test("3c: DesignChatCanvases.update forwards byPerson", async (t) => {
+  const root = await tempRoot(t);
+  const store = new DesignCanvasStore({ root: () => root });
+  const chats = new DesignChatCanvases({ store, workspaceIdOf: async () => "ws-1" });
+  await chats.update("chat-1", (doc) => withApp(doc, "a", "/pricing"));
+  await chats.update("chat-1", (doc) => ({ ...doc, frames: [] }), { byPerson: true });
+  assert.deepEqual((await store.get("ws-1")).removedAppRoutes, [appRouteKey(".", "/pricing")]);
+});
+
+test("3c: save's onCommitted gets the written document, through both stores", async (t) => {
+  const root = await tempRoot(t);
+  const store = new DesignCanvasStore({ root: () => root });
+  const chats = new DesignChatCanvases({ store, workspaceIdOf: async () => "ws-1" });
+  const placed = await store.update("ws-1", (doc) => withApp(withNote(doc, "n"), "a", "/pricing"));
+  const committed: DesignCanvas[] = [];
+  await store.save("ws-1", { ...placed, frames: placed.frames.filter((frame) => frame.id !== "a") }, placed.revision, {
+    onCommitted: (doc) => committed.push(doc),
+  });
+  assert.deepEqual(committed, [await store.get("ws-1")]);
+  assert.deepEqual(committed[0]?.removedAppRoutes, [appRouteKey(".", "/pricing")], "the document as written, removal noted");
+
+  const current = await store.get("ws-1");
+  await chats.save("chat-1", withApp(current, "b", "/about"), current.revision, { onCommitted: (doc) => committed.push(doc) });
+  assert.equal(committed.length, 2);
+  assert.deepEqual(committed[1], await store.get("ws-1"));
+
+  // A conflict writes nothing and commits nothing.
+  await chats.save("chat-1", current, current.revision, { onCommitted: (doc) => committed.push(doc) });
+  assert.equal(committed.length, 2);
+});
+
+test("3c: a throwing onCommitted doesn't fail the save", async (t) => {
+  const root = await tempRoot(t);
+  const store = new DesignCanvasStore({ root: () => root });
+  const placed = await store.update("ws-1", (doc) => withNote(doc, "n"));
+  const result = await store.save("ws-1", { ...placed, frames: [] }, placed.revision, {
+    onCommitted: () => {
+      throw new Error("listener broke");
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual((await store.get("ws-1")).frames, []);
+});

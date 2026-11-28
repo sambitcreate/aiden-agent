@@ -50,6 +50,7 @@ import {
   Input,
   Label,
   Popover,
+  PopoverAnchor,
   PopoverContent,
   PopoverTrigger,
   RadioGroup,
@@ -469,6 +470,30 @@ function TypeCases() {
   );
 }
 
+/** A popover opened from elsewhere (a menu item, say) at an anchor that isn't its trigger. */
+function AnchoredPopoverCase() {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <SinkCase covers="PopoverAnchor" title="Popover at an anchor">
+      <Popover open={open} onOpenChange={setOpen}>
+        <div className="flex items-center gap-3">
+          <PopoverAnchor asChild>
+            <Text variant="small" color="secondary">
+              Anchor
+            </Text>
+          </PopoverAnchor>
+          <Button variant="muted" onClick={() => setOpen(true)}>
+            Open at the anchor
+          </Button>
+        </div>
+        <PopoverContent className="w-64 p-3">
+          <Text variant="small">Popover content placed at the anchor, not the button.</Text>
+        </PopoverContent>
+      </Popover>
+    </SinkCase>
+  );
+}
+
 function OverlayCases() {
   const [dialog, setDialog] = React.useState<"plain" | "busy" | "blocked" | null>(null);
   const [alert, setAlert] = React.useState(false);
@@ -506,6 +531,7 @@ function OverlayCases() {
           </PopoverContent>
         </Popover>
       </SinkCase>
+      <AnchoredPopoverCase />
       <SinkCase
         covers="DropdownMenu DropdownMenuTrigger DropdownMenuContent DropdownMenuLabel DropdownMenuItem DropdownMenuSeparator DropdownMenuCheckboxItem DropdownMenuRadioGroup DropdownMenuRadioItem DropdownMenuSub DropdownMenuSubTrigger DropdownMenuSubContent"
         title="Dropdown menu: items, disabled, destructive, check, radio, submenu"

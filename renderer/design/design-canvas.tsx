@@ -13,14 +13,17 @@ import { noteDesignCanvasView } from "../lib/design-mode";
 import { browserApi, designCanvasApi } from "../lib/ipc";
 import { addPage, deletePage, duplicatePage, movePage, renamePage } from "../shared/design-canvas/pages";
 import { attachTargetAt, syncConnectors, type DesignPoint } from "../shared/design-canvas/connectors";
+import { withAppViewport, type AppResizeMode } from "../shared/design-canvas/app-frame";
+import { refitGroups } from "../shared/design-canvas/placement";
 import type { DesignExportFormat } from "../shared/design-canvas/frame-export";
 import { presentationOrder } from "../shared/design-canvas/presentation";
 import { containerAt, regroupFrames } from "../shared/design-canvas/drawing";
-import { framesOnPage, isDesignContainer } from "../shared/design-canvas/schema";
+import { DESIGN_CANVAS_LIMITS, framesOnPage, isDesignContainer } from "../shared/design-canvas/schema";
 import type { DesignCanvas as CanvasDocument, DesignConnectorEnd, DesignFrame } from "../shared/design-canvas/schema";
 import {
   applyNodeChanges,
   duplicateFrames,
+  gestureEdit,
   nodesFromCanvas,
   placeFrame,
   presentedFrameIds,
@@ -58,6 +61,8 @@ import {
 import { reorderLayer, stepLayer, type DesignLayerPlace } from "./layers-core";
 import { DesignToolbar, type DesignAddKind, type DesignPageAction } from "./design-toolbar";
 import { appRoutePlacer, type AppRouteSource } from "./app-route-picker";
+import { useAppPageActions } from "./app-page-actions";
+import { useAppCapabilities } from "../lib/app-capabilities";
 import { selectLiveFrames } from "./live-set-core";
 import {
   DesignNodeContext,
@@ -223,6 +228,58 @@ function LoadedDesignCanvas({
   const gesture = React.useRef(false);
   const latestDoc = React.useRef(doc);
   latestDoc.current = doc;
+
+  // 3c (S89): which control each live app frame is being resized by. The ref
+  // is read synchronously by onNodesChange; the state drives the readout.
+  const resizeModes = React.useRef(new Map<string, AppResizeMode>());
+  const resizeGeneration = React.useRef(0);
+  const [activeResize, setActiveResize] = React.useState<{ frameId: string; side: AppResizeMode } | null>(null);
+  // 3c (S92): a device or typed size keeps the frame's scale (refitted to the box limit) and refits its group.
+  const setAppViewport = React.useCallback(
+    (id: string, size: { width: number; height: number }) =>
+      change((current) => {
+        const frame = current.frames.find((entry) => entry.id === id && entry.kind === "app");
+        if (!frame || frame.locked) return current;
+        const next = withAppViewport(frame, size, DESIGN_CANVAS_LIMITS.maxSize);
+        const own = frame.viewport;
+        if (own?.width === next.viewport.width && own.height === next.viewport.height && frame.scale === next.scale) return current;
+        const frames = current.frames.map((entry) => (entry.id === id ? { ...entry, ...next } : entry));
+        return refitGroups(syncConnectors({ ...current, frames }), [frame.groupId]);
+      }),
+    [change],
+  );
+  const resizeStart = React.useCallback((id: string, mode: AppResizeMode) => {
+    resizeModes.current.set(id, mode);
+    resizeGeneration.current += 1;
+    setActiveResize({ frameId: id, side: mode });
+    // Resizing an entered frame leaves it first.
+    setEntered((current) => (current === id ? null : current));
+  }, []);
+  // A press on a control that never drags gets no end from xyflow. These
+  // listeners are up from mount, so they run before d3-drag's own per-gesture
+  // capture listener on window (which stops the event): the next task clears
+  // the modes, unless another resize started in between. A real drag has
+  // cleared its mode already, when its last change arrived.
+  React.useEffect(() => {
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    const ended = () => {
+      if (resizeModes.current.size === 0) return;
+      const generation = resizeGeneration.current;
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        if (resizeGeneration.current !== generation) return;
+        resizeModes.current.clear();
+        setActiveResize(null);
+      }, 0);
+      timers.add(timer);
+    };
+    const events = ["mouseup", "touchend", "touchcancel", "pointerup", "pointercancel", "blur"] as const;
+    for (const type of events) window.addEventListener(type, ended, true);
+    return () => {
+      for (const type of events) window.removeEventListener(type, ended, true);
+      for (const timer of timers) clearTimeout(timer);
+    };
+  }, []);
 
   // The chat's grant: frames load their pages and images through it.
   React.useEffect(() => {
@@ -415,6 +472,22 @@ function LoadedDesignCanvas({
     [reloadPaths],
   );
   const textEdits = usePageTextEdits({ chatId, doc, pageWindow, queueComment: comments.queueOnElement, flush, reload: reloadPath });
+  // 3c (S93, S95, S96): the person's actions on a live app frame's page.
+  const { designLive } = useAppCapabilities();
+  const focusCanvas = React.useCallback((options?: { unlessMoved?: boolean }) => {
+    requestAnimationFrame(() => {
+      const host = wrapper.current;
+      if (options?.unlessMoved) {
+        // Focus the person moved out of the canvas meanwhile (into the composer, say) stays there.
+        const active = document.activeElement;
+        const lost = !active || active === document.body || !active.isConnected || host?.contains(active) === true;
+        if (!lost) return;
+      }
+      // A plain focus straight onto the canvas region, the target ⌘Z needs after a Trash.
+      host?.querySelector<HTMLElement>(".studio-canvas")?.focus({ preventScroll: true });
+    });
+  }, []);
+  const pageActions = useAppPageActions({ chatId, doc, latestDoc, flush, undo, queueOnFrame: comments.queueOnFrame, focusCanvas });
   forgetTextEdits.current = textEdits.forget;
   const toggleComments = () => {
     const next = !comments.active;
@@ -542,25 +615,19 @@ function LoadedDesignCanvas({
     const dropped = edits.flatMap((entry) =>
       entry.type === "position" && entry.dragging === false ? [entry.id] : [],
     );
-    // One undo step per drag or resize, taken when it starts.
-    const flags = edits.map((entry) =>
-      entry.type === "position" ? entry.dragging : entry.type === "dimensions" ? entry.resizing : undefined,
-    );
-    let record = true;
-    if (flags.includes(true)) {
-      record = !gesture.current;
-      gesture.current = true;
-    } else if (flags.includes(false)) {
-      record = !gesture.current;
-      gesture.current = false;
+    // A snapshot: a replay after a save conflict must resize as the drag did, after the modes are gone.
+    const modes = resizeModes.current.size > 0 ? new Map(resizeModes.current) : undefined;
+    // One undo step per drag or resize, taken by its first change that alters the canvas.
+    const step = gestureEdit(gesture, edits, (current) => {
+      const next = applyNodeChanges(current, edits, modes);
+      return dropped.length > 0 ? regroupFrames(next, dropped) : next;
+    });
+    change(step.mutate, { record: step.record });
+    // xyflow's last change of a resize is its `resizing: false` one (S89).
+    for (const entry of edits) {
+      if (entry.type !== "dimensions" || entry.resizing !== false || !resizeModes.current.delete(entry.id)) continue;
+      setActiveResize((current) => (current?.frameId === entry.id ? null : current));
     }
-    change(
-      (current) => {
-        const next = applyNodeChanges(current, edits);
-        return dropped.length > 0 ? regroupFrames(next, dropped) : next;
-      },
-      { record },
-    );
   };
 
   const removeFrames = React.useCallback(
@@ -806,6 +873,14 @@ function LoadedDesignCanvas({
         if (!textEdits.redo()) redo();
         return true;
       case "duplicate":
+        // 3c (S94): one live app frame alone duplicates its page as a variant.
+        if (designLive && selection.size === 1) {
+          const [only] = [...selection];
+          if (doc.frames.find((frame) => frame.id === only)?.kind === "app") {
+            pageActions.duplicateAppPage(only!);
+            return true;
+          }
+        }
         if (selection.size > 0) {
           // Ids are kept across calls so an edit replayed after a save conflict makes the same copies.
           const ids: string[] = [];
@@ -1239,6 +1314,14 @@ function LoadedDesignCanvas({
       autoFocusDone: (id) => setAutoFocusId((current) => (current === id ? null : current)),
       renaming,
       rename: setRenaming,
+      resizeStart,
+      activeResize,
+      setViewport: setAppViewport,
+      addAppView: pageActions.addAppView,
+      duplicateAppPage: pageActions.duplicateAppPage,
+      trashAppPage: pageActions.trashAppPage,
+      trashing: pageActions.trashing,
+      flushCanvas: flush,
       moveEnd,
       editing,
       edit: setEditing,
@@ -1268,6 +1351,14 @@ function LoadedDesignCanvas({
       removeFrames,
       update,
       renaming,
+      resizeStart,
+      activeResize,
+      setAppViewport,
+      pageActions.addAppView,
+      pageActions.duplicateAppPage,
+      pageActions.trashAppPage,
+      pageActions.trashing,
+      flush,
       moveEnd,
       editing,
       comments.commentOn,

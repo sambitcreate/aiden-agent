@@ -90,6 +90,13 @@ const DEFAULT_FS: RouteFs = {
   ...(process.platform === "linux" ? { listOpened: listOpenedDir } : {}),
 };
 
+/** The real route fs, with a caller's overrides; a caller's own path listing (a test's spy) replaces the Linux handle listing. */
+export function routeFs(overrides: Partial<RouteFs> = {}): RouteFs {
+  const fs: RouteFs = { ...DEFAULT_FS, ...overrides };
+  if (overrides.readdir && !overrides.listOpened) delete fs.listOpened;
+  return fs;
+}
+
 const CONVENTION_FOLDERS: Record<RouteConvention, readonly string[]> = {
   "next-app": ["app", "src/app"],
   "next-pages": ["pages", "src/pages"],
@@ -110,7 +117,7 @@ async function kindOf(fs: RouteFs, target: string): Promise<Kind> {
 }
 
 /** The app root's real folder inside the workspace, or null when it or a parent is a link, not a folder, or outside. */
-async function confinedRoot(fs: RouteFs, workspaceRoot: string, appRoot: string): Promise<string | null> {
+export async function confinedRoot(fs: RouteFs, workspaceRoot: string, appRoot: string): Promise<string | null> {
   if (!isAppRoot(appRoot)) return null;
   let realWorkspace: string;
   try {
@@ -190,7 +197,7 @@ async function readRealDir(fs: RouteFs, dir: string): Promise<Dirent[] | null> {
   );
 }
 
-type Budget = { entries: number; truncated: boolean };
+export type Budget = { entries: number; truncated: boolean };
 
 function abortError(): Error {
   const error = new Error("The route listing was cancelled.");
@@ -229,17 +236,28 @@ async function walk(fs: RouteFs, root: string, folder: string, budget: Budget, s
   return files;
 }
 
-async function walkConvention(fs: RouteFs, root: string, convention: RouteConvention, budget: Budget, signal: AbortSignal | undefined): Promise<string[]> {
+/** Every file under a convention's folders, as POSIX paths relative to `root` (the app root), within `budget`. */
+export async function conventionFiles(
+  fs: RouteFs,
+  root: string,
+  convention: RouteConvention,
+  budget: Budget,
+  signal: AbortSignal | undefined,
+): Promise<string[]> {
   const files: string[] = [];
   for (const relative of CONVENTION_FOLDERS[convention]) {
     const folder = await conventionFolder(fs, root, relative);
     if (folder) files.push(...(await walk(fs, root, folder, budget, signal)));
   }
-  return routesFromFiles(convention, files);
+  return files;
+}
+
+async function walkConvention(fs: RouteFs, root: string, convention: RouteConvention, budget: Budget, signal: AbortSignal | undefined): Promise<string[]> {
+  return routesFromFiles(convention, await conventionFiles(fs, root, convention, budget, signal));
 }
 
 /** A parsed file's text: null when it is missing (`"missing"`), and `"refused"` when it is a link, not a file or too big. */
-async function readParsedFile(fs: RouteFs, root: string, relative: string): Promise<string | "missing" | "refused"> {
+export async function readParsedFile(fs: RouteFs, root: string, relative: string): Promise<string | "missing" | "refused"> {
   const folder = await conventionFolder(fs, root, path.posix.dirname(relative));
   if (!folder) return "missing";
   const file = path.join(folder, path.posix.basename(relative));
@@ -267,9 +285,7 @@ export async function discoverRoutes(
   if (signal?.aborted) throw abortError();
   const conventions = conventionsFor(framework);
   if (conventions.length === 0) return null;
-  const fs: RouteFs = { ...DEFAULT_FS, ...options.fs };
-  // A caller's own path listing (a test's spy) is the one used.
-  if (options.fs?.readdir && !options.fs.listOpened) delete fs.listOpened;
+  const fs = routeFs(options.fs);
   const root = await confinedRoot(fs, workspaceRoot, appRoot);
   if (!root) return null;
   const budget: Budget = { entries: 0, truncated: false };

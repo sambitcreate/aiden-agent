@@ -252,6 +252,14 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
     requiresCapability: "designMode",
   },
   {
+    id: "canvas-duplicate-page",
+    title: "Duplicate a live page as a variant",
+    description: "With one live app frame selected, copies its page file as name-v2.",
+    keys: ["Command+D"],
+    section: "Design canvas",
+    requiresCapability: "designLive",
+  },
+  {
     id: "canvas-fit",
     title: "Fit everything / the selection",
     description: "⇧0 resets the zoom; + and - zoom in and out; M shows the minimap.",

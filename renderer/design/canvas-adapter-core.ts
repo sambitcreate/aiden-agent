@@ -16,7 +16,14 @@ import {
 } from "../shared/design-canvas/connectors";
 import { commentsWithoutFrames } from "../shared/design-canvas/comments";
 import { clampCoord, clampSize, copyFrames } from "../shared/design-canvas/placement";
-import { APP_DEFAULT_VIEWPORT, appFrameBox, appResizeScale } from "../shared/design-canvas/app-frame";
+import {
+  APP_DEFAULT_VIEWPORT,
+  appEdgeResize,
+  appFrameBox,
+  appResizeScale,
+  type AppResizeMode,
+  type AppResizeSide,
+} from "../shared/design-canvas/app-frame";
 import {
   DESIGN_CANVAS_LIMITS,
   isDesignContainer,
@@ -99,14 +106,29 @@ export function presentedFrameIds(doc: DesignCanvas, id: string): Set<string> {
  * Applies position, resize and remove changes. Selection and React Flow's own
  * measurements are not document edits; when nothing in `changes` edits the
  * document, the same object comes back so callers can skip the save.
+ *
+ * `resizeModes` names the control each live app frame is being resized by
+ * (3c, S89). A corner (or no entry) keeps today's rule: the aspect stays and
+ * the scale changes. An edge changes the viewport and keeps the scale: the
+ * batch's position and size go through `appEdgeResize` once, from the frame as
+ * it was before the batch, and its box overrides any position change.
  */
 export function applyNodeChanges(
   doc: DesignCanvas,
   changes: NodeChange<DesignNode>[],
+  resizeModes?: ReadonlyMap<string, AppResizeMode>,
 ): DesignCanvas {
   const boxes = new Map<string, Pick<DesignFrame, "x" | "y" | "w" | "h">>();
   /** A live app frame's new scale after a resize: its aspect stays (D15). */
   const scales = new Map<string, number>();
+  /** A live app frame's new viewport after an edge drag (S89). */
+  const viewports = new Map<string, { width: number; height: number }>();
+  /** What an edge drag of a live app frame asked for in this batch: xyflow's position and size. */
+  const edgeDrags = new Map<string, { side: AppResizeSide; x?: number; y?: number; w?: number; h?: number }>();
+  const edgeOf = (id: string): AppResizeSide | undefined => {
+    const mode = resizeModes?.get(id);
+    return mode !== undefined && mode !== "corner" && original.get(id)?.kind === "app" ? mode : undefined;
+  };
   const moved = new Set<string>();
   const removed = new Set<string>();
   const original = new Map(doc.frames.map((frame) => [frame.id, frame]));
@@ -126,6 +148,11 @@ export function applyNodeChanges(
       removed.add(change.id);
     } else if (change.type === "position") {
       if (!change.position) continue;
+      const side = edgeOf(change.id);
+      if (side) {
+        edgeDrags.set(change.id, { ...edgeDrags.get(change.id), side, x: change.position.x, y: change.position.y });
+        continue;
+      }
       const box = boxOf(change.id);
       box.x = clampCoord(change.position.x);
       box.y = clampCoord(change.position.y);
@@ -138,6 +165,11 @@ export function applyNodeChanges(
       const box = boxOf(change.id);
       const frame = original.get(change.id)!;
       const kind = frame.kind;
+      const side = edgeOf(change.id);
+      if (side) {
+        edgeDrags.set(change.id, { ...edgeDrags.get(change.id), side, w: change.dimensions.width, h: change.dimensions.height });
+        continue;
+      }
       if (kind === "app") {
         // The width decides the scale unless only the height moved; the box follows the viewport.
         const width = change.dimensions.width !== box.w || change.dimensions.height === box.h ? change.dimensions.width : undefined;
@@ -151,6 +183,14 @@ export function applyNodeChanges(
       box.w = clampSize(change.dimensions.width, kind);
       box.h = clampSize(change.dimensions.height, kind);
     }
+  }
+
+  // One edge rule per frame per batch, from the frame before it (S89).
+  for (const [id, { side, ...drag }] of edgeDrags) {
+    const frame = original.get(id)!;
+    const next = appEdgeResize(frame, side, drag, DESIGN_CANVAS_LIMITS.maxSize);
+    boxes.set(id, { x: clampCoord(next.x), y: clampCoord(next.y), w: next.w, h: next.h });
+    viewports.set(id, next.viewport);
   }
 
   // A moved group or artboard carries its members, unless a member moved on its own in the same change.
@@ -179,10 +219,17 @@ export function applyNodeChanges(
       // A dragged connector moves its free ends by as much as its box moved.
       const drawn = connectorGeometry(original, frame).box;
       next = translateConnector(frame, box.x - drawn.x, box.y - drawn.y);
-    } else if (box && (box.x !== frame.x || box.y !== frame.y || box.w !== frame.w || box.h !== frame.h)) {
-      next = { ...frame, ...box };
-      const scale = scales.get(frame.id);
-      if (scale !== undefined) next.scale = scale;
+    } else if (box) {
+      const viewport = viewports.get(frame.id);
+      const own = frame.viewport ?? APP_DEFAULT_VIEWPORT;
+      // At small scales a one-pixel viewport change can round to the same box, and still counts.
+      const reflowed = viewport !== undefined && (viewport.width !== own.width || viewport.height !== own.height);
+      if (reflowed || box.x !== frame.x || box.y !== frame.y || box.w !== frame.w || box.h !== frame.h) {
+        next = { ...frame, ...box };
+        const scale = scales.get(frame.id);
+        if (scale !== undefined) next.scale = scale;
+        if (viewport !== undefined) next.viewport = viewport;
+      }
     }
     if (next.groupId && removed.has(next.groupId)) {
       const { groupId: _groupId, ...rest } = next;
@@ -195,6 +242,43 @@ export function applyNodeChanges(
   const comments = removed.size > 0 ? commentsWithoutFrames(doc.comments, removed) : doc.comments;
   // Arrows follow the frames that moved, and let go of the ones removed where they last were.
   return syncConnectors({ ...doc, frames, comments });
+}
+
+/**
+ * One undo step per drag or resize. The first change of a gesture that alters
+ * the canvas records the step (a first change that rounds back to the same
+ * document records nothing, so the next one must); later changes join it, and
+ * the gesture's last change ends it. `gesture` is the canvas's own flag.
+ */
+export function gestureEdit(
+  gesture: { current: boolean },
+  edits: readonly NodeChange<DesignNode>[],
+  mutate: (doc: DesignCanvas) => DesignCanvas,
+): { record: boolean; mutate: (doc: DesignCanvas) => DesignCanvas } {
+  const flags = edits.map((entry) =>
+    entry.type === "position" ? entry.dragging : entry.type === "dimensions" ? entry.resizing : undefined,
+  );
+  if (flags.includes(true)) {
+    if (gesture.current) return { record: false, mutate };
+    // The gesture starts with the first change that alters the canvas, the
+    // first time it runs (a save conflict replays the same change later).
+    let first = true;
+    return {
+      record: true,
+      mutate: (doc) => {
+        const next = mutate(doc);
+        if (first && next !== doc) gesture.current = true;
+        first = false;
+        return next;
+      },
+    };
+  }
+  if (flags.includes(false)) {
+    const record = !gesture.current;
+    gesture.current = false;
+    return { record, mutate };
+  }
+  return { record: true, mutate };
 }
 
 /**

@@ -151,6 +151,12 @@ export class DesignCanvasStore {
       undoneRoutes?: readonly string[];
       beforeWrite?: () => Promise<void> | void;
       /**
+       * 3c (S97): called on the workspace's chain with the exact document
+       * written, only once it is written. A throw is ignored, so it can never
+       * fail or delay the save.
+       */
+      onCommitted?: (doc: DesignCanvas) => void;
+      /**
        * Which of these chats are live in this workspace. Asked on the chain,
        * only for the chats a page this save brings back was made for, as the
        * delete record has it; a brought-back page keeps `namedFor` only for a
@@ -190,6 +196,11 @@ export class DesignCanvasStore {
       if (this.tooLarge(doc)) return tooLarge();
       await options.beforeWrite?.();
       await this.write(workspaceId, doc);
+      try {
+        options.onCommitted?.(structuredClone(doc));
+      } catch {
+        // A listener never fails the save.
+      }
       this.forgetRestored(workspaceId, merged.restored);
       this.remember(workspaceId, removedPageIds(current, doc), merged.deletedNow);
       if (!merged.changed) return { ok: true, revision };
@@ -205,11 +216,13 @@ export class DesignCanvasStore {
    * revision. `beforeWrite` runs on the workspace's chain just before the file is
    * written, so a check that may change while the update waits (design mode
    * still on, say) is made as late as possible; throwing there writes nothing.
+   * `byPerson` (3c, S96) marks the person's own change made through main, so
+   * an app route it takes off is remembered as removed, as a save's is.
    */
   async update(
     workspaceId: string,
     mutate: (doc: DesignCanvas) => DesignCanvas,
-    options: { beforeWrite?: () => Promise<void> | void } = {},
+    options: { beforeWrite?: () => Promise<void> | void; byPerson?: boolean } = {},
   ): Promise<DesignCanvas> {
     assertDesignCanvasWorkspaceId(workspaceId);
     return this.serialize(workspaceId, async () => {
@@ -218,8 +231,9 @@ export class DesignCanvasStore {
       const revision = current.revision + 1;
       const parsed = parseDesignCanvas(isRecord(next) ? { ...next, revision } : next);
       if (!parsed.ok) throw new Error(`The canvas update is invalid: ${parsed.issues.join(" ")}`);
-      // An update comes from Aiden or the app itself: a page shown again is forgotten, but no removal is noted.
-      const doc = withRemovedAppRoutes(current, withRemovedPagePaths(current, parsed.doc, false), false);
+      // An update comes from Aiden or the app itself: a page shown again is forgotten, but no removal is
+      // noted, unless the person made it through main (a Trash of a page file).
+      const doc = withRemovedAppRoutes(current, withRemovedPagePaths(current, parsed.doc, false), options.byPerson === true);
       if (this.tooLarge(doc)) throw new Error("The canvas is too large to save.");
       await options.beforeWrite?.();
       await this.write(workspaceId, doc);
@@ -519,13 +533,20 @@ export class DesignChatCanvases {
     chatId: string,
     doc: DesignCanvas,
     baseRevision: number,
-    options: { undone?: readonly string[]; undoneRoutes?: readonly string[]; workspaceId?: string } = {},
+    options: {
+      undone?: readonly string[];
+      undoneRoutes?: readonly string[];
+      workspaceId?: string;
+      /** `DesignCanvasStore.save`'s `onCommitted`. */
+      onCommitted?: (doc: DesignCanvas) => void;
+    } = {},
   ): Promise<DesignChatCanvasSave> {
     const workspaceId = await this.workspaceFor(chatId, options.workspaceId);
     const ask = this.chatIsLive;
     const result = await this.store.save(workspaceId, doc, baseRevision, {
       ...(options.undone ? { undone: options.undone } : {}),
       ...(options.undoneRoutes ? { undoneRoutes: options.undoneRoutes } : {}),
+      ...(options.onCommitted ? { onCommitted: options.onCommitted } : {}),
       beforeWrite: () => this.assertWorkspaceExists(workspaceId),
       ...(ask
         ? {
@@ -542,11 +563,12 @@ export class DesignChatCanvases {
   async update(
     chatId: string,
     mutate: (doc: DesignCanvas) => DesignCanvas,
-    options: { beforeWrite?: () => Promise<void> | void; workspaceId?: string } = {},
+    options: { beforeWrite?: () => Promise<void> | void; workspaceId?: string; byPerson?: boolean } = {},
   ): Promise<DesignChatCanvasRead> {
     const workspaceId = await this.workspaceFor(chatId, options.workspaceId);
     const beforeWrite = options.beforeWrite;
     const doc = await this.store.update(workspaceId, mutate, {
+      ...(options.byPerson ? { byPerson: true } : {}),
       beforeWrite: async () => {
         await this.assertWorkspaceExists(workspaceId);
         await beforeWrite?.();

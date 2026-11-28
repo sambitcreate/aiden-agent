@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { APP_BRIDGE_LIMITS, isAppSourcePath, parseAppBridgeMessage, postToAppPage } from "./app-bridge-messages.ts";
+import { APP_BREAKPOINT_LIMITS, APP_BRIDGE_LIMITS, isAppSourcePath, parseAppBridgeMessage, postToAppPage } from "./app-bridge-messages.ts";
 
 const ORIGIN = "http://127.0.0.1:5173";
 const parse = (data: unknown, origin = ORIGIN) => parseAppBridgeMessage(data, origin);
@@ -129,4 +129,37 @@ test("postToAppPage prefixes the command and addresses it to the app's origin on
   ]);
   const gone = { postMessage: () => { throw new Error("detached"); } } as unknown as Window;
   postToAppPage(gone, ORIGIN, { type: "set-scheme", dark: true });
+});
+
+test("a breakpoints message keeps 0–24 strictly ascending integers in range", () => {
+  const breakpoints = (widths: unknown) => parse({ type: "aiden-app:breakpoints", widths });
+  assert.deepEqual(breakpoints([]), { type: "breakpoints", widths: [] }, "an empty list clears the ticks");
+  assert.deepEqual(breakpoints([640, 768, 1024]), { type: "breakpoints", widths: [640, 768, 1024] });
+  const full = Array.from({ length: APP_BREAKPOINT_LIMITS.count }, (_, index) => 300 + index);
+  assert.deepEqual(breakpoints(full), { type: "breakpoints", widths: full });
+  assert.deepEqual(breakpoints([APP_BREAKPOINT_LIMITS.min, APP_BREAKPOINT_LIMITS.max]), { type: "breakpoints", widths: [1, 8000] });
+  const sent = [640, 768];
+  const parsed = breakpoints(sent);
+  sent.push(1);
+  assert.deepEqual(parsed, { type: "breakpoints", widths: [640, 768] }, "the parsed list is its own copy");
+});
+
+test("unsorted, duplicate, fractional, 0, 9000, string or 25-entry lists are dropped", () => {
+  const dropped: unknown[] = [
+    [768, 640],
+    [640, 640],
+    [640.5],
+    [0, 640],
+    [640, 9000],
+    ["640"],
+    Array.from({ length: 25 }, (_, index) => 300 + index),
+    "640,768",
+    { 0: 640, length: 1 },
+    null,
+    undefined,
+    [Number.NaN],
+    [-1, 640],
+  ];
+  for (const widths of dropped) assert.equal(parse({ type: "aiden-app:breakpoints", widths }), null, JSON.stringify(widths) ?? String(widths));
+  assert.equal(parse({ type: "aiden-app:breakpoints" }), null, "no widths");
 });

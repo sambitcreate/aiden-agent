@@ -488,7 +488,11 @@
         "renderer/shared/design-canvas/app-bridge-messages.test.ts",
         "main/services/design-canvas/app-frames/app-bridge-main.test.ts",
         "main/services/design-canvas/app-frames/app-export-core.test.ts",
-        "main/services/design-canvas/app-frames/app-frame-switches.test.ts"
+        "main/services/design-canvas/app-frames/app-frame-switches.test.ts",
+        "renderer/shared/design-canvas/app-variants.test.ts",
+        "main/services/design-canvas/app-server/app-page-files-core.test.ts",
+        "main/services/design-canvas/app-server/app-page-files.test.ts",
+        "main/services/design-canvas/app-page-ledger.test.ts"
       ],
       "preserved": [
         "browser"
@@ -1640,7 +1644,10 @@
         "renderer/bot-bubbles/overlay-transition.test.tsx",
         "renderer/main/bots/bot-bubble-card.test.tsx",
         "renderer/main/bots/bot-approvals.test.tsx",
-        "renderer/components/settings/bot-bubbles-settings.test.tsx"
+        "renderer/components/settings/bot-bubbles-settings.test.tsx",
+        "renderer/design/app-viewport-ruler.test.tsx",
+        "renderer/design/app-frame-menus.test.tsx",
+        "renderer/design/app-page-actions.test.tsx"
       ],
       "preserved": [
         "ios-release-policy",
