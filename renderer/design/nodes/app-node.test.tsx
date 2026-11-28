@@ -703,6 +703,15 @@ test("3b: a route change drops the old route's path, error and stuck state, and 
 
 // ── The page's bridge: untrusted and bounded ──
 
+test("a page's first message is heard from the moment its frame is in the page", async () => {
+  // The commit that inserts the iframe, before any passive effect: the frame already listens to its page.
+  setup();
+  render(<Harness frame={appFrame()} />);
+  const { guest } = giveWindow(await iframeAsInserted());
+  post(guest, { type: "aiden-app:route", path: "/pricing?tab=2" });
+  assert.ok(screen.getByText("/pricing?tab=2"));
+});
+
 test("the in-app path comes only from this frame's own page, and an error label opens the escaped message", async () => {
   setup();
   render(<Harness frame={appFrame()} />);

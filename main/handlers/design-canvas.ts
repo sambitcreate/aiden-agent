@@ -1214,25 +1214,27 @@ export function registerDesignCanvasHandlers<Event>(deps: {
         if (created) {
           // Linux: removed through its verified folder, by identity and bytes; no Trash needed (Linux may have none).
           const back = await removeCreatedFile(copy.absolute, created, copy.bytes).catch(() => "unbound" as const);
-          if (back === "changed") return true;
+          // Someone else's file at the name, or one left aside at a random name, is never removed: the reply names where it is.
+          if (typeof back === "object") return path.posix.join(path.posix.dirname(copy.file), back.aside);
+          if (back === "changed" || back === "emptied") return copy.file;
           if (back !== "unbound") {
             if (copy.createdFolder) await (deps.pageFs?.rmdir ?? rmdir)(copy.createdFolder).catch(() => undefined);
-            return false;
+            return undefined;
           }
         }
         // Elsewhere only a path reaches it: the Trash, which can be undone, while it is exactly what was written.
         const now = await readRegularFileBytes(copy.absolute, DESIGN_SOURCE_MAX_BYTES);
-        if (!now.ok) return now.reason !== "missing";
-        if (pageDigest(now.bytes) !== pageDigest(copy.bytes)) return true;
+        if (!now.ok) return now.reason !== "missing" ? copy.file : undefined;
+        if (pageDigest(now.bytes) !== pageDigest(copy.bytes)) return copy.file;
         try {
           await context.trash(copy.absolute);
         } catch {
-          return true;
+          return copy.file;
         }
         if (copy.createdFolder) await (deps.pageFs?.rmdir ?? rmdir)(copy.createdFolder).catch(() => undefined);
-        return false;
+        return undefined;
       });
-      return kept ? { error: refusal, kept: copy.file } : { error: refusal };
+      return kept !== undefined ? { error: refusal, kept } : { error: refusal };
     }
     deps.broadcast({ workspaceId, chatId: chat.id, revision: saved.revision, step: `app-page-variant:${saved.revision}` });
     pageLedger!.record({

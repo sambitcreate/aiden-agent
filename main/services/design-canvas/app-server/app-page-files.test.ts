@@ -364,7 +364,7 @@ for (const putBack of ["after the create", "at the end"] as const) {
       assert.equal(await readFile(path.join(root, "app/routes/pricing-v2.tsx"), "utf8"), "the copy");
     } else {
       assert.deepEqual(written, { ok: false, reason: "link" });
-      assert.equal(await exists(path.join(root, "app/routes/pricing-v2.tsx")), false);
+      assert.deepEqual(await readdir(path.join(root, "app/routes")), ["home.tsx"], "nothing made, or left aside, in the workspace");
     }
   });
 }
@@ -394,4 +394,51 @@ test("removeCreatedFile takes back only the file it made, with its bytes, throug
   assert.equal(await removeCreatedFile(file, again, bytes), "removed");
   assert.equal(await exists(file), false);
   assert.equal(await removeCreatedFile(file, again, bytes), "missing");
+});
+
+test("removeCreatedFile never removes a file that took the name just before the take-back", async (t) => {
+  // Pullfrog r4724860830: another process puts its own file (the same bytes, so only the inode tells) at the name.
+  const root = await workspace(t, { "app/routes/home.tsx": "" });
+  const file = path.join(root, "app/routes/pricing-v2.tsx");
+  const bytes = Buffer.from("the copy");
+  const created = await createPageFile(file, bytes, 0o644);
+  const replace = async () => {
+    await writeFile(`${file}.theirs`, bytes);
+    await rename(`${file}.theirs`, file);
+  };
+  const result = await removeCreatedFile(file, created, bytes, { beforeTake: replace });
+  if (process.platform !== "linux") {
+    assert.equal(result, "unbound");
+    return;
+  }
+  assert.equal(result, "changed");
+  assert.notEqual((await lstat(file)).ino, created.ino, "the other file is the one at the name");
+  assert.ok((await readFile(file)).equals(bytes), "and it survives");
+  assert.deepEqual((await readdir(path.dirname(file))).sort(), ["home.tsx", "pricing-v2.tsx"], "nothing left aside");
+});
+
+test("removeCreatedFile leaves another file aside, never over the name, when the name is taken again meanwhile", async (t) => {
+  const root = await workspace(t, { "app/routes/home.tsx": "" });
+  const file = path.join(root, "app/routes/pricing-v2.tsx");
+  const bytes = Buffer.from("the copy");
+  const created = await createPageFile(file, bytes, 0o644);
+  const result = await removeCreatedFile(file, created, bytes, {
+    // One process's file takes the name before the take-back, and another's takes it again right after.
+    beforeTake: async () => {
+      await writeFile(`${file}.first`, "first");
+      await rename(`${file}.first`, file);
+    },
+    afterTake: async () => {
+      await writeFile(file, "second");
+    },
+  });
+  if (process.platform !== "linux") {
+    assert.equal(result, "unbound");
+    return;
+  }
+  assert.ok(typeof result === "object" && result.aside.startsWith(".aiden-rollback-"), "the first file is left aside");
+  // check-aiden-rules: allow no-source-grep-test reads page files in a temp workspace, not Aiden source
+  assert.equal(await readFile(file, "utf8"), "second", "the name keeps the file that took it last");
+  // check-aiden-rules: allow no-source-grep-test reads page files in a temp workspace, not Aiden source
+  assert.equal(await readFile(path.join(path.dirname(file), (result as { aside: string }).aside), "utf8"), "first", "and the first survives, aside");
 });

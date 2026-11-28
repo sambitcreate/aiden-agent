@@ -571,7 +571,10 @@ export function AppFrame({
   const pageBreakpoints = shownKey !== null && breakpoints.key === shownKey ? breakpoints.widths : NO_BREAKPOINTS;
   /** The scheme this mount's page was last told (a page starts light until told). */
   const postedScheme = React.useRef<{ key: string | null; dark: boolean }>({ key: null, dark: false });
-  React.useEffect(() => {
+  // A layout effect: the frame listens from the commit that shows its page, and a route's old listener never outlives
+  // the commit that replaced it. A passive effect left a gap after the iframe was in the page, in which its first
+  // message was dropped (or read against the old route's key).
+  React.useLayoutEffect(() => {
     if (shownKey === null || shownOrigin === null) return;
     let windowStart = 0;
     let used = 0;
