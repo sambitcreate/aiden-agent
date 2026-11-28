@@ -629,3 +629,6 @@ export const subagentRuntimeRegistry = new SubagentRuntimeRegistry(undefined, un
     );
   },
 });
+
+import { registerLoadedSubsystem } from "../../loaded-subsystems.js";
+registerLoadedSubsystem("subagentRuntimeRegistry", subagentRuntimeRegistry);

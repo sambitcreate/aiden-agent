@@ -362,3 +362,6 @@ export function disposeLocalSpeech(): void {
   host.shutDown();
   markUnloaded();
 }
+
+import { registerLoadedSubsystem } from "../loaded-subsystems.js";
+registerLoadedSubsystem("localSpeech", { disposeLocalSpeech });

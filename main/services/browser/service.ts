@@ -3477,3 +3477,6 @@ export class BrowserService {
 }
 
 export const browserService = new BrowserService();
+
+import { registerLoadedSubsystem } from "../../loaded-subsystems.js";
+registerLoadedSubsystem("browserService", browserService);

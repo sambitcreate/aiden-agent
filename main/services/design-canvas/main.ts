@@ -6,7 +6,7 @@ import { app, ipcMain, logger } from "../../platform.js";
 import { DesignCanvasSnapshots } from "./canvas-snapshots.js";
 import { DesignModeConsent } from "./design-mode-tool.js";
 import { DesignSystemOffers } from "./design-system-offers.js";
-import { DesignGrantRegistry } from "./grants.js";
+import { designGrants } from "./grants-main.js";
 import { DesignCanvasStore } from "./store.js";
 import { DESIGN_FILES_CHANGED_CHANNEL, DesignFileWatcher } from "./watch.js";
 import { RecentWrittenPages } from "./written-pages.js";
@@ -15,8 +15,7 @@ export const designCanvasStore = new DesignCanvasStore({
   root: () => path.join(app.getPath("userData"), "design-canvases"),
 });
 
-/** Live `aiden-design://` grants. Memory only: a restart ends every grant. */
-export const designGrants = new DesignGrantRegistry();
+export { designGrants };
 
 /**
  * Reloads frames when their workspace files change. A chat is watched only
@@ -42,3 +41,12 @@ export const designSystemOffers = new DesignSystemOffers({
   file: () => path.join(app.getPath("userData"), "design-system-offers.json"),
   onSaveError: (error) => logger.warn("design", "Could not record the design-system offer.", error),
 });
+
+import * as loadedSubsystems from "../../loaded-subsystems.js";
+loadedSubsystems.registerLoadedSubsystem?.("designCanvas", {
+  designCanvasStore,
+  designFileWatcher,
+  designModeConsent,
+  recentWrittenPages,
+});
+

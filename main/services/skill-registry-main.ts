@@ -29,3 +29,6 @@ export const skillRegistry = new SkillRegistry({
   discoverWithCachedGlobals: (workspaceRoot) => discoverSkillCandidatesWithCachedGlobals(workspaceRoot),
   onInvalidate: invalidateSkillDiscoveryCache,
 });
+
+import { registerLoadedSubsystem } from "../loaded-subsystems.js";
+registerLoadedSubsystem("skillRegistry", skillRegistry);

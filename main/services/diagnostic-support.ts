@@ -41,7 +41,7 @@ import {
   SUBAGENT_RUNTIME_DIAGNOSTIC_STAGES,
   SUBAGENT_RUNTIME_FAILURES,
   subagentRuntimeDiagnosticSinkFailed,
-} from "./subagents/subagent-runtime-diagnostics.js";
+} from "./subagents/subagent-runtime-journal.js";
 import { DIAGNOSTIC_REF_SALT_FILE, forgetDiagnosticRefSalt } from "./diagnostic-ref-salt.js";
 
 const gzipAsync = promisify(gzip);

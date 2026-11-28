@@ -1530,3 +1530,9 @@ export async function aidenChatOrchestrationServices() {
 export async function aidenHostDisplayName(): Promise<string> {
   return (await (await getAidenRemoteRuntime()).state.snapshot()).displayName;
 }
+
+import { registerLoadedSubsystem } from "../loaded-subsystems.js";
+registerLoadedSubsystem("aidenRemote", {
+  aidenRemoteServiceKeepsApplicationAlive,
+  stopAidenRemoteServiceAndSettle,
+});

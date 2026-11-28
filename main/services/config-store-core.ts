@@ -42,7 +42,6 @@ import {
   type ProviderModelCacheShape,
   type SettingsShape,
 } from "./portable-config-core.js";
-import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
 import {
   PROVIDER_LEGACY_QUARANTINE_BINDING_PREFIX,
   PROVIDER_LEGACY_QUARANTINE_KEY_PREFIX,
@@ -52,7 +51,10 @@ import {
   normalizeTtsSettings,
   type TtsSettingsV1,
 } from "../../renderer/shared/tts.js";
-import { migratePiProviderConfig } from "./provider-config-migration-core.js";
+import {
+  migratePiProviderConfig,
+  needsLegacyGooglePresetCatalog,
+} from "./provider-config-migration-core.js";
 import { providerConnectionSnapshot } from "./provider-credential-rotation-core.js";
 import {
   mergeGoogleThinkingPreference,
@@ -76,7 +78,7 @@ import {
   remapAgentSliderProvider,
   type AgentSliderSettings,
 } from "../../renderer/shared/agent-slider.js";
-import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
+import { GOOGLE_PROVIDER_ID, migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
 import {
   hideAllProviderModels,
   remapHiddenModelProvider,
@@ -577,7 +579,13 @@ export function createConfigStore(
           providerIdAliases: config.providerIdAliases,
           settings: { lastProviderId: currentSettings.lastProviderId },
         };
-        providersChanged = migratePiProviderConfig(draft);
+        const googlePreset = needsLegacyGooglePresetCatalog(draft)
+          ? await import("./google-provider.js").then((mod) => ({
+              models: mod.googleProviderModelIds(),
+              metadata: mod.googleProviderModelMetadata(),
+            }))
+          : undefined;
+        providersChanged = migratePiProviderConfig(draft, googlePreset);
         config.providers = draft.providers.map((provider) => splitStoredProvider(provider).intent);
         config.providerIdAliases = draft.providerIdAliases ?? {};
         aliasRoutesForMigration = aliasesBeforeMigration;

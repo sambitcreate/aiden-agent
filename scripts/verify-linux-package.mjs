@@ -11,12 +11,16 @@ import { listPackage } from "@electron/asar";
 import { verifyAidenFuses } from "./configure-electron-fuses.mjs";
 import { verifyPackagedRendererCsp } from "./verify-renderer-csp.mjs";
 import {
+  assertPackagedMainBundleEntries,
+  verifyPackagedMainBundle,
   verifyPackagedModelCatalogResources,
   verifyPackagedLocalSpeechWorker,
   verifyPackagedSpeechResources,
   verifyPackagedSlimness,
   verifyPackagedSubagentInferenceWorker,
 } from "./verify-macos-package.mjs";
+
+export { assertPackagedMainBundleEntries, verifyPackagedMainBundle };
 
 const modulePath = fileURLToPath(import.meta.url);
 const repositoryRoot = path.resolve(path.dirname(modulePath), "..");
@@ -338,9 +342,7 @@ export async function verifyLinuxPackage(appDirectory) {
     listPackage(asar, { isPack: false }).map((entry) => entry.replaceAll("\\", "/")),
   );
   verifyPackagedRendererCsp(asar);
-  if (!entries.has("/build/main/index.js")) {
-    throw new Error("Packaged app.asar is missing /build/main/index.js.");
-  }
+  await verifyPackagedMainBundle(asar);
   assertNoMetalSpeechEngine([...entries]);
   await verifyPackagedModelCatalogResources(asar);
   await verifyPackagedSlimness(asar);

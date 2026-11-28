@@ -42,3 +42,6 @@ export const spending = new SpendingService({
       errorType: error instanceof Error ? error.name : typeof error,
     }),
 });
+
+import { registerLoadedSubsystem } from "../loaded-subsystems.js";
+registerLoadedSubsystem("spending", spending);

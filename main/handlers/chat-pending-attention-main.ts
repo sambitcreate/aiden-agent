@@ -1,3 +1,4 @@
+import { peekLoadedSubsystem } from "../loaded-subsystems.js";
 import { ipcMain, logger } from "../platform.js";
 import { chatActivityRegistry } from "../services/chat-activity.js";
 import { readInterruptedRunWaits } from "../services/chat-pending-attention.js";
@@ -5,7 +6,6 @@ import { detachedPromptLog } from "../services/chat-pending-attention-main.js";
 import { chatStore } from "../services/chat-store.js";
 import { hostRunRegistry } from "../services/host-runs-main.js";
 import { interruptedWaits } from "../services/interrupted-waits-main.js";
-import { goalNeedsYou } from "../services/goal/goal-main.js";
 import { piRuntimeEffectStore } from "../services/pi-runtime-effect-store.js";
 import { registerChatPendingAttentionHandlers } from "./chat-pending-attention.js";
 
@@ -28,7 +28,7 @@ export function registerChatPendingAttentionIpc(): void {
         operations: piRuntimeEffectStore,
         onError: (error) => logger.warn("chats", "Could not read interrupted waits for the Inbox.", error),
       }),
-    goalNeedsYou,
+    goalNeedsYou: (chatId) => peekLoadedSubsystem("goalLoop")?.goalNeedsYou(chatId),
     // A new activity revision reaches the Dock badge and the Inbox's waits query.
     onChange: () => chatActivityRegistry.touch(),
   });

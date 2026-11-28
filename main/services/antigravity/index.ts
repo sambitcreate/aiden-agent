@@ -53,3 +53,6 @@ export function antigravityProvider(): Provider<Api> {
     discoverModels: (signal) => antigravityService().discoverModels(signal),
   });
 }
+
+import { registerLoadedSubsystem } from "../../loaded-subsystems.js";
+registerLoadedSubsystem("antigravity", { shutdownAntigravity });

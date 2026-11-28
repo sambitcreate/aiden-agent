@@ -7,9 +7,10 @@ import { ipcMain, logger } from "../../platform.js";
 import type { NotificationChannel } from "../../../renderer/preload-channels.js";
 import { chatStore } from "../chat-store.js";
 import { configStore } from "../config-store.js";
+import { peekLoadedSubsystem } from "../../loaded-subsystems.js";
 import type { ChatGenerationOwner } from "../chat-generation-owner.js";
 import { goalTurnHooks } from "../goal/goal-turn-hooks.js";
-import { llmClient } from "../llm-client.js";
+import { lazyLlmLifecycleClient } from "../llm-turn-gates-main.js";
 import type { Chat } from "../types.js";
 import {
   NoticeDelivery,
@@ -66,7 +67,9 @@ async function followUpChat(chatId: string): Promise<FollowUpChat | { unavailabl
 }
 
 async function queueIntoRun(post: AgentNoticePost): Promise<QueueIntoRunResult> {
-  const result = await llmClient.admitAgentNotice(post.chatId, { text: post.text, notice: post.notice });
+  const loaded = peekLoadedSubsystem("llmClient");
+  if (!loaded) return { kind: "no-run" };
+  const result = await loaded.admitAgentNotice(post.chatId, { text: post.text, notice: post.notice });
   if (!result) return { kind: "no-run" };
   if ("busyWith" in result) return { kind: "busy", holder: result.busyWith };
   if (result.committed) transcriptChanged(post.chatId);
@@ -78,6 +81,7 @@ async function queueIntoRun(post: AgentNoticePost): Promise<QueueIntoRunResult> 
 async function startTurn(chatId: string, post?: AgentNoticePost): Promise<StartTurnResult> {
   const target = await followUpChat(chatId);
   if ("unavailable" in target) return { kind: "unavailable", reason: target.unavailable };
+  const { llmClient } = await import("../llm-client.js");
   const streamId = `followup-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
   const owner = createUnattendedOwner(streamId);
   const lease = llmClient.beginChatTurn(chatId, streamId, owner.documentId);
@@ -137,7 +141,7 @@ async function append(post: AgentNoticePost): Promise<AppendResult> {
   if (!chat) return { kind: "gone", reason: "The chat no longer exists." };
   const turnId = `notice-${randomUUID()}`;
   const ownerId = `follow-up-append:${turnId}`;
-  const lease = llmClient.beginChatTurn(post.chatId, turnId, ownerId);
+  const lease = lazyLlmLifecycleClient.beginChatTurn(post.chatId, turnId, ownerId);
   if (!lease) return { kind: "busy" };
   try {
     const saved = await chatStore.appendMessage(
@@ -164,12 +168,16 @@ export const noticeDelivery = new NoticeDelivery({
   startGoalRound: (chatId, post) => goalTurnHooks().noticeRound(chatId, post ? { text: post.text, notice: post.notice } : undefined),
   append,
   waitForIdle: async (chatId) => {
-    await llmClient.waitForChatIdle(chatId);
+    await lazyLlmLifecycleClient.waitForChatIdle(chatId);
   },
   waitForRunToSettle: async (chatId) => {
-    await llmClient.waitForChatIdleWithin(chatId, OTHER_RUN_WAIT_MS);
+    const loaded = peekLoadedSubsystem("llmClient");
+    if (loaded) await loaded.waitForChatIdleWithin(chatId, OTHER_RUN_WAIT_MS);
   },
-  waitForRunToEnd: (chatId) => llmClient.waitForChatIdleWithin(chatId, LONG_RUN_WAIT_MS),
+  waitForRunToEnd: async (chatId) => {
+    const loaded = peekLoadedSubsystem("llmClient");
+    return loaded ? loaded.waitForChatIdleWithin(chatId, LONG_RUN_WAIT_MS) : true;
+  },
   now: Date.now,
   onError: (error) => logger.warn("follow-through", "A follow-up notice was not delivered.", error),
 });

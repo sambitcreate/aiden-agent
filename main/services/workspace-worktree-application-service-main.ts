@@ -33,9 +33,9 @@ import {
 import { checkCreateCapacity, checkSnapshotCapacity, checkWorktreeAllocation } from "./managed-worktree-capacity.js";
 import { provisionWorktreeIncludedFiles } from "./managed-worktree-provisioner.js";
 import { closeWorkspaceFollowThrough } from "./follow-through/follow-through-main.js";
-import { llmClient } from "./llm-client.js";
+import { lazyLlmLifecycleClient } from "./llm-turn-gates-main.js";
+import { peekLoadedSubsystem } from "../loaded-subsystems.js";
 import { scheduleService } from "./schedule-service.js";
-import { terminalService } from "./terminal.js";
 import { workspaceGitWatcher } from "./workspace-git-watcher-main.js";
 import { defaultWorkspaceId } from "./workspace-application-service.js";
 import { workspaceEnvironmentApplicationService } from "./workspace-environment-application-service-main.js";
@@ -43,7 +43,7 @@ import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { workspaceOperationRegistry } from "./workspace-operation-registry.js";
 import { createWorkspaceWorktreeApplicationService } from "./workspace-worktree-application-service.js";
 import { removeWorkspaceArtifacts } from "./workspace-artifacts/main.js";
-import { designGrants } from "./design-canvas/main.js";
+import { designGrants } from "./design-canvas/grants-main.js";
 
 export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplicationService({
   environment: workspaceEnvironmentApplicationService,
@@ -149,9 +149,12 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
   cancelWorkspaceOperations: (workspaceId, exceptSignal) =>
     workspaceOperationRegistry.cancelAndSettle(workspaceId, { exceptSignal }),
   closeWorkspaceFollowThrough,
-  closeWorkspaceTerminals: (workspaceId) => terminalService.closeForWorkspaceAndWait(workspaceId),
+  closeWorkspaceTerminals: async (workspaceId) => {
+    const loaded = peekLoadedSubsystem("terminalService");
+    if (loaded) await loaded.closeForWorkspaceAndWait(workspaceId);
+  },
   closeWorkspaceGitWatcher: (workspaceId) => workspaceGitWatcher.close(workspaceId),
-  cancelWorkspaceGeneration: (workspaceId) => llmClient.cancelWorkspaceAndSettle(workspaceId),
+  cancelWorkspaceGeneration: (workspaceId) => lazyLlmLifecycleClient.cancelWorkspaceAndSettle(workspaceId),
   cancelWorkspaceSchedules: (workspaceId) => scheduleService.cancelWorkspace(workspaceId),
   resumeWorkspaceSchedules: (workspaceId) => scheduleService.resumeWorkspace(workspaceId),
   createWorkspaceId: defaultWorkspaceId,

@@ -314,3 +314,6 @@ class GeminiLiveTranscriptionManager {
 }
 
 export const geminiLiveTranscription = new GeminiLiveTranscriptionManager();
+
+import { registerLoadedSubsystem } from "../loaded-subsystems.js";
+registerLoadedSubsystem("geminiLiveTranscription", geminiLiveTranscription);

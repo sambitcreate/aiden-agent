@@ -1,7 +1,6 @@
 import type { ChatPendingAttention } from "../../renderer/shared/chat-pending-attention.js";
 import { isFailedBotSession, isLocalInboxChat } from "../../renderer/shared/inbox-state.js";
 import { app, ipcMain, logger, onBroadcast } from "../platform.js";
-import { botApplicationService } from "./bot-application-service-main.js";
 import { chatActivityRegistry } from "./chat-activity.js";
 import { pendingAttentionForChat, readInterruptedRunWaits } from "./chat-pending-attention.js";
 import { detachedPromptLog } from "./chat-pending-attention-main.js";
@@ -9,7 +8,6 @@ import { chatReadMarkers } from "./chat-read-markers-main.js";
 import { chatStore } from "./chat-store.js";
 import { chatTriage } from "./chat-triage-main.js";
 import { configStore } from "./config-store.js";
-import { goalNeedsYou } from "./goal/goal-main.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
 import { hostRunRegistry } from "./host-runs-main.js";
 import {
@@ -24,7 +22,7 @@ import {
   type InboxBadgePeer,
 } from "./inbox-dock-badge.js";
 import { interruptedWaits } from "./interrupted-waits-main.js";
-import { peekPeerHostManager } from "./peer-host-manager-main.js";
+import { peekPeerHostManager } from "./peer-host-manager-peek.js";
 import { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 
 /** Whatever changes a row's Needs you placement. */
@@ -49,6 +47,7 @@ const botFailures = distinctFailureReporter((error) =>
 
 async function botsNeedingYou(): Promise<string[]> {
   if (!hostPlatformCapabilities().bots) return [];
+  const { botApplicationService } = await import("./bot-application-service-main.js");
   const bots = await botApplicationService.list();
   if (bots.length === 0) return [];
   const { botLiveProjection, botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
@@ -103,6 +102,7 @@ async function readLocal(): Promise<InboxBadgeLocal> {
       onError: (error) => logger.warn("inbox", "Could not read interrupted waits for the Dock badge.", error),
     },
   );
+  const { goalNeedsYou } = await import("./goal/goal-main.js");
   const pending = new Map<string, ChatPendingAttention>();
   for (const chat of listed) {
     const attention = pendingAttentionForChat(chat.id, {

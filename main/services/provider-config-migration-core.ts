@@ -1,15 +1,29 @@
 import { createHash } from "node:crypto";
-import { ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_DEFAULT_MODELS } from "./anthropic-provider.js";
 import { customProviderId, isCustomProviderId } from "./custom-provider-id.js";
 import {
-  GOOGLE_BASE_URL,
-  GOOGLE_DEFAULT_MODEL,
+  MAX_CONFIG_ID_LENGTH,
+  type AppSettings,
+  type ProviderModelMetadata,
+  type StoredProvider,
+} from "./types.js";
+import {
   GOOGLE_PROVIDER_ID,
-  googleProviderModelMetadata,
-  googleProviderModelIds,
-} from "./google-provider.js";
-import { MAX_CONFIG_ID_LENGTH, type AppSettings, type StoredProvider } from "./types.js";
-import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
+  migrateLegacyPiProviderId,
+} from "../../renderer/shared/google-provider.js";
+
+const ANTHROPIC_DEFAULT_MODELS = [
+  "claude-sonnet-5",
+  "claude-opus-4-8",
+  "claude-haiku-4-5",
+] as const;
+const ANTHROPIC_DEFAULT_MODEL = ANTHROPIC_DEFAULT_MODELS[0];
+const GOOGLE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+const GOOGLE_DEFAULT_MODEL = "gemini-2.5-flash";
+
+export interface LegacyGooglePresetCatalog {
+  readonly models: readonly string[];
+  readonly metadata: Readonly<Record<string, ProviderModelMetadata>>;
+}
 
 /** IDs Aiden persisted before Pi became the cloud-provider authority. */
 const LEGACY_PI_PROVIDER_IDS = new Set([
@@ -39,8 +53,6 @@ const LEGACY_PI_BASE_URLS: Readonly<Record<string, string>> = {
 const LEGACY_PRESET_MODELS: Readonly<Record<string, readonly string[]>> = {
   openai: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "o3-mini"],
   anthropic: ANTHROPIC_DEFAULT_MODELS,
-  google: googleProviderModelIds(),
-  gemini: googleProviderModelIds(),
   deepseek: ["deepseek-chat", "deepseek-reasoner"],
   moonshot: ["kimi-k2-0711-preview", "moonshot-v1-128k", "moonshot-v1-32k"],
 };
@@ -81,9 +93,13 @@ function exactlyEqual(left: readonly string[], right: readonly string[]): boolea
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
-function hasOnlyExpectedMetadata(provider: StoredProvider): boolean {
+function hasOnlyExpectedMetadata(
+  provider: StoredProvider,
+  googlePreset?: LegacyGooglePresetCatalog,
+): boolean {
   if (provider.id === GOOGLE_PROVIDER_ID || provider.id === "gemini") {
-    return JSON.stringify(provider.modelMetadata) === JSON.stringify(googleProviderModelMetadata());
+    if (!googlePreset) return false;
+    return JSON.stringify(provider.modelMetadata) === JSON.stringify(googlePreset.metadata);
   }
   return !provider.modelMetadata || Object.keys(provider.modelMetadata).length === 0;
 }
@@ -109,9 +125,15 @@ function hasExpectedPresetDefault(provider: StoredProvider, expected: string): b
  * default, label, auth requirement, deployment, or metadata is a real custom
  * connection even when it still points at the vendor's canonical URL.
  */
-function isUntouchedPiPreset(provider: StoredProvider): boolean {
+function isUntouchedPiPreset(
+  provider: StoredProvider,
+  googlePreset?: LegacyGooglePresetCatalog,
+): boolean {
   const id = provider.id;
-  const models = LEGACY_PRESET_MODELS[id];
+  const models =
+    id === GOOGLE_PROVIDER_ID || id === "gemini"
+      ? googlePreset?.models
+      : LEGACY_PRESET_MODELS[id];
   return Boolean(
     provider.isPreset === true &&
     provider.baseUrl === LEGACY_PI_BASE_URLS[id] &&
@@ -121,7 +143,17 @@ function isUntouchedPiPreset(provider: StoredProvider): boolean {
     provider.deployment === "hosted" &&
     models &&
     hasExpectedPresetModels(provider, models) &&
-    hasOnlyExpectedMetadata(provider),
+    hasOnlyExpectedMetadata(provider, googlePreset),
+  );
+}
+
+export function needsLegacyGooglePresetCatalog(
+  config: Pick<ProviderConfigMigrationShape, "providers">,
+): boolean {
+  return config.providers.some(
+    (provider) =>
+      provider.isPreset === true &&
+      (provider.id === GOOGLE_PROVIDER_ID || provider.id === "gemini"),
   );
 }
 
@@ -184,7 +216,10 @@ function flattenAliasTargets(aliases: Record<string, string>): void {
  * connection gets an Aiden-reserved ID, preventing a future Pi provider from
  * claiming its endpoint or historical chats.
  */
-export function migratePiProviderConfig(config: ProviderConfigMigrationShape): boolean {
+export function migratePiProviderConfig(
+  config: ProviderConfigMigrationShape,
+  googlePreset?: LegacyGooglePresetCatalog,
+): boolean {
   const beforeProviders = JSON.stringify(config.providers);
   const beforeAliases = JSON.stringify(config.providerIdAliases ?? {});
   const aliases = Object.fromEntries(Object.entries(config.providerIdAliases ?? {}));
@@ -214,7 +249,7 @@ export function migratePiProviderConfig(config: ProviderConfigMigrationShape): b
     }
 
     const isLegacyPiProvider = LEGACY_PI_PROVIDER_IDS.has(provider.id);
-    if (isLegacyPiProvider && isUntouchedPiPreset(provider)) return [];
+    if (isLegacyPiProvider && isUntouchedPiPreset(provider, googlePreset)) return [];
 
     // Old localhost entries and all historic custom connections must be moved
     // into the reserved namespace. A retained edited preset is custom too.

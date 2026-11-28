@@ -8,3 +8,6 @@ export const computerUseStatus = new ComputerUseStatusService({
     computerUseSupported() && (await configStore.getSettings()).computerUseEnabled === true,
   createHost: createCuaDriverHost,
 });
+
+import { registerLoadedSubsystem } from "../../loaded-subsystems.js";
+registerLoadedSubsystem("computerUseStatus", computerUseStatus);

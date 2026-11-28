@@ -150,3 +150,6 @@ export const storageUsageService = createStorageUsageService({
   broadcast: (event) => ipcMain.broadcast("storage:changed", event),
   logError: (area, message, error) => logger.warn(area, message, error),
 });
+
+import { registerLoadedSubsystem } from "../loaded-subsystems.js";
+registerLoadedSubsystem("storageUsageService", storageUsageService);

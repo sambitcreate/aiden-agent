@@ -13,8 +13,11 @@ import { aidenLivePreferences } from "../../../renderer/shared/aiden-live-settin
 import { app } from "../../platform.js";
 import { hostPlatformCapabilities } from "../host-platform-capabilities.js";
 import { createGeminiLiveAcceptanceEvidenceRecorder } from "./acceptance-evidence.js";
-import { AidenLiveThreadStore } from "../aiden-live-thread-store.js";
-import * as path from "node:path";
+import {
+  aidenLiveThreadStore,
+  ensureAidenLiveThreadRecovery,
+  initializeAidenLiveService,
+} from "../aiden-live-thread-recovery.js";
 import { randomUUID } from "node:crypto";
 import type { RendererDocumentOwner } from "../renderer-document-owner.js";
 import { Behavior } from "@google/genai";
@@ -28,28 +31,7 @@ import {
 } from "./display-source-picker.js";
 import type { LiveDisplaySources } from "../../../renderer/shared/assistant-live.js";
 
-const aidenLiveThreadStore = new AidenLiveThreadStore(() =>
-  path.join(app.getPath("userData"), "aiden-live"),
-);
-let aidenLiveThreadRecovery: Promise<void> | null = null;
-function ensureAidenLiveThreadRecovery(): Promise<void> {
-  aidenLiveThreadRecovery ??= aidenLiveThreadStore
-    .reconcileActive()
-    .then(() => undefined)
-    .catch((error: unknown) => {
-      aidenLiveThreadRecovery = null;
-      process.stderr.write(
-        `[aiden-live] stage=thread-recovery result=failed type=${error instanceof Error ? error.name : "unknown"}\n`,
-      );
-      throw error;
-    });
-  return aidenLiveThreadRecovery;
-}
-
-/** Run crash reconciliation at application startup before a renderer can start Live. */
-export function initializeAidenLiveService(): Promise<void> {
-  return ensureAidenLiveThreadRecovery();
-}
+export { initializeAidenLiveService };
 const computerUseAuthorizations = new Map<
   string,
   { token: string; dispose: () => void }
@@ -233,3 +215,6 @@ export const geminiLiveService = new GeminiLiveService({
     };
   },
 });
+
+import { registerLoadedSubsystem } from "../../loaded-subsystems.js";
+registerLoadedSubsystem("geminiLiveService", geminiLiveService);

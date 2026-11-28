@@ -5,6 +5,8 @@
 // it runs in clamshell mode. On Linux Electron asks the desktop's inhibit
 // service over D-Bus, which is best-effort. Released at quit.
 
+import { peekLoadedSubsystem } from "../../loaded-subsystems.js";
+import * as loadedSubsystems from "../../loaded-subsystems.js";
 import { ipcMain, logger, onBroadcast, powerMonitor, powerSaveBlocker } from "../../platform.js";
 import {
   KEEP_AWAKE_CHANGED_CHANNEL,
@@ -14,9 +16,7 @@ import {
 import { configStore } from "../config-store.js";
 import { backgroundJobs, checkBacks, goalChecks } from "../follow-through/follow-through-main.js";
 import { hostPlatformCapabilities } from "../host-platform-capabilities.js";
-import { goalLoop, onGoalLookingChanged } from "../goal/goal-main.js";
 import { hostRunRegistry } from "../host-runs-main.js";
-import { usageLimits } from "../usage-limit-main.js";
 import { KeepAwakeController, type KeepAwakeInput } from "./keep-awake-core.js";
 import {
   backgroundJobKeepAwakeInput,
@@ -29,6 +29,7 @@ import {
 } from "./keep-awake-inputs.js";
 
 let controller: KeepAwakeController<number, ReturnType<typeof setTimeout>> | undefined;
+let notifyControllerInputsChanged: (() => void) | undefined;
 const unsubscribers: Array<() => void> = [];
 
 /** What the Settings row shows. */
@@ -133,12 +134,13 @@ export async function startKeepAwake(): Promise<void> {
       controller?.update();
     });
   };
-  const waits = () => usageLimits.gate.waits();
+  notifyControllerInputsChanged = update;
+  const waits = () => peekLoadedSubsystem("usageLimits")?.gate.waits() ?? [];
   created.addInput(hostRunKeepAwakeInput({ runs: () => hostRunRegistry.list(), waits }));
   created.addInput(usageLimitKeepAwakeInput(waits));
   created.addInput(backgroundJobKeepAwakeInput(() => backgroundJobs.listAll()));
   created.addInput(doneWhenKeepAwakeInput(() => goalChecks.list()));
-  created.addInput(goalLookKeepAwakeInput(() => goalLoop.looking()));
+  created.addInput(goalLookKeepAwakeInput(() => peekLoadedSubsystem("goalLoop")?.goalLoop.looking() ?? []));
   created.addInput(
     dueSoonKeepAwakeInput({
       checkBacks: () => checkBacks.pendingAll(),
@@ -156,10 +158,12 @@ export async function startKeepAwake(): Promise<void> {
   powerMonitor.on("on-battery", powerChanged);
   powerMonitor.on("resume", resumed);
 
+  const loadedGoalLoop = peekLoadedSubsystem("goalLoop");
+  const loadedUsageLimits = peekLoadedSubsystem("usageLimits");
   unsubscribers.push(
     hostRunRegistry.onChange(update),
-    onGoalLookingChanged(update),
-    usageLimits.gate.onChange(update),
+    ...(loadedGoalLoop ? [loadedGoalLoop.onGoalLookingChanged(update)] : []),
+    ...(loadedUsageLimits ? [loadedUsageLimits.gate.onChange(update)] : []),
     () => {
       powerMonitor.removeListener("on-ac", powerChanged);
       powerMonitor.removeListener("on-battery", powerChanged);
@@ -167,7 +171,7 @@ export async function startKeepAwake(): Promise<void> {
     },
     onBroadcast((channel) => {
       // Jobs (including their ports), checks and check-backs announce themselves here.
-      if (channel === "chats:follow-through-changed") update();
+      if (channel === "chats:follow-through-changed" || channel === "usageLimits:changed" || channel === "chats:goal-changed") update();
       // Bot routines (and so Bot wake-ups) changed.
       else if (channel === "bots:changed") refreshWakeUps();
       // The Settings switch saves through the scheduled-task settings, and a
@@ -183,7 +187,13 @@ export async function startKeepAwake(): Promise<void> {
 /** Lets go of the hold and stops watching; for quit. */
 export function stopKeepAwake(): void {
   for (const unsubscribe of unsubscribers.splice(0)) unsubscribe();
+  notifyControllerInputsChanged = undefined;
   controller?.dispose();
   controller = undefined;
   pendingWakeUps = [];
 }
+
+loadedSubsystems.registerLoadedSubsystem?.("keepAwake", {
+  stopKeepAwake,
+  notifyInputsChanged: () => notifyControllerInputsChanged?.(),
+});

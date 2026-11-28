@@ -422,6 +422,7 @@ import {
 } from "./skill-invocation-turn.js";
 import { SLASH_LIMITS } from "../../renderer/shared/slash-commands.js";
 import { ChatDeletionGate } from "./chat-deletion-gate.js";
+import * as llmTurnGates from "./llm-turn-gates-main.js";
 import {
   authoritativeChatGenerationMode,
   authoritativeChatWorkspaceId,
@@ -842,8 +843,9 @@ interface InitializingGeneration {
 
 const initializing = new Map<string, InitializingGeneration>();
 const computerUseGenerationGate = new ComputerUseGenerationGate();
-const chatDeletionGate = new ChatDeletionGate();
-const chatWorkspaceMutationGate = new ChatWorkspaceMutationGate();
+const chatDeletionGate = llmTurnGates.chatDeletionGate ?? new ChatDeletionGate();
+const chatWorkspaceMutationGate =
+  llmTurnGates.chatWorkspaceMutationGate ?? new ChatWorkspaceMutationGate();
 /** The person steered or queued input into a chat: if another chat started it, it is theirs now. */
 async function personSteeredStartedChat(chatId: string): Promise<void> {
   const { chatLinks } = await import("./chat-orchestration/links-main.js");
@@ -868,8 +870,8 @@ const runInputAdmission = createChatRunInputAdmission({
     });
   },
 });
-const chatCopyGate = new ChatWorkspaceMutationGate();
-const chatTurnAdmission = new ChatTurnAdmission();
+const chatCopyGate = llmTurnGates.chatCopyGate ?? new ChatWorkspaceMutationGate();
+const chatTurnAdmission = llmTurnGates.chatTurnAdmission ?? new ChatTurnAdmission();
 
 /**
  * Saved input a run ended without answering: Pi closed its queue while the
@@ -3387,10 +3389,12 @@ async function prepareGeneration(
   };
 }
 
-const acpScratch = createAcpScratchDirectories({
-  root: () => join(app.getPath("userData"), "acp", "scratch"),
-  onPrepareError: (error) => logger.warn("acp", "Could not prepare the agent scratch directory.", error),
-});
+const acpScratch =
+  llmTurnGates.acpScratch ??
+  createAcpScratchDirectories({
+    root: () => join(app.getPath("userData"), "acp", "scratch"),
+    onPrepareError: (error) => logger.warn("acp", "Could not prepare the agent scratch directory.", error),
+  });
 
 /** Keeps the admitted half of `start` out of reach of anything but `start`. */
 const runAdmittedStart = Symbol("runAdmittedStart");
@@ -7572,3 +7576,6 @@ export const llmClient = {
     return activeSettled && parentStateCleared;
   },
 };
+
+import * as loadedSubsystems from "../loaded-subsystems.js";
+loadedSubsystems.registerLoadedSubsystem?.("llmClient", llmClient);

@@ -35,6 +35,7 @@ import {
   assertMinimalComputerUseEntitlements,
   assertMacOSArchitectureMinimum,
   assertMatchingHostCodeHashes,
+  assertPackagedMainBundleEntries,
   assertPackagedModelCatalogEntries,
   assertSlimPackagedEntries,
   assertPackagedSubagentInferenceWorkerEntries,
@@ -46,6 +47,7 @@ import {
   assertRegularFile,
   requiresReleaseVerification,
   verifyExactComputerUseHelperTree,
+  verifyPackagedMainBundle,
   verifyPackagedModelCatalogResources,
   verifyPackagedSlimness,
   verifyPackagedSubagentInferenceWorker,
@@ -153,6 +155,112 @@ test("package verifier requires byte-identical Computer Use provenance and notic
     () => assertByteForByteMatch(Buffer.from("substituted\n"), Buffer.from("reviewed\n"), "notice"),
     /differs from the reviewed copy/,
   );
+});
+
+test("package verifier validates split main-process chunks, relative imports, and absence of source maps", async () => {
+  assert.doesNotThrow(() =>
+    assertPackagedMainBundleEntries([
+      "/build/main/index.js",
+      "/build/main/chunk-ABCD1234.js",
+    ]),
+  );
+  assert.throws(
+    () => assertPackagedMainBundleEntries(["/build/main/chunk-ABCD1234.js"]),
+    /missing \/build\/main\/index\.js/u,
+  );
+  assert.throws(
+    () => assertPackagedMainBundleEntries(["/build/main/index.js"]),
+    /missing split main-process chunks/u,
+  );
+  assert.throws(
+    () =>
+      assertPackagedMainBundleEntries([
+        "/build/main/index.js",
+        "/build/main/chunk-ABCD1234.js",
+        "/build/main/chunk-ABCD1234.js.map",
+      ]),
+    /must not include main-process source maps/u,
+  );
+
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-main-bundle-asar-"));
+  const root = await realpath(temporaryRoot);
+  try {
+    const validSource = path.join(root, "valid");
+    await mkdir(path.join(validSource, "build", "main"), { recursive: true });
+    await Promise.all([
+      writeFile(
+        path.join(validSource, "build", "main", "index.js"),
+        'import { boot } from "./chunk-BOOT1234.js";\nexport async function lazy() { return import("./chunk-LAZY5678.js"); }\nboot();\n',
+        "utf8",
+      ),
+      writeFile(
+        path.join(validSource, "build", "main", "chunk-BOOT1234.js"),
+        'export const SOURCE_MAP_PATTERN = /\\/\\/[#@]\\s*sourceMappingURL=(\\S+)/gu;\nexport function boot() { return SOURCE_MAP_PATTERN; }\n',
+        "utf8",
+      ),
+      writeFile(
+        path.join(validSource, "build", "main", "chunk-LAZY5678.js"),
+        "export const feature = 42;\n",
+        "utf8",
+      ),
+    ]);
+    const validAsar = path.join(root, "valid.asar");
+    await createPackage(validSource, validAsar);
+    await assert.doesNotReject(verifyPackagedMainBundle(validAsar));
+
+    const brokenImportSource = path.join(root, "broken-import");
+    await mkdir(path.join(brokenImportSource, "build", "main"), { recursive: true });
+    await Promise.all([
+      writeFile(
+        path.join(brokenImportSource, "build", "main", "index.js"),
+        'export const load = () => import("./chunk-MISSING.js");\n',
+        "utf8",
+      ),
+      writeFile(
+        path.join(brokenImportSource, "build", "main", "chunk-PRESENT1.js"),
+        "export const ok = true;\n",
+        "utf8",
+      ),
+    ]);
+    const brokenImportAsar = path.join(root, "broken-import.asar");
+    await createPackage(brokenImportSource, brokenImportAsar);
+    await assert.rejects(
+      verifyPackagedMainBundle(brokenImportAsar),
+      /imports missing chunk \/build\/main\/chunk-MISSING\.js/u,
+    );
+
+    const referencedMapSource = path.join(root, "referenced-map");
+    await mkdir(path.join(referencedMapSource, "build", "main"), { recursive: true });
+    await Promise.all([
+      writeFile(
+        path.join(referencedMapSource, "build", "main", "index.js"),
+        'import "./chunk-MAPPED12.js";\n',
+        "utf8",
+      ),
+      writeFile(
+        path.join(referencedMapSource, "build", "main", "chunk-MAPPED12.js"),
+        "export const x = 1;\n//# sourceMappingURL=chunk-MAPPED12.js.map\n",
+        "utf8",
+      ),
+    ]);
+    const referencedMapAsar = path.join(root, "referenced-map.asar");
+    await createPackage(referencedMapSource, referencedMapAsar);
+    await assert.rejects(
+      verifyPackagedMainBundle(referencedMapAsar),
+      /must not reference a source map/u,
+    );
+
+    const unpackedChunkAsar = path.join(root, "unpacked-chunk.asar");
+    await createPackageWithOptions(validSource, unpackedChunkAsar, {
+      unpack: "**/chunk-LAZY5678.js",
+    });
+    await assert.rejects(
+      verifyPackagedMainBundle(unpackedChunkAsar),
+      /must be a bounded packed regular file: \/build\/main\/chunk-LAZY5678\.js/u,
+    );
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
 });
 
 test("package verifier requires the models.dev snapshot", async () => {

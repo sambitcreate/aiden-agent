@@ -630,3 +630,9 @@ export const botBubbleWindowPort: BotBubbleWindowPort<IpcMainInvokeEvent> = {
     return overlayInfoOf(overlay);
   },
 };
+
+import { registerLoadedSubsystem } from "../loaded-subsystems.js";
+registerLoadedSubsystem("botBubblesWindow", {
+  destroyBotBubbleOverlays,
+  releaseBotBubbleOverlays,
+});

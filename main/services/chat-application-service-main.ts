@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { peekLoadedSubsystem } from "../loaded-subsystems.js";
 import { ipcMain, logger } from "../platform.js";
 import { chatStore } from "./chat-store.js";
 import { configStore } from "./config-store.js";
 import { displayImageArtifactStore } from "./display-image-artifact-store.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
-import { llmClient } from "./llm-client.js";
+import { lazyLlmLifecycleClient } from "./llm-turn-gates-main.js";
 import { piCompactionSessionStore } from "./pi-compaction-session-store.js";
 import { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import { subagentRunStore } from "./subagents/subagent-run-store.js";
@@ -12,14 +13,12 @@ import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { workspaceOperationRegistry } from "./workspace-operation-registry.js";
 import { createChatApplicationService } from "./chat-application-service.js";
 import { memoryStore } from "./memory-store-main.js";
-import { forgetChatContextProfile } from "./context-pressure.js";
-import { spending } from "./spending-main.js";
+import { forgetChatPromptCacheState } from "./chat-prompt-cache-state.js";
 import { remoteAttachmentStore } from "./aiden-remote-attachments-main.js";
 import { toolOutputStore } from "./tool-output-store.js";
 import { scheduleStore } from "./schedule-store.js";
 import { chatPullRequestStore } from "./chat-pull-request-service-main.js";
-import { designCanvasStore, designGrants, designModeConsent, recentWrittenPages } from "./design-canvas/main.js";
-import { EARLIER_PAGES_LIMIT, pagesWrittenInChat, placeWrittenPagesOnCanvas } from "./design-canvas/written-pages.js";
+import { designGrants } from "./design-canvas/grants-main.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
 import { cancelVisualSnapshots } from "./visual-snapshot-service.js";
 import { beginFollowThroughMove, deleteChatFollowThrough, restoreChatFollowThrough } from "./follow-through/follow-through-main.js";
@@ -33,7 +32,7 @@ import { chatTriage } from "./chat-triage-main.js";
 export const chatApplicationService = createChatApplicationService({
   chatStore,
   configStore,
-  llmClient,
+  llmClient: lazyLlmLifecycleClient,
   displayImageArtifactStore,
   generativeUiArtifactStore,
   workspaceMutationGate,
@@ -42,10 +41,25 @@ export const chatApplicationService = createChatApplicationService({
   piRuntimeEffectStore,
   piCompactionSessionStore,
   chatPullRequestStore,
-  designCanvasStore,
+  designCanvasStore: {
+    delete: async (chatId) => {
+      const { designCanvasStore } =
+        peekLoadedSubsystem("designCanvas") ?? (await import("./design-canvas/main.js"));
+      await designCanvasStore.delete(chatId);
+    },
+  },
   designGrants,
-  designModeConsent,
+  designModeConsent: {
+    forgetDecline: (chatId) => {
+      peekLoadedSubsystem("designCanvas")?.designModeConsent.forgetDecline(chatId);
+    },
+  },
   designPagesOnEntry: async (chat, workspaceRoot) => {
+    const [{ designCanvasStore, recentWrittenPages }, { EARLIER_PAGES_LIMIT, pagesWrittenInChat, placeWrittenPagesOnCanvas }] =
+      await Promise.all([
+        import("./design-canvas/main.js"),
+        import("./design-canvas/written-pages.js"),
+      ]);
     const frameIds = await placeWrittenPagesOnCanvas({
       chatId: chat.id,
       workspaceRoot,
@@ -67,19 +81,23 @@ export const chatApplicationService = createChatApplicationService({
   releaseChatContext: (chatId) => {
     // After the delete's durable boundary, so a rolled-back delete keeps its started chats linked.
     void deleteChatLinks(chatId).catch((error: unknown) => logger.warn("chat-orchestration", "Could not forget a deleted chat's links.", error));
-    forgetChatContextProfile(chatId);
-    recentWrittenPages.forget(chatId);
-    void spending.forgetChat(chatId).catch(() => undefined);
+    forgetChatPromptCacheState(chatId);
+    peekLoadedSubsystem("contextPressure")?.forgetChatContextProfile(chatId);
+    peekLoadedSubsystem("designCanvas")?.recentWrittenPages.forget(chatId);
+    void import("./spending-main.js")
+      .then(({ spending }) => spending.forgetChat(chatId))
+      .catch(() => undefined);
     void interruptedWaits.forgetChat(chatId).catch(() => undefined);
     detachedPromptLog.clearChat(chatId);
   },
   invalidateChatWorkspaceContext: (chatId) => {
-    forgetChatContextProfile(chatId);
-    recentWrittenPages.forget(chatId);
+    forgetChatPromptCacheState(chatId);
+    peekLoadedSubsystem("contextPressure")?.forgetChatContextProfile(chatId);
+    peekLoadedSubsystem("designCanvas")?.recentWrittenPages.forget(chatId);
     detachedPromptLog.clearChat(chatId);
   },
-  forgetDeletedChat: (chatId) => llmClient.forgetDeletedChat(chatId),
-  resetChatWorkspaceSession: (chatId) => llmClient.resetChatWorkspaceSession(chatId),
+  forgetDeletedChat: (chatId) => lazyLlmLifecycleClient.forgetDeletedChat(chatId),
+  resetChatWorkspaceSession: (chatId) => lazyLlmLifecycleClient.resetChatWorkspaceSession(chatId),
   inboxState: { readMarkers: chatReadMarkers, triage: chatTriage },
   attachments: remoteAttachmentStore,
   afterChatRemoved: (workspaceId) => workspaceApplicationService.releaseNoWorkspaceAfterChat(workspaceId),

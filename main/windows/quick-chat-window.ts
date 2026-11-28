@@ -345,3 +345,12 @@ export function isCurrentQuickChatEvent(event: IpcMainInvokeEvent): boolean {
     return false;
   }
 }
+
+import * as loadedSubsystems from "../loaded-subsystems.js";
+loadedSubsystems.registerLoadedSubsystem?.("quickChatWindow", {
+  destroyQuickChat,
+  assertQuickChatConversationAccess,
+  authorizeQuickChatConversation,
+  isCurrentQuickChatEvent,
+  revokeQuickChatConversation,
+});

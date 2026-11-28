@@ -2,6 +2,7 @@ import os from "node:os";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
 import { app, ipcMain, powerMonitor } from "../platform.js";
 import { PeerHostManager, peerNetworkFingerprint } from "./peer-host-manager.js";
+import { peekPeerHostManager, setActivePeerHostManager } from "./peer-host-manager-peek.js";
 import { getPeerHostRegistry } from "./peer-host-service-main.js";
 
 let manager: PeerHostManager | undefined;
@@ -24,6 +25,7 @@ export function getPeerHostManager(): PeerHostManager {
       ipcMain.broadcast(channel as NotificationChannel, payload),
   });
   manager = current;
+  setActivePeerHostManager(current);
   const wake = (): void => current.wake();
   powerMonitor.on("resume", wake);
   powerMonitor.on("unlock-screen", wake);
@@ -45,10 +47,4 @@ export function getPeerHostManager(): PeerHostManager {
   return current;
 }
 
-/**
- * The supervisor if something already started it, else undefined. Readers
- * that must not cause peer traffic (the Dock badge) use this.
- */
-export function peekPeerHostManager(): PeerHostManager | undefined {
-  return manager;
-}
+export { peekPeerHostManager };

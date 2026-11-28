@@ -9,6 +9,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { extractFile, listPackage, statFile } from "@electron/asar";
+import { parse as parseAcorn } from "acorn";
 import { verifyPackagedRendererCsp } from "./verify-renderer-csp.mjs";
 import {
   AIDEN_APP_BUNDLE_ID,
@@ -239,6 +240,145 @@ export async function verifyPackagedSlimness(
     manifests,
     productionPackages: productionLockfilePackages(lockfile),
   });
+}
+
+export function assertPackagedMainBundleEntries(entries) {
+  const normalized = entries.map((entry) => entry.replaceAll("\\", "/"));
+  const entrySet = new Set(normalized);
+  if (!entrySet.has("/build/main/index.js")) {
+    throw new Error("Packaged app.asar is missing /build/main/index.js.");
+  }
+  const splitChunks = normalized.filter((entry) =>
+    /^\/build\/main\/chunk-[A-Za-z0-9_-]+\.js$/u.test(entry),
+  );
+  if (splitChunks.length === 0) {
+    throw new Error(
+      "Packaged app.asar is missing split main-process chunks under /build/main/chunk-*.js.",
+    );
+  }
+  const shippedMaps = normalized.filter((entry) => /^\/build\/main\/.*\.map$/u.test(entry));
+  if (shippedMaps.length > 0) {
+    throw new Error(
+      `Packaged app.asar must not include main-process source maps: ${shippedMaps.slice(0, 5).join(", ")}`,
+    );
+  }
+}
+
+function walkAcornAst(node, visit) {
+  if (!node || typeof node !== "object") return;
+  if (Array.isArray(node)) {
+    for (const child of node) walkAcornAst(child, visit);
+    return;
+  }
+  if (typeof node.type === "string") visit(node);
+  for (const value of Object.values(node)) {
+    if (value && typeof value === "object") walkAcornAst(value, visit);
+  }
+}
+
+function inspectPackagedMainModule(entryPath, source) {
+  const comments = [];
+  let ast;
+  try {
+    ast = parseAcorn(source, {
+      ecmaVersion: "latest",
+      sourceType: "module",
+      onComment: comments,
+    });
+  } catch (error) {
+    throw new Error(
+      `Packaged main-process module is not valid ESM (${entryPath}): ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (comments.some((comment) => /^[#@]\s*sourceMappingURL=/u.test(comment.value))) {
+    throw new Error(
+      `Packaged main-process module must not reference a source map: ${entryPath}`,
+    );
+  }
+  const relativeSpecifiers = new Set();
+  walkAcornAst(ast, (node) => {
+    const literal =
+      (node.type === "ImportDeclaration" ||
+        node.type === "ExportNamedDeclaration" ||
+        node.type === "ExportAllDeclaration") &&
+      node.source &&
+      typeof node.source.value === "string"
+        ? node.source.value
+        : node.type === "ImportExpression" &&
+            node.source?.type === "Literal" &&
+            typeof node.source.value === "string"
+          ? node.source.value
+          : null;
+    if (literal && (literal.startsWith("./") || literal.startsWith("../"))) {
+      relativeSpecifiers.add(literal);
+    }
+  });
+  return [...relativeSpecifiers];
+}
+
+const MAX_PACKAGED_MAIN_CHUNK_BYTES = 16 * 1024 * 1024;
+
+export async function verifyPackagedMainBundle(appAsar) {
+  await assertRegularFile(appAsar);
+  const rawEntries = listPackage(appAsar, { isPack: false }).map((entry) =>
+    entry.replaceAll("\\", "/"),
+  );
+  assertPackagedMainBundleEntries(rawEntries);
+
+  const unpackedMainDir = path.join(`${appAsar}.unpacked`, "build", "main");
+  try {
+    const unpackedEntries = await readdir(unpackedMainDir);
+    const unpackedMaps = unpackedEntries.filter((name) => name.endsWith(".map"));
+    if (unpackedMaps.length > 0) {
+      throw new Error(
+        `Unpacked main-process directory must not include source maps: ${unpackedMaps.slice(0, 5).join(", ")}`,
+      );
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+
+  const mainJsEntries = rawEntries.filter((entry) =>
+    /^\/build\/main\/[^/]+\.js$/u.test(entry),
+  );
+  const mainJsSet = new Set(mainJsEntries);
+
+  for (const normalizedEntry of mainJsEntries) {
+    const asarRelative = normalizedEntry.slice(1);
+    const info = statFile(appAsar, asarRelative, false);
+    if (
+      !info ||
+      info.unpacked === true ||
+      typeof info.size !== "number" ||
+      !Number.isSafeInteger(info.size) ||
+      info.size <= 0 ||
+      info.size > MAX_PACKAGED_MAIN_CHUNK_BYTES ||
+      typeof info.offset !== "string" ||
+      "files" in info ||
+      "link" in info
+    ) {
+      throw new Error(
+        `Packaged main-process module must be a bounded packed regular file: ${normalizedEntry}`,
+      );
+    }
+    const bytes = extractFile(appAsar, asarRelative, false);
+    if (bytes.byteLength !== info.size) {
+      throw new Error(
+        `Packaged main-process module size does not match its ASAR entry: ${normalizedEntry}`,
+      );
+    }
+    const relativeImports = inspectPackagedMainModule(normalizedEntry, bytes.toString("utf8"));
+    for (const specifier of relativeImports) {
+      const resolved = path.posix.normalize(
+        path.posix.join(path.posix.dirname(normalizedEntry), specifier),
+      );
+      if (!mainJsSet.has(resolved)) {
+        throw new Error(
+          `Packaged main-process module ${normalizedEntry} imports missing chunk ${resolved}.`,
+        );
+      }
+    }
+  }
 }
 
 export function assertPackagedModelCatalogEntries(entries) {
@@ -1007,6 +1147,7 @@ export async function verifyMacPackage(appPath) {
     await assertRegularFile(file);
   }
   verifyPackagedRendererCsp(appAsar);
+  await verifyPackagedMainBundle(appAsar);
   await verifyPackagedModelCatalogResources(appAsar);
   await verifyPackagedSlimness(appAsar);
   await verifyPackagedSubagentInferenceWorker(appAsar);

@@ -22,3 +22,6 @@ export const formFillRuntime = new FormFillRuntime(formFillArtifacts, {
   clientFactory: () =>
     new FormFillHelperClient({ pathsResolver: defaultFormFillHelperPaths }),
 });
+
+import { registerLoadedSubsystem } from "../../loaded-subsystems.js";
+registerLoadedSubsystem("formFillRuntime", formFillRuntime);

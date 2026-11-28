@@ -15,3 +15,6 @@ export const subagentRunStore = createProductionSubagentRunStore({
   resolveUserDataDirectory: userDataDirectory,
   deleteChatTranscripts: (chatId) => subagentTranscriptStore.deleteChat(chatId),
 });
+
+import { registerLoadedSubsystem } from "../../loaded-subsystems.js";
+registerLoadedSubsystem("subagentRunStore", subagentRunStore);

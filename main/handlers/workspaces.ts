@@ -504,3 +504,6 @@ export function registerWorkspaceHandlers(): void {
       }),
   );
 }
+
+import { registerLoadedSubsystem } from "../loaded-subsystems.js";
+registerLoadedSubsystem("workspaceGitWatchers", { disposeWorkspaceGitWatchers });

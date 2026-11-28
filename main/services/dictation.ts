@@ -181,3 +181,6 @@ export function prepareDictationPill(): Promise<void> {
 export function disposeDictation(): void {
   coordinator.dispose();
 }
+
+import { registerLoadedSubsystem } from "../loaded-subsystems.js";
+registerLoadedSubsystem("dictation", { disposeDictation });

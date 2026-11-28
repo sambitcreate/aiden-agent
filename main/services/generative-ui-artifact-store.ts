@@ -9,8 +9,7 @@ import {
   MAX_HTML_ARTIFACT_BYTES_PER_CHAT,
   MAX_HTML_ARTIFACTS_PER_CHAT,
 } from "../../renderer/shared/generative-ui.js";
-import { displayedAssistantHtmlUsage } from "./generative-ui-extension.js";
-import { validateGenerativeUiHtml } from "./generative-ui-html.js";
+import { displayedAssistantHtmlUsage } from "./generative-ui-usage.js";
 
 const STORE_VERSION = 1 as const;
 const STORE_FILE = "generative-ui-artifacts.json";
@@ -242,6 +241,7 @@ export class GenerativeUiArtifactStore {
       stagedAt: this.now(),
     });
     if (!parsed) throw new Error("Invalid generative-ui artifact staging payload.");
+    const { validateGenerativeUiHtml } = await import("./generative-ui-html.js");
     validateGenerativeUiHtml(parsed.html);
     return this.data.update((database) => {
       const id = parsed.artifact.mediaId;

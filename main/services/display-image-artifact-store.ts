@@ -10,7 +10,7 @@ import {
   MAX_DISPLAY_IMAGES_PER_CHAT,
   displayedAssistantImageUsage,
   validateDisplayImageDimensions,
-} from "./display-image-extension.js";
+} from "./display-image-limits.js";
 import { MAX_ATTACHMENTS_PER_MESSAGE } from "../../renderer/shared/attachment-contract.js";
 
 const STORE_VERSION = 1 as const;

@@ -4,20 +4,28 @@
 import { randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { createLazyModule } from "../lazy-module.js";
+import * as loadedSubsystems from "../loaded-subsystems.js";
 import { ipcMain, logger } from "../platform.js";
 import { fetchBotWatchUrl } from "./bot-routine-events/watch-sources.js";
 import { publicOnlyFetch } from "./public-only-fetch.js";
 import { DataStore } from "./data-store.js";
-import { scheduleExecution } from "./schedule-execution.js";
 import { resolveScheduledScript, runScheduledScript } from "./schedule-script.js";
 import { scheduleService } from "./schedule-service.js";
 import { scheduleStore } from "./schedule-store.js";
 import { createScheduledTaskTriggers, taskCheckStateFile } from "./scheduled-task-triggers.js";
-import { taskConnectorTriggers } from "./scheduled-task-connector-main.js";
-import { TASK_CONNECTOR_NEEDS_SOURCE, type TaskConnectorSource } from "./scheduled-task-connector-trigger.js";
+import {
+  TASK_CONNECTOR_NEEDS_SOURCE,
+  TaskConnectorChoiceError,
+  type TaskConnectorSource,
+} from "./scheduled-task-connector-trigger.js";
+import type { ScheduledTaskConnectorTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
 import type { BotConnectorWatchSourceList } from "../../renderer/shared/bot-connector-watches.js";
 import { SCHEDULED_TASK_TRIGGERS_FILE, createScheduledTaskTriggerStore, hashTaskLinkToken, type TaskLinkLogEntry } from "./scheduled-task-triggers-store.js";
 import { secrets } from "./secrets.js";
+
+const scheduleExecutionModule = createLazyModule(() => import("./schedule-execution.js"));
+const taskConnectorModule = createLazyModule(() => import("./scheduled-task-connector-main.js"));
 
 /** Where a link task's signing secret lives; the agent and phones never see it. */
 const linkSecretKey = (taskId: string) => `aiden-internal:task-hook:${taskId}`;
@@ -61,15 +69,25 @@ const triggers = createScheduledTaskTriggers({
   fetchUrl: (url, signal, options) => fetchBotWatchUrl(url, { signal, ...(options.publicOnly ? { fetch: publicOnlyFetch } : {}) }),
   resolveScript: async (task, script) => {
     if (task.permission !== "full") throw new Error("A script watch needs Full permission.");
+    const { scheduleExecution } = await scheduleExecutionModule.load();
     const folder = await scheduleExecution.taskWorkspaceFolder(task);
     const scriptPath = await resolveScheduledScript({ script, workspaceRoot: folder });
     return { path: scriptPath, cwd: folder ?? path.dirname(scriptPath) };
   },
   execScript: (scriptPath, options) => runScheduledScript(scriptPath, options),
   linkSecret: (taskId) => secrets.getKey(linkSecretKey(taskId)),
-  connector: taskConnectorTriggers,
+  connector: {
+    check: async (task, source, baseline, signal) =>
+      (await taskConnectorModule.load()).taskConnectorTriggers.check(
+        task,
+        source,
+        baseline,
+        signal,
+      ),
+  },
   checkStateDir,
   paused: async (task, error, afterFailures) => {
+    const { scheduleExecution } = await scheduleExecutionModule.load();
     await scheduleExecution.recordInLandingChat(task, {
       tone: "failure",
       summary: afterFailures ? "Paused after 3 failed checks" : "Paused",
@@ -83,6 +101,7 @@ const triggers = createScheduledTaskTriggers({
   needsSource: (task) => markTaskNeedsSource(task.id),
   dropped: async (task, card) => {
     // A card that wasn't saved throws, so its drop notice is kept and tried again.
+    const { scheduleExecution } = await scheduleExecutionModule.load();
     await scheduleExecution.recordInLandingChat(task, { tone: "info", ...card }, { mustSave: true });
   },
   changed: (taskId) => ipcMain.broadcast("schedule:updated", { taskId }),
@@ -171,14 +190,23 @@ export async function taskTriggerLinkState(taskId: string): Promise<{ hasLink: b
 }
 
 /** The foreground Find sources step of a connected-app task: lists sources through connections that are already open. */
-export function findTaskConnectorSources(signal: AbortSignal): Promise<BotConnectorWatchSourceList> {
+export async function findTaskConnectorSources(signal: AbortSignal): Promise<BotConnectorWatchSourceList> {
+  const { taskConnectorTriggers } = await taskConnectorModule.load();
   return taskConnectorTriggers.findSources(signal);
 }
 
 /** The Find sources choices a save swaps for an exact source and then uses up (see the schedule:save handler). */
 export const taskConnectorChoices = {
-  takeChoice: taskConnectorTriggers.takeChoice,
-  forgetChoice: taskConnectorTriggers.forgetChoice,
+  takeChoice: (trigger: ScheduledTaskConnectorTrigger) => {
+    const loaded = taskConnectorModule.peek();
+    if (!loaded) {
+      throw new TaskConnectorChoiceError("The source choice expired. Choose Find sources again.");
+    }
+    return loaded.taskConnectorTriggers.takeChoice(trigger);
+  },
+  forgetChoice: (choiceId: string) => {
+    taskConnectorModule.peek()?.taskConnectorTriggers.forgetChoice(choiceId);
+  },
 };
 
 /** Bind a saved connected-app task to its source; its first check then records a baseline. */
@@ -197,3 +225,5 @@ export async function markTaskNeedsSource(taskId: string): Promise<void> {
   await scheduleStore.updateRuntime(taskId, { lastError: TASK_CONNECTOR_NEEDS_SOURCE });
   ipcMain.broadcast("schedule:updated", { taskId });
 }
+
+loadedSubsystems.registerLoadedSubsystem?.("scheduledTaskTriggers", { stopScheduledTaskTriggers });

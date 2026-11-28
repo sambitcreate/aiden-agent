@@ -33,6 +33,7 @@ import {
   parseOpenDialogOptions,
 } from "./native-ipc-core.js";
 import { rendererDocumentOwner } from "./services/renderer-document-owner.js";
+import { createIpcCaptureScope } from "./handlers/lazy-ipc-core.js";
 
 type LogValue = unknown;
 
@@ -127,8 +128,28 @@ function broadcast(channel: NotificationChannel, payload: unknown): void {
   });
 }
 
+export type IpcInvokeListener = Parameters<IpcMain["handle"]>[1];
+
+const handlerCaptureScope = createIpcCaptureScope<IpcInvokeListener>();
+
+/**
+ * Captures synchronous `ipcMain.handle(channel, listener)` registrations made
+ * inside `register()` into a map without registering a duplicate channel on
+ * Electron's `ipcMain`. Used by lazy IPC forwarders that already registered
+ * channel placeholders before startup IPC admission opened.
+ */
+export function captureIpcHandlers(
+  register: () => void,
+): ReadonlyMap<string, IpcInvokeListener> {
+  return handlerCaptureScope.capture(register);
+}
+
 export const ipcMain = {
-  handle: electronIpcMain.handle.bind(electronIpcMain) as IpcMain["handle"],
+  handle: ((channel: string, listener: IpcInvokeListener) => {
+    handlerCaptureScope.handle(channel, listener, (targetChannel, targetListener) => {
+      electronIpcMain.handle(targetChannel, targetListener);
+    });
+  }) as IpcMain["handle"],
   on: electronIpcMain.on.bind(electronIpcMain) as IpcMain["on"],
   removeHandler: electronIpcMain.removeHandler.bind(electronIpcMain) as IpcMain["removeHandler"],
   broadcast,

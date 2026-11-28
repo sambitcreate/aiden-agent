@@ -260,3 +260,10 @@ export function settleFoundationModelsHelperStops(budgetMs: number): Promise<boo
 }
 
 export { FOUNDATION_MODELS_PROTOCOL_VERSION };
+
+import { registerLoadedSubsystem } from "../loaded-subsystems.js";
+registerLoadedSubsystem("foundationModels", {
+  foundationModelsConnection,
+  disposeFoundationModelsConnection,
+  settleFoundationModelsHelperStops,
+});

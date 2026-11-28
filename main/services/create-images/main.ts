@@ -37,3 +37,6 @@ export const createImagesRuntime = new CreateImagesRuntime({
   saveRoot: () => path.join(app.getPath("pictures"), ...SAVE_FOLDER_SEGMENTS),
   reportIssue: (message, error) => logger.warn("create-images", message, error),
 });
+
+import { registerLoadedSubsystem } from "../../loaded-subsystems.js";
+registerLoadedSubsystem("createImagesRuntime", createImagesRuntime);

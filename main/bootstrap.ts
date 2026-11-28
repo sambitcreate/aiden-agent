@@ -8,64 +8,70 @@ import { pruneExpiredDiagnosticCrashDumps } from "./services/diagnostic-support.
 import { installProcessDiagnostics } from "./services/process-diagnostics.js";
 import { installProcessStartupIpcAdmission } from "./services/startup-ipc-admission.js";
 import { applyLinuxGraphicsFlags } from "./linux-graphics-flags.js";
+import { desktopVersionRequested } from "./desktop-cli-core.js";
 import { configureRuntimeProfile } from "./runtime-profile.js";
 import { parseCaptureAcceptanceLaunch } from "./services/gemini-live/display-capture-acceptance-core.js";
 import {
   initSubagentRuntimeDiagnostics,
   SUBAGENT_RUNTIME_LOG_FILENAME,
-} from "./services/subagents/subagent-runtime-diagnostics.js";
+} from "./services/subagents/subagent-runtime-journal.js";
 
-applyLinuxGraphicsFlags();
-const runtimeProfile = configureRuntimeProfile();
-const productionDiagnosticsDisabled =
-  runtimeProfile.id === "production" && process.env.AIDEN_DISABLE_PRODUCTION_DIAGNOSTICS === "1";
-initSubagentRuntimeDiagnostics(path.join(runtimeProfile.logsPath, SUBAGENT_RUNTIME_LOG_FILENAME));
-initDiagnosticHealth(path.join(runtimeProfile.logsPath, "diagnostic-health.json"), !productionDiagnosticsDisabled);
-initDiagnosticJournal({
-  targetPath: path.join(
-    runtimeProfile.logsPath,
-    runtimeProfile.id === "development" ? "aiden-dev.log" : "aiden.log",
-  ),
-  profile: runtimeProfile.id,
-  writeMode:
-    productionDiagnosticsDisabled
-      ? "fatal-only"
-      : "all",
-});
-installProcessDiagnostics();
-void pruneExpiredDiagnosticCrashDumps(runtimeProfile.crashDumpsPath).catch(() => undefined);
+if (desktopVersionRequested(process.argv, process.defaultApp === true)) {
+  process.stdout.write(`${app.getVersion()}\n`);
+  app.exit(0);
+} else {
+  applyLinuxGraphicsFlags();
+  const runtimeProfile = configureRuntimeProfile();
+  const productionDiagnosticsDisabled =
+    runtimeProfile.id === "production" && process.env.AIDEN_DISABLE_PRODUCTION_DIAGNOSTICS === "1";
+  initSubagentRuntimeDiagnostics(path.join(runtimeProfile.logsPath, SUBAGENT_RUNTIME_LOG_FILENAME));
+  initDiagnosticHealth(path.join(runtimeProfile.logsPath, "diagnostic-health.json"), !productionDiagnosticsDisabled);
+  initDiagnosticJournal({
+    targetPath: path.join(
+      runtimeProfile.logsPath,
+      runtimeProfile.id === "development" ? "aiden-dev.log" : "aiden.log",
+    ),
+    profile: runtimeProfile.id,
+    writeMode:
+      productionDiagnosticsDisabled
+        ? "fatal-only"
+        : "all",
+  });
+  installProcessDiagnostics();
+  void pruneExpiredDiagnosticCrashDumps(runtimeProfile.crashDumpsPath).catch(() => undefined);
 
-const captureAcceptance = parseCaptureAcceptanceLaunch({
-  argv: process.argv,
-  environment: process.env,
-  executablePath: process.execPath,
-  appPath: app.getAppPath(),
-  isPackaged: app.isPackaged,
-  platform: process.platform,
-  userDataPath: runtimeProfile.userDataPath,
-});
+  const captureAcceptance = parseCaptureAcceptanceLaunch({
+    argv: process.argv,
+    environment: process.env,
+    executablePath: process.execPath,
+    appPath: app.getAppPath(),
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+    userDataPath: runtimeProfile.userDataPath,
+  });
 
-try {
-  if (captureAcceptance.requested) {
-    const { runDisplayCaptureAcceptance } = await import(
-      "./services/gemini-live/display-capture-acceptance.js"
-    );
-    app.exit(await runDisplayCaptureAcceptance(runtimeProfile));
-  } else {
-    // Hold renderer invokes until index.ts finishes startup reconciliation;
-    // install before any module in the app graph registers a handler.
-    installProcessStartupIpcAdmission(ipcMain);
-    await import("./index.js");
+  try {
+    if (captureAcceptance.requested) {
+      const { runDisplayCaptureAcceptance } = await import(
+        "./services/gemini-live/display-capture-acceptance.js"
+      );
+      app.exit(await runDisplayCaptureAcceptance(runtimeProfile));
+    } else {
+      // Hold renderer invokes until index.ts finishes startup reconciliation;
+      // install before any module in the app graph registers a handler.
+      installProcessStartupIpcAdmission(ipcMain);
+      await import("./index.js");
+    }
+  } catch (error) {
+    const projected = projectDiagnosticError(error);
+    writeDiagnosticEventSync({
+      level: "fatal",
+      area: "app",
+      event: "bootstrap-import-failed",
+      outcome: "failed",
+      code: projected.code,
+      fields: { errorType: projected.errorType, fingerprint: projected.fingerprint ?? null },
+    }, { rawError: error });
+    throw error;
   }
-} catch (error) {
-  const projected = projectDiagnosticError(error);
-  writeDiagnosticEventSync({
-    level: "fatal",
-    area: "app",
-    event: "bootstrap-import-failed",
-    outcome: "failed",
-    code: projected.code,
-    fields: { errorType: projected.errorType, fingerprint: projected.fingerprint ?? null },
-  }, { rawError: error });
-  throw error;
 }

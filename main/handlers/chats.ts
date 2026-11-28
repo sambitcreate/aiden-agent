@@ -1,12 +1,12 @@
 import { isCompactionEngine } from "../../renderer/shared/compaction.js";
 // Chat history CRUD IPC handlers.
 
+import { peekLoadedSubsystem } from "../loaded-subsystems.js";
 import { BrowserWindow, dialog, ipcMain } from "../platform.js";
 import { chatStore } from "../services/chat-store.js";
 import { chatApplicationService } from "../services/chat-application-service-main.js";
-import { chatTitleService } from "../services/chat-title.js";
 import { configStore } from "../services/config-store.js";
-import { llmClient } from "../services/llm-client.js";
+import { lazyLlmLifecycleClient } from "../services/llm-turn-gates-main.js";
 import { releaseChatCacheWarmer } from "../services/pi-cache-warming.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
@@ -18,7 +18,6 @@ import {
   unresolvedGuiArtifactMessage,
   wrapStoredHtmlArtifact,
 } from "../services/gui-artifact-recovery.js";
-import { skillRegistry } from "../services/skill-registry-main.js";
 import { discoverSkillCandidatesWithCachedGlobals } from "../services/skills-discovery.js";
 import { workspaceMutationGate } from "../services/workspace-mutation-gate.js";
 import {
@@ -26,7 +25,6 @@ import {
   workspaceOperationRegistry,
 } from "../services/workspace-operation-registry.js";
 import { asString, createRendererChatMutationHandlers } from "./chat-renderer-mutations.js";
-import { closeDeviceSessionsForChat } from "./devices.js";
 import { parseUiVisualStateUpdate } from "./chat-ui-visual-state.js";
 import { parseChatFirstMessage } from "./chat-first-message-params.js";
 import {
@@ -56,13 +54,6 @@ import { chatActivityRegistry } from "../services/chat-activity.js";
 import { chatReadMarkers, markChatRead } from "../services/chat-read-markers-main.js";
 import { chatTriage } from "../services/chat-triage-main.js";
 import { setChatTriageFromRenderer } from "./chat-triage-params.js";
-import { contextLifecycleService } from "../services/context-lifecycle-service-main.js";
-import { forkSummaryService } from "../services/fork-summary-service-main.js";
-import { chatForkService } from "../services/chat-fork-service-main.js";
-import {
-  cancelDesktopCompaction,
-  compactDesktopChat,
-} from "../services/context-lifecycle-adapters.js";
 import { botApplicationService } from "../services/bot-application-service-main.js";
 import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { piCompactionSessionStore } from "../services/pi-compaction-session-store.js";
@@ -70,36 +61,48 @@ import { piRuntimeEffectStore } from "../services/pi-runtime-effect-store.js";
 import { chatReplyInterrupted, latestInterruptedRun } from "../services/interrupted-reply.js";
 import { interruptedWaits } from "../services/interrupted-waits-main.js";
 import { loadDurableTodoSnapshot } from "../services/rpiv-todo/snapshot.js";
-import {
-  chatContextPressure,
-  invalidateChatContextJournal,
-} from "../services/context-pressure.js";
 import { todoSnapshotDiagnostic } from "../services/rpiv-todo/diagnostics.js";
 import { writeDiagnosticEvent } from "../services/diagnostic-journal.js";
-import {
-  assertQuickChatConversationAccess,
-  authorizeQuickChatConversation,
-  isCurrentQuickChatEvent,
-  revokeQuickChatConversation,
-} from "../windows/quick-chat-window.js";
+
+const assertQuickChatConversationAccess = (event: Electron.IpcMainInvokeEvent, chatId: string) => {
+  peekLoadedSubsystem("quickChatWindow")?.assertQuickChatConversationAccess(event, chatId);
+};
+const isCurrentQuickChatEvent = (event: Electron.IpcMainInvokeEvent): boolean =>
+  peekLoadedSubsystem("quickChatWindow")?.isCurrentQuickChatEvent(event) ?? false;
+const authorizeQuickChatConversation = (chatId: string) => {
+  peekLoadedSubsystem("quickChatWindow")?.authorizeQuickChatConversation(chatId);
+};
+const revokeQuickChatConversation = (chatId: string) => {
+  peekLoadedSubsystem("quickChatWindow")?.revokeQuickChatConversation(chatId);
+};
 
 export function registerChatHistoryHandlers(): void {
+  const lazySkillRegistry = {
+    resolveFresh: async (
+      ...args: Parameters<typeof import("../services/skill-registry-main.js")["skillRegistry"]["resolveFresh"]>
+    ) => (await import("../services/skill-registry-main.js")).skillRegistry.resolveFresh(...args),
+  };
   const rendererChats = createRendererChatMutationHandlers({
     chatStore,
     chatApplicationService,
-    chatTitleService,
+    chatTitleService: {
+      renameWithFoundationModels: async (chatId, options) =>
+        (await import("../services/chat-title.js")).chatTitleService.renameWithFoundationModels(chatId, options),
+    },
     botApplicationService: {
       deleteChat: (input) => botApplicationService.deleteChat(input),
     },
     hostPlatformCapabilities,
-    closeDeviceSessionsForChat,
+    closeDeviceSessionsForChat: (chatId) => {
+      peekLoadedSubsystem("devices")?.closeDeviceSessionsForChat(chatId);
+    },
     chatTriage,
     rendererDocumentOwner,
-    llmClient,
+    llmClient: lazyLlmLifecycleClient,
     unresolvedGuiArtifactMessage,
     artifactRecoveryMessage,
     workspaceMutationGate,
-    skillRegistry,
+    skillRegistry: lazySkillRegistry,
     designModeEnabled: () => designModeEnabled(),
     broadcastDesignModeChanged: (change) => ipcMain.broadcast("chats:design-mode-changed", change),
     assertChatAccess: assertQuickChatConversationAccess,
@@ -109,10 +112,10 @@ export function registerChatHistoryHandlers(): void {
   });
   const commitFirstMessage = createFirstMessageCommitter({
     store: chatStore,
-    beginTurn: (chatId, turnId, ownerId) => llmClient.beginChatTurn(chatId, turnId, ownerId),
-    requiresReconciliation: (ownerId) => llmClient.requiresAppendReconciliation(ownerId),
-    markReconciliation: (ownerId) => llmClient.markAppendReconciliationRequired(ownerId),
-    clearReconciliation: (ownerId) => llmClient.clearAppendReconciliationRequired(ownerId),
+    beginTurn: (chatId, turnId, ownerId) => lazyLlmLifecycleClient.beginChatTurn(chatId, turnId, ownerId),
+    requiresReconciliation: (ownerId) => lazyLlmLifecycleClient.requiresAppendReconciliation(ownerId),
+    markReconciliation: (ownerId) => lazyLlmLifecycleClient.markAppendReconciliationRequired(ownerId),
+    clearReconciliation: (ownerId) => lazyLlmLifecycleClient.clearAppendReconciliationRequired(ownerId),
     admitWorkspace: (workspaceId, owner) => {
       const mutation = workspaceMutationGate.admit(workspaceId);
       try {
@@ -135,7 +138,7 @@ export function registerChatHistoryHandlers(): void {
       }
     },
     getWorkspace: (workspaceId) => configStore.getWorkspace(workspaceId),
-    resolveSkill: (workspaceId, invocationId) => skillRegistry.resolveFresh(workspaceId, invocationId),
+    resolveSkill: (workspaceId, invocationId) => lazySkillRegistry.resolveFresh(workspaceId, invocationId),
     prepareWorkspace: async (workspaceId) => {
       // Resolve after startup: the workspace service also depends on chat/LLM services.
       const { workspaceApplicationService } = await import("../services/workspace-application-service-main.js");
@@ -153,7 +156,7 @@ export function registerChatHistoryHandlers(): void {
     commit: commitFirstMessage,
     ensureWorktree: (request, seed, owner, onProgress) =>
       firstMessageWorktrees.ensure(request, seed, owner, onProgress),
-    resolveSkill: (workspaceId, invocationId) => skillRegistry.resolveFresh(workspaceId, invocationId),
+    resolveSkill: (workspaceId, invocationId) => lazySkillRegistry.resolveFresh(workspaceId, invocationId),
   });
   const announceFirstMessage = (chat: Chat) => {
     if (chat.ephemeral === true) return;
@@ -302,6 +305,7 @@ export function registerChatHistoryHandlers(): void {
     );
     const parsed = parseChatContextPressureRequest(input);
     if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    const { chatContextPressure } = await import("../services/context-pressure.js");
     return chatContextPressure(parsed.chatId, {
       draftText: parsed.draftText,
       providerId: parsed.providerId,
@@ -317,10 +321,15 @@ export function registerChatHistoryHandlers(): void {
       () => new Error("Compaction requires the active application document."),
     );
     const chatId = asString(id, "id");
+    const [{ contextLifecycleService }, { compactDesktopChat }] = await Promise.all([
+      import("../services/context-lifecycle-service-main.js"),
+      import("../services/context-lifecycle-adapters.js"),
+    ]);
     const result = await compactDesktopChat(contextLifecycleService, chatId, owner.documentId, engine);
     if (result.compacted) {
       // The meter must reflect the compaction immediately: drop the journaled
       // snapshot and push a fresh next-request projection to the requester.
+      const { chatContextPressure, invalidateChatContextJournal } = await import("../services/context-pressure.js");
       invalidateChatContextJournal(chatId);
       try {
         const pressure = await chatContextPressure(chatId);
@@ -333,11 +342,15 @@ export function registerChatHistoryHandlers(): void {
     }
     return result;
   });
-  ipcMain.handle("chats:cancelCompact", (event, id: unknown) => {
+  ipcMain.handle("chats:cancelCompact", async (event, id: unknown) => {
     const owner = rendererDocumentOwner(
       event,
       () => new Error("Compaction cancellation requires the active application document."),
     );
+    const [{ contextLifecycleService }, { cancelDesktopCompaction }] = await Promise.all([
+      import("../services/context-lifecycle-service-main.js"),
+      import("../services/context-lifecycle-adapters.js"),
+    ]);
     return cancelDesktopCompaction(
       contextLifecycleService,
       asString(id, "id"),
@@ -371,34 +384,38 @@ export function registerChatHistoryHandlers(): void {
 
   ipcMain.handle("chats:setDesignMode", rendererChats.setDesignMode);
 
-  ipcMain.handle("chats:retryForkSummary", async (_event, input: unknown) =>
-    chatForRenderer(await forkSummaryService.retry(parseChatOnlyRequest(input).chatId)),
-  );
+  ipcMain.handle("chats:retryForkSummary", async (_event, input: unknown) => {
+    const { forkSummaryService } = await import("../services/fork-summary-service-main.js");
+    return chatForRenderer(await forkSummaryService.retry(parseChatOnlyRequest(input).chatId));
+  });
 
-  ipcMain.handle("chats:cancelForkSummary", async (_event, input: unknown) =>
-    forkSummaryService.cancel(parseChatOnlyRequest(input).chatId),
-  );
+  ipcMain.handle("chats:cancelForkSummary", async (_event, input: unknown) => {
+    const { forkSummaryService } = await import("../services/fork-summary-service-main.js");
+    return forkSummaryService.cancel(parseChatOnlyRequest(input).chatId);
+  });
 
-  ipcMain.handle("chats:skipForkSummary", async (_event, input: unknown) =>
-    chatForRenderer(await forkSummaryService.skip(parseChatOnlyRequest(input).chatId)),
-  );
+  ipcMain.handle("chats:skipForkSummary", async (_event, input: unknown) => {
+    const { forkSummaryService } = await import("../services/fork-summary-service-main.js");
+    return chatForRenderer(await forkSummaryService.skip(parseChatOnlyRequest(input).chatId));
+  });
 
   ipcMain.handle("chats:copyVisibleHistory", async (event, input: unknown) => {
     const owner = rendererDocumentOwner(
       event,
       () => new Error("Chat copying requires the active application document."),
     );
-    if (llmClient.requiresAppendReconciliation(owner.documentId)) {
+    if (lazyLlmLifecycleClient.requiresAppendReconciliation(owner.documentId)) {
       throw new Error(appendReconciliationFailureMessage("blocked"));
     }
     const parsed = parseChatCopyRequest(input);
     const assertOwnerCurrent = (message: string) => () => {
       if (owner.isDestroyed()) throw new Error(message);
-      if (llmClient.requiresAppendReconciliation(owner.documentId)) {
+      if (lazyLlmLifecycleClient.requiresAppendReconciliation(owner.documentId)) {
         throw new Error(appendReconciliationFailureMessage("blocked"));
       }
     };
     try {
+      const { chatForkService } = await import("../services/chat-fork-service-main.js");
       const copied = await chatForkService.fork(
         { chatId: parsed.chatId, forkAt: parsed.forkAt, summary: parsed.summary, continueIn: parsed.continueIn },
         {
@@ -446,9 +463,9 @@ export function registerChatHistoryHandlers(): void {
       return chatForRenderer(copied);
     } catch (error) {
       if (isChatCreateReconciliationRequiredError(error)) {
-        llmClient.markAppendReconciliationRequired(owner.documentId);
+        lazyLlmLifecycleClient.markAppendReconciliationRequired(owner.documentId);
         owner.onInvalidated(() => {
-          llmClient.clearAppendReconciliationRequired(owner.documentId);
+          lazyLlmLifecycleClient.clearAppendReconciliationRequired(owner.documentId);
         });
         throw new Error(appendReconciliationFailureMessage("blocked"));
       }
@@ -468,7 +485,7 @@ export function registerChatHistoryHandlers(): void {
     chatExportActive = true;
     let finishExport: (() => void) | null = null;
     try {
-      finishExport = llmClient.beginChatExport(chatId);
+      finishExport = lazyLlmLifecycleClient.beginChatExport(chatId);
       if (!finishExport) {
         throw new Error(
           "Finish the current response or approval before exporting this chat.",
@@ -675,7 +692,7 @@ export function registerChatHistoryHandlers(): void {
     if (!isSafeSubagentIdentifier(parsedTurnId)) {
       throw new Error("Invalid chat message turn identifier.");
     }
-    return llmClient.abandonChatTurn(
+    return lazyLlmLifecycleClient.abandonChatTurn(
       asString(id, "id"),
       parsedTurnId,
       owner.documentId,
