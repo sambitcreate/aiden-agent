@@ -338,7 +338,7 @@ export function terminalLinkAtPositionWithRange(
 
 export function isTerminalCopyShortcut(
   event: Pick<KeyboardEvent, "ctrlKey" | "key" | "metaKey" | "shiftKey">,
-  platform = navigator.platform,
+  platform?: string,
 ) {
   if (event.key.toLowerCase() !== "c") return false;
   return isMacPlatform(platform) ? event.metaKey : event.ctrlKey;
@@ -387,7 +387,7 @@ export function applyTerminalCopyEvent(
 
 export function isTerminalPasteShortcut(
   event: Pick<KeyboardEvent, "ctrlKey" | "key" | "metaKey" | "shiftKey">,
-  platform = navigator.platform,
+  platform?: string,
 ) {
   const key = event.key.toLowerCase();
   if (key === "insert" && !isMacPlatform(platform)) {
@@ -518,7 +518,7 @@ export function terminalWheelArrowData(rows: number, applicationCursorKeys: bool
 
 export function isTerminalLinkPointerGesture(
   event: Pick<MouseEvent, "ctrlKey" | "metaKey">,
-  platform = navigator.platform,
+  platform?: string,
 ): boolean {
   return isMacPlatform(platform)
     ? event.metaKey && !event.ctrlKey
@@ -1173,7 +1173,7 @@ export class GhosttyTerminalSurface {
         // Cmd+C are copy-only, so they keep the selection; resetting the flag
         // up front also drops any clear owed by an earlier gesture that never
         // completed.
-        this.clearSelectionAfterCopy = !event.shiftKey && !isMacPlatform(navigator.platform);
+        this.clearSelectionAfterCopy = !event.shiftKey && !isMacPlatform();
         const clipboard = navigator.clipboard;
         if (typeof clipboard?.writeText === "function") {
           // Defer the write past the default action: the native copy event
@@ -1254,7 +1254,7 @@ export class GhosttyTerminalSurface {
 
   /** Select All and scrollback keys; the alternate screen has no history to move through. */
   private handleViewportShortcut(event: KeyboardEvent): boolean {
-    const mac = isMacPlatform(navigator.platform);
+    const mac = isMacPlatform();
     const primaryModifier = mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
     const selectAllShortcut =
       event.key.toLowerCase() === "a" &&

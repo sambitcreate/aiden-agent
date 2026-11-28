@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { GhosttyTerminalCore, type GhosttyTheme } from "./core";
+import { isMacPlatform } from "./host-platform";
 import {
+  isTerminalCopyShortcut,
   isTerminalHostReservedShortcut,
   isTerminalLinkActivatable,
+  isTerminalLinkPointerGesture,
+  isTerminalPasteShortcut,
   terminalLinkAtPositionWithRange,
   terminalSelectionAutoscrollRows,
 } from "./surface";
@@ -70,4 +74,167 @@ test("a link ending in a wide character covers both of its cells", async () => {
   } finally {
     core.dispose();
   }
+});
+
+function withNavigator(stub: unknown, run: () => void): void {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  if (stub === undefined) {
+    Reflect.deleteProperty(globalThis, "navigator");
+  } else {
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      writable: true,
+      value: stub,
+    });
+  }
+  try {
+    run();
+  } finally {
+    if (previous) {
+      Object.defineProperty(globalThis, "navigator", previous);
+    } else {
+      Reflect.deleteProperty(globalThis, "navigator");
+    }
+  }
+}
+
+test("isMacPlatform and terminal shortcuts read navigator.userAgentData.platform", () => {
+  withNavigator(
+    {
+      userAgentData: { platform: "macOS" },
+      userAgent: "Mozilla/5.0 (X11; Linux x86_64)",
+    },
+    () => {
+      assert.equal(isMacPlatform(), true);
+      assert.equal(
+        isTerminalCopyShortcut({ key: "c", metaKey: true, ctrlKey: false, shiftKey: false }),
+        true,
+      );
+      assert.equal(
+        isTerminalCopyShortcut({ key: "c", metaKey: false, ctrlKey: true, shiftKey: false }),
+        false,
+      );
+      assert.equal(
+        isTerminalPasteShortcut({ key: "v", metaKey: true, ctrlKey: false, shiftKey: false }),
+        true,
+      );
+      assert.equal(
+        isTerminalPasteShortcut({ key: "Insert", metaKey: false, ctrlKey: false, shiftKey: true }),
+        false,
+      );
+      assert.equal(isTerminalLinkPointerGesture({ metaKey: true, ctrlKey: false }), true);
+      assert.equal(isTerminalLinkPointerGesture({ metaKey: false, ctrlKey: true }), false);
+    },
+  );
+
+  withNavigator({ userAgentData: { platform: "iOS" }, userAgent: "" }, () => {
+    assert.equal(isMacPlatform(), true);
+  });
+
+  withNavigator(
+    {
+      userAgentData: { platform: "Linux" },
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+    },
+    () => {
+      assert.equal(isMacPlatform(), false);
+      assert.equal(
+        isTerminalCopyShortcut({ key: "c", metaKey: false, ctrlKey: true, shiftKey: false }),
+        true,
+      );
+      assert.equal(
+        isTerminalPasteShortcut({ key: "v", metaKey: false, ctrlKey: true, shiftKey: true }),
+        true,
+      );
+      assert.equal(
+        isTerminalPasteShortcut({ key: "Insert", metaKey: false, ctrlKey: false, shiftKey: true }),
+        true,
+      );
+      assert.equal(isTerminalLinkPointerGesture({ metaKey: false, ctrlKey: true }), true);
+    },
+  );
+});
+
+test("isMacPlatform falls back to navigator.userAgent when userAgentData is absent or blank", () => {
+  withNavigator(
+    { userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36" },
+    () => {
+      assert.equal(isMacPlatform(), true);
+      assert.equal(
+        isTerminalCopyShortcut({ key: "c", metaKey: true, ctrlKey: false, shiftKey: false }),
+        true,
+      );
+    },
+  );
+
+  withNavigator(
+    {
+      userAgentData: { platform: "" },
+      userAgent: "Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15",
+    },
+    () => {
+      assert.equal(isMacPlatform(), true);
+      assert.equal(
+        isTerminalPasteShortcut({ key: "v", metaKey: true, ctrlKey: false, shiftKey: false }),
+        true,
+      );
+    },
+  );
+
+  withNavigator(
+    {
+      userAgentData: { platform: "" },
+      userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+    },
+    () => {
+      assert.equal(isMacPlatform(), false);
+      assert.equal(isTerminalLinkPointerGesture({ metaKey: false, ctrlKey: true }), true);
+    },
+  );
+});
+
+test("terminal platform helpers handle missing navigator and honor explicit platform overrides", () => {
+  withNavigator(undefined, () => {
+    assert.equal(isMacPlatform(), false);
+    assert.equal(
+      isTerminalCopyShortcut({ key: "c", metaKey: false, ctrlKey: true, shiftKey: false }),
+      true,
+    );
+    assert.equal(
+      isTerminalPasteShortcut({ key: "v", metaKey: false, ctrlKey: true, shiftKey: true }),
+      true,
+    );
+    assert.equal(isTerminalLinkPointerGesture({ metaKey: false, ctrlKey: true }), true);
+
+    assert.equal(isMacPlatform("MacIntel"), true);
+    assert.equal(isMacPlatform("macOS"), true);
+    assert.equal(isMacPlatform("iOS"), true);
+    assert.equal(
+      isTerminalCopyShortcut(
+        { key: "c", metaKey: true, ctrlKey: false, shiftKey: false },
+        "MacIntel",
+      ),
+      true,
+    );
+    assert.equal(
+      isTerminalPasteShortcut(
+        { key: "v", metaKey: true, ctrlKey: false, shiftKey: false },
+        "macOS",
+      ),
+      true,
+    );
+    assert.equal(isTerminalLinkPointerGesture({ metaKey: true, ctrlKey: false }, "iOS"), true);
+  });
+
+  withNavigator({ userAgentData: { platform: "macOS" } }, () => {
+    assert.equal(isMacPlatform("Linux x86_64"), false);
+    assert.equal(isMacPlatform(""), false);
+    assert.equal(
+      isTerminalPasteShortcut(
+        { key: "v", metaKey: false, ctrlKey: true, shiftKey: true },
+        "Linux x86_64",
+      ),
+      true,
+    );
+  });
 });

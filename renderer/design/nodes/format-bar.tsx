@@ -32,6 +32,7 @@ import {
   PopoverTrigger,
 } from "../../components/ui";
 import { linkFromInput } from "../../shared/design-canvas/rich-text";
+import { isMacPlatform } from "../../lib/ghostty-terminal/host-platform";
 import { DESIGN_COLORS, type DesignColor, type DesignFrame, type DesignTextSize } from "../../shared/design-canvas/schema";
 import { useDesignNodeContext } from "./design-node-context";
 import { designColorVar, designFillVar, DESIGN_COLOR_NAMES } from "./draw-style";
@@ -52,7 +53,7 @@ const SIZES: readonly { size: DesignTextSize; label: string }[] = [
   { size: "large", label: "Large" },
 ];
 
-const MOD = typeof navigator !== "undefined" && /Mac/.test(navigator.platform) ? "⌘" : "Ctrl+";
+const MOD = isMacPlatform() ? "⌘" : "Ctrl+";
 
 /**
  * Escape or ⌘↩ inside an editor hands the keyboard back to the canvas. (⌘K
