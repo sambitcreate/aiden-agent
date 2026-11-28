@@ -52,8 +52,13 @@ Native builds discover the newest compatible full Xcode without changing the mac
 ## Verify changes
 
 ```bash
-npm test                  # full CI suite (includes lanes needing Ruby, Cargo, Playwright Chromium)
-npm run test:native       # macOS + Xcode 26+ only (Apple Foundation Models Swift tests)
+npm test                           # full CI suite (includes lanes needing Ruby, Cargo, Playwright Chromium)
+npm run test:ci-policy             # multi-ecosystem CI manifest inventory, routing, and workflow policy checks
+npm run build:native               # macOS + Xcode only (Apple Foundation Models and CUA-S1 Swift helpers)
+npm run test:native                # macOS + Xcode 26+ only (Apple Foundation Models Swift tests)
+npm run test:form-fill:native      # macOS + Xcode only (CUA-S1 form-fill Swift tests)
+npm run test:subagent-worker-smoke # Electron build + pinned subagent inference worker smoke
+npm run test:cli                   # headless server (packages/cli) keyless build and test suite
 npm run type-check
 npm run lint
 npm run build
@@ -65,7 +70,7 @@ For Playwright Electron E2E runs:
 - On macOS, run window-opening E2E suites off-screen in a Cua Space with `npm run test:e2e:space -- [playwright args]`.
 - On Linux, run under `xvfb-run --auto-servernum npm run test:e2e` (with the CI prerequisites).
 
-See [Continuous integration](ci.md) for change selection, test lanes, Electron shards, and the `CI required` gate.
+New targets across JS/TS (`package.json` + `scripts/ci-test-registry.json`), Swift (`native/*/Package.swift`), iOS UI (`ios/AidenOnTheGoUITests/*.swift`), and the CLI (`packages/cli/package.json`) are audited on Ubuntu by `npm run test:ci-policy` and must be wired into CI or allowlisted with a reason (`manual`, `manualScripts`, `manualSwiftTargets`, `manualIosUiTests`). See [Continuous integration](ci.md) for change selection, test lanes, Electron shards, manifest inventory rules, and the `CI required` gate.
 
 ## Package the app
 

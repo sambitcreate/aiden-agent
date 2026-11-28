@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { readdir, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { copyFile, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { URL } from "node:url";
 import { parse } from "yaml";
@@ -8,10 +11,11 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { AREA_NAMES } from "./ci-changes.mjs";
 import { PLAN_DECISIONS, REQUIRED_JOB_RULES } from "./ci-required.mjs";
-import { readRegistry } from "./ci-test-registry.mjs";
+import { PROJECT_ROOT, readRegistry } from "./ci-test-registry.mjs";
 
 const workflowUrl = new URL("../.github/workflows/ci.yml", import.meta.url);
 const releaseWorkflowUrl = new URL("../.github/workflows/release.yml", import.meta.url);
+const serverBundleWorkflowUrl = new URL("../.github/workflows/server-bundle.yml", import.meta.url);
 const pullfrogWorkflowUrl = new URL(
   "../.github/workflows/pullfrog.yml",
   import.meta.url,
@@ -249,6 +253,9 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
   const receipt = jobs.e2e.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
   assert.ok(receipt.with.name.includes("${{ matrix.shard }}"));
   assert.ok(jobs.apple.steps.some((step) => step.run === "npm run test:native"));
+  const formFillApple = jobs.apple.steps.find((step) => step.run === "npm run test:form-fill:native");
+  assert.ok(formFillApple, "the Apple job must execute CUA-S1 form-fill Swift tests");
+  assert.equal(formFillApple.env?.DEVELOPER_DIR, "/Applications/Xcode_26.6.app/Contents/Developer");
   const iosBuilds = jobs.ios.steps.filter((step) => step.run?.includes("xcodebuild build-for-testing"));
   assert.ok(iosBuilds.some((step) => step.run.includes("generic/platform=iOS")), "device build must stay covered");
   const simulatorTest = jobs.ios.steps.find((step) => step.run?.includes("xcodebuild test-without-building"));
@@ -270,18 +277,37 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
   assert.ok(shellSmoke, "the shell UI smoke step is missing");
   assert.ok(jobs.ios.steps.indexOf(shellSmoke) > jobs.ios.steps.indexOf(simulatorTest));
   assert.ok(shellSmoke.run.includes("-resultBundlePath '${{ runner.temp }}/AidenOnTheGoShellUI.xcresult'"));
+  for (const uiTarget of [
+    "-only-testing:AidenOnTheGoUITests/AidenSandboxedHTMLUITests",
+    "-only-testing:AidenOnTheGoUITests/AidenWorkspaceHTMLUITests",
+    "-only-testing:AidenOnTheGoUITests/AidenAgentSliderUITests",
+  ]) {
+    assert.ok(shellSmoke.run.includes(uiTarget), `missing iOS UI target: ${uiTarget}`);
+  }
   assert.equal(shellSmoke["continue-on-error"], undefined);
   assert.equal(
     simulatorResults.with.path.trim(),
     "${{ runner.temp }}/AidenOnTheGoSimulator.xcresult\n${{ runner.temp }}/AidenOnTheGoShellUI.xcresult",
   );
   assert.equal(simulatorResults.with["retention-days"], 7);
-  // One macOS job builds the production bundles; E2E shards and verify reuse
-  // them. Linux shards build their own so they never wait for a macOS slot.
+  // One macOS job builds the production bundles and native Swift helpers; E2E
+  // shards and verify reuse them. Linux shards build their own JS bundles so
+  // they never wait for a macOS slot.
   const builders = Object.entries(jobs)
     .filter(([, job]) => job.steps?.some((step) => step.run === "npm run build"))
     .map(([name]) => name);
   assert.deepEqual(builders, ["build", "linux-e2e"]);
+  const jsBuildStep = jobs.build.steps.findIndex((step) => step.run === "npm run build");
+  const nativeBuildStep = jobs.build.steps.findIndex((step) => step.run === "npm run build:native");
+  const tarStep = jobs.build.steps.findIndex((step) => step.id === "bundle");
+  assert.ok(
+    jsBuildStep >= 0 && nativeBuildStep > jsBuildStep && tarStep > nativeBuildStep,
+    "jobs.build must compile required Swift helpers after npm run build and before packaging desktop-build.tar",
+  );
+  assert.equal(
+    jobs.build.steps[nativeBuildStep].env?.DEVELOPER_DIR,
+    "/Applications/Xcode_26.6.app/Contents/Developer",
+  );
   const bundle = jobs.build.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
   // Downloads follow the producer output, even when only a consumer is rerun
   // and its github.run_attempt differs from the successful build's attempt.
@@ -293,8 +319,19 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
     const download = jobs[consumer].steps.find((step) => step.with?.name === "${{ needs.build.outputs.artifact-name }}");
     assert.ok(download, consumer);
   }
+  const restoreIndex = jobs.verify.steps.findIndex((step) => String(step.run ?? "").includes("desktop-build.tar"));
+  const subagentSmokeIndex = jobs.verify.steps.findIndex((step) => step.run === "npm run test:subagent-worker-smoke:run");
+  assert.ok(
+    restoreIndex >= 0 && subagentSmokeIndex > restoreIndex,
+    "jobs.verify must smoke the subagent inference worker after restoring desktop-build.tar",
+  );
   assert.ok(jobs.verify.steps.some((step) => step.run === "npm run test:e2e:diagnostics:production:run"));
   const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(
+    manifest.scripts["test:subagent-worker-smoke:run"],
+    "node --test scripts/subagent-inference-worker-smoke.test.mjs",
+  );
+  assert.ok(!manifest.scripts["test:subagent-worker-smoke:run"].includes("npm run build"));
   assert.match(manifest.scripts["test:e2e:diagnostics:production:run"], /^AIDEN_E2E_RUNTIME_PROFILE=production playwright test tests\/e2e\/diagnostics-production\.spec\.ts /u);
   assert.match(manifest.scripts["test:e2e:diagnostics:production:run"], /--fail-on-flaky-tests/u);
   assert.ok(!manifest.scripts["test:e2e:diagnostics:production:run"].includes("npm run build"));
@@ -325,6 +362,35 @@ test("every release build and publisher requires main even on manual dispatch", 
   const { jobs } = parse(await readFile(releaseWorkflowUrl, "utf8"));
   const required = "${{ vars.RELEASES_ENABLED == 'true' && github.ref == 'refs/heads/main' }}";
   for (const name of ["release", "linux-release", "publish"]) assert.equal(jobs[name].if, required);
+  const releaseSteps = jobs.release.steps;
+  const nativeTestsIndex = releaseSteps.findIndex((step) => step.run === "npm run test:native");
+  const formFillIndex = releaseSteps.findIndex((step) => step.run === "npm run test:form-fill:native");
+  const e2eIndex = releaseSteps.findIndex((step) => step.run === "npm run test:e2e");
+  const workerSmokeIndex = releaseSteps.findIndex((step) => step.run === "npm run test:subagent-worker-smoke:run");
+  assert.ok(nativeTestsIndex >= 0 && formFillIndex > nativeTestsIndex, "release must run CUA-S1 form-fill Swift tests");
+  assert.ok(e2eIndex >= 0 && workerSmokeIndex > e2eIndex, "release must run subagent worker smoke after Electron E2E builds bundles");
+  for (const index of [formFillIndex, workerSmokeIndex]) {
+    assert.equal(releaseSteps[index].if, "${{ steps.version.outputs.publish == 'true' }}");
+    assert.equal(releaseSteps[index]["continue-on-error"], undefined);
+  }
+});
+
+test("server-bundle workflow runs CLI tests on a keyless bundle before building and packing the keyed tarball", async () => {
+  const { jobs } = parse(await readFile(serverBundleWorkflowUrl, "utf8"));
+  const steps = jobs.bundle.steps;
+  assert.equal(jobs.bundle.env?.AIDEN_POSTHOG_PROJECT_KEY, undefined);
+  const keylessTestIndex = steps.findIndex(
+    (step) =>
+      String(step.run ?? "").includes("npm run cli:build") &&
+      String(step.run ?? "").includes("npm --prefix packages/cli test"),
+  );
+  const keyedDistIndex = steps.findIndex((step) => step.run === "npm run cli:dist");
+  const packIndex = steps.findIndex((step) => String(step.run ?? "").includes("npm pack ./packages/cli"));
+  assert.ok(keylessTestIndex >= 0, "server-bundle must build and test the keyless CLI bundle");
+  assert.equal(steps[keylessTestIndex].env?.AIDEN_POSTHOG_PROJECT_KEY, undefined);
+  assert.doesNotMatch(steps[keylessTestIndex].run, /AIDEN_POSTHOG_PROJECT_KEY/u);
+  assert.ok(keyedDistIndex > keylessTestIndex, "keyed cli:dist build must follow keyless CLI test execution");
+  assert.ok(packIndex > keyedDistIndex, "npm pack must follow keyed cli:dist build");
 });
 
 test("coverage collection is enabled before positional test paths", async () => {
@@ -616,4 +682,130 @@ test("GitHub issue forms and chooser config are valid YAML matching GitHub's req
     assert.ok(inputCount > 0, `${name}: issue form must contain at least one non-markdown input`);
   }
 });
+
+test("CI scripts executed before npm ci run cleanly in an isolated checkout without node_modules", async () => {
+  const { jobs } = parse(await readFile(workflowUrl, "utf8"));
+  const changeNodeScripts = jobs.changes.steps.flatMap((step) =>
+    [...String(step.run ?? "").matchAll(/\bnode\s+(scripts\/[^\s"']+\.mjs)\b/gu)].map((match) => match[1]),
+  );
+  assert.deepEqual(changeNodeScripts, [
+    "scripts/ci-changes.mjs",
+    "scripts/ci-select-tests.mjs",
+  ]);
+  assert.ok(
+    !jobs.changes.steps.some((step) => String(step.run ?? "").includes("npm ci")),
+    "jobs.changes must stay dependency-free for fast changed-area routing",
+  );
+
+  const dependencyFreeJobScripts = new Set();
+  for (const job of Object.values(jobs)) {
+    const steps = job?.steps ?? [];
+    if (steps.some((step) => String(step?.run ?? "").includes("npm ci"))) continue;
+    for (const step of steps) {
+      for (const match of String(step?.run ?? "").matchAll(/\bnode\s+(scripts\/[^\s"']+\.mjs)\b/gu)) {
+        dependencyFreeJobScripts.add(match[1]);
+      }
+    }
+  }
+  assert.ok(dependencyFreeJobScripts.size >= 5);
+
+  const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-pre-npm-ci-"));
+  const worktreeDir = path.join(tmpRoot, "repo");
+  const githubOutputPath = path.join(tmpRoot, "github-output.txt");
+  const stepSummaryPath = path.join(tmpRoot, "step-summary.md");
+
+  try {
+    const addWorktree = spawnSync("git", ["worktree", "add", "--detach", worktreeDir, "HEAD"], {
+      cwd: PROJECT_ROOT,
+      encoding: "utf8",
+    });
+    assert.equal(addWorktree.status, 0, addWorktree.stderr);
+
+    // Sync working-tree manifests and scripts into the detached worktree so uncommitted changes are tested.
+    await copyFile(path.join(PROJECT_ROOT, "package.json"), path.join(worktreeDir, "package.json"));
+    for (const entry of await readdir(path.join(PROJECT_ROOT, "scripts"), { withFileTypes: true })) {
+      if (!entry.isFile() || !/\.(?:mjs|cjs|js|json)$/u.test(entry.name)) continue;
+      await copyFile(
+        path.join(PROJECT_ROOT, "scripts", entry.name),
+        path.join(worktreeDir, "scripts", entry.name),
+      );
+    }
+
+    assert.equal(existsSync(path.join(tmpRoot, "node_modules")), false);
+    assert.equal(existsSync(path.join(worktreeDir, "node_modules")), false);
+    await writeFile(githubOutputPath, "");
+    await writeFile(stepSummaryPath, "");
+
+    const headSha = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: worktreeDir,
+      encoding: "utf8",
+    }).stdout.trim();
+    const parentRes = spawnSync("git", ["rev-parse", "HEAD~1"], {
+      cwd: worktreeDir,
+      encoding: "utf8",
+    });
+    const baseSha = parentRes.status === 0 ? parentRes.stdout.trim() : headSha;
+
+    const env = {
+      ...process.env,
+      NODE_PATH: "",
+      GITHUB_EVENT_NAME: "pull_request",
+      FORCE_FULL: "false",
+      BASE_SHA: baseSha,
+      HEAD_SHA: headSha,
+      GITHUB_OUTPUT: githubOutputPath,
+      GITHUB_STEP_SUMMARY: stepSummaryPath,
+    };
+
+    for (const scriptPath of [...dependencyFreeJobScripts].sort()) {
+      const imported = spawnSync(
+        process.execPath,
+        ["--input-type=module", "-e", "await import(process.env.AIDEN_IMPORT_TARGET);"],
+        {
+          cwd: worktreeDir,
+          env: { ...env, AIDEN_IMPORT_TARGET: `./${scriptPath}` },
+          encoding: "utf8",
+        },
+      );
+      assert.equal(
+        imported.status,
+        0,
+        `Expected ${scriptPath} to import without node_modules:\n${imported.stdout}\n${imported.stderr}`,
+      );
+    }
+
+    for (const command of [
+      ...changeNodeScripts.map((scriptPath) => [scriptPath]),
+      ["scripts/ci-e2e-shards.mjs", "1/3", "--list"],
+    ]) {
+      const result = spawnSync(process.execPath, command, {
+        cwd: worktreeDir,
+        env,
+        encoding: "utf8",
+      });
+      assert.equal(
+        result.status,
+        0,
+        `Expected node ${command.join(" ")} to succeed without node_modules:\n${result.stdout}\n${result.stderr}`,
+      );
+    }
+
+    const selection = JSON.parse(
+      await readFile(path.join(worktreeDir, "ci-test-selection.json"), "utf8"),
+    );
+    assert.ok(isPlainObject(selection.unit));
+    assert.ok(isPlainObject(selection.e2e));
+    assert.ok(isPlainObject(selection.macE2E));
+    const githubOutput = await readFile(githubOutputPath, "utf8");
+    assert.match(githubOutput, /^desktop=(?:true|false)$/mu);
+    assert.match(githubOutput, /^mac_e2e=(?:true|false)$/mu);
+  } finally {
+    spawnSync("git", ["worktree", "remove", "--force", worktreeDir], {
+      cwd: PROJECT_ROOT,
+      encoding: "utf8",
+    });
+    await rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
 

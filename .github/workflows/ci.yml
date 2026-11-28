@@ -109,6 +109,10 @@ jobs:
         run: npm ci
       - name: Build production bundles once
         run: npm run build
+      - name: Build required macOS native helpers
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+        run: npm run build:native
       - name: Check main-window initial JS budget
         run: npm run check:bundle-budget
       - name: Package production bundles and native helpers
@@ -261,6 +265,8 @@ jobs:
         run: tar -xf "$RUNNER_TEMP/desktop-build/desktop-build.tar"
       - name: Verify foreground file tools in pinned Electron
         run: npm run test:foreground-file-tools:electron
+      - name: Verify subagent inference worker in pinned Electron
+        run: npm run test:subagent-worker-smoke:run
       - name: Verify production-profile diagnostics support workflow
         run: npm run test:e2e:diagnostics:production:run
 
@@ -353,6 +359,10 @@ jobs:
         env:
           DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
         run: npm run test:native
+      - name: Run CUA-S1 form-fill Swift tests
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+        run: npm run test:form-fill:native
 
   # One macOS job compiles for device hardware, then builds the simulator tests
   # once and runs them without rebuilding. Hosted simulator XCTest is
@@ -448,7 +458,7 @@ jobs:
           -parallel-testing-enabled NO
           CODE_SIGNING_ALLOWED=NO
 
-      # Cover the demo launch matrix and pairing through the unpaired shell.
+      # Cover the demo launch matrix, pairing, Agent Slider, and offline HTML previews.
       - name: Run Aiden On The Go shell UI smoke tests on the simulator
         run: >-
           xcodebuild test-without-building -quiet
@@ -461,6 +471,9 @@ jobs:
           -resultBundlePath '${{ runner.temp }}/AidenOnTheGoShellUI.xcresult'
           -only-testing:AidenOnTheGoUITests/AidenShellUITests/testShellLaunchesForEveryScenario
           -only-testing:AidenOnTheGoUITests/AidenShellUITests/testUnpairedSearchOffersPairingAndExplainsInvalidManualInput
+          -only-testing:AidenOnTheGoUITests/AidenSandboxedHTMLUITests
+          -only-testing:AidenOnTheGoUITests/AidenWorkspaceHTMLUITests
+          -only-testing:AidenOnTheGoUITests/AidenAgentSliderUITests
           CODE_SIGNING_ALLOWED=NO
 
       - name: Print failed iOS simulator test messages
@@ -575,7 +588,7 @@ jobs:
           -parallel-testing-enabled NO
           CODE_SIGNING_ALLOWED=NO
 
-      # Cover the demo launch matrix and pairing through the unpaired shell.
+      # Cover the demo launch matrix, pairing, Agent Slider, and offline HTML previews.
       - name: Run Aiden On The Go shell UI smoke tests on the simulator
         run: >-
           xcodebuild test-without-building -quiet
@@ -588,6 +601,9 @@ jobs:
           -resultBundlePath '${{ runner.temp }}/AidenOnTheGoShellUI.xcresult'
           -only-testing:AidenOnTheGoUITests/AidenShellUITests/testShellLaunchesForEveryScenario
           -only-testing:AidenOnTheGoUITests/AidenShellUITests/testUnpairedSearchOffersPairingAndExplainsInvalidManualInput
+          -only-testing:AidenOnTheGoUITests/AidenSandboxedHTMLUITests
+          -only-testing:AidenOnTheGoUITests/AidenWorkspaceHTMLUITests
+          -only-testing:AidenOnTheGoUITests/AidenAgentSliderUITests
           CODE_SIGNING_ALLOWED=NO
 
       - name: Print failed iOS simulator test messages

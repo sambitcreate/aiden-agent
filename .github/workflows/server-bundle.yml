@@ -39,6 +39,11 @@ jobs:
           npm ci --ignore-scripts
           npm ci --prefix packages/cli
 
+      - name: Build and test the keyless server bundle
+        run: |
+          npm run cli:build
+          npm --prefix packages/cli test
+
       - name: Build the keyed bundle
         env:
           AIDEN_POSTHOG_PROJECT_KEY: ${{ secrets.AIDEN_POSTHOG_PROJECT_KEY }}

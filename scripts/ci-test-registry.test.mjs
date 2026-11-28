@@ -1,10 +1,20 @@
 /* global structuredClone */
 
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import {
   collectSourceTests,
+  discoverCliTestFiles,
+  discoverIosUiTests,
+  discoverSwiftPackages,
   discoverTestFiles,
+  parseIosUiTestSource,
+  parseIosUiTestSources,
+  parseSwiftPackageManifest,
+  readCliPackageManifest,
   readPackageManifest,
   readRegistry,
   readWorkflows,
@@ -224,6 +234,29 @@ test("manual allowlist entries are required for intentionally manual suites and 
 test("workflow-owned scripts count only while a workflow still invokes them", () => {
   const workflows = readWorkflows().replaceAll("npm run test:linux-native", "npm run test:linux-native-removed");
   assert.throws(() => validateRegistry({ workflows }), /not invoked by any workflow: test:linux-native/u);
+
+  // Comments, echo commands, failure-only steps, and `||` fallbacks do not count as workflow execution.
+  for (const replacement of [
+    "# npm run test:form-fill:native",
+    "echo npm run test:form-fill:native",
+    "true || npm run test:form-fill:native",
+    "if false; then npm run test:form-fill:native; fi",
+  ]) {
+    const spoofedWorkflows = readWorkflows().replaceAll("npm run test:form-fill:native", replacement);
+    assert.throws(
+      () => validateRegistry({ workflows: spoofedWorkflows }),
+      /not invoked by any workflow: test:form-fill:native/u,
+    );
+  }
+
+  const failureStepWorkflows = readWorkflows().replaceAll(
+    "run: npm run test:foreground-file-tools:electron",
+    "if: failure()\n        run: npm run test:foreground-file-tools:electron",
+  );
+  assert.throws(
+    () => validateRegistry({ workflows: failureStepWorkflows }),
+    /not invoked by any workflow: test:foreground-file-tools:electron/u,
+  );
 });
 
 test("duplicate prerequisite and preserved ids are rejected", () => {
@@ -234,4 +267,407 @@ test("duplicate prerequisite and preserved ids are rejected", () => {
   const preserved = structuredClone(readRegistry());
   preserved.preserved.push(structuredClone(preserved.preserved[0]));
   assert.throws(() => validateRegistry({ registry: preserved }), new RegExp(`Duplicate preserved ids: ${preserved.preserved[0].id}`, "u"));
+});
+
+test("Swift package manifests are statically inventoried and fail closed on unwired targets or stale allowlists", () => {
+  const discoveredPackages = discoverSwiftPackages();
+  assert.deepEqual(
+    discoveredPackages.map((pkg) => pkg.packagePath),
+    ["native/apple-foundation-models", "native/cua-s1-forms"],
+  );
+  const validation = validateRegistry();
+  assert.deepEqual(validation.swiftTargets, [
+    "native/apple-foundation-models:AidenFoundationModelsCore",
+    "native/apple-foundation-models:AidenFoundationModelsCoreTests",
+    "native/apple-foundation-models:AidenFoundationModelsHelper",
+    "native/cua-s1-forms:AidenCuaS1FormsCore",
+    "native/cua-s1-forms:AidenCuaS1FormsCoreTests",
+    "native/cua-s1-forms:AidenCuaS1FormsHelper",
+  ]);
+
+  // Lexical parser strips comments, multiline strings, and raw strings while reading products/targets.
+  const fixtureManifest = parseSwiftPackageManifest(
+    `
+      // .executableTarget(name: "CommentedOut")
+      /* nested /* .testTarget(name: "NestedComment") */ still comment */
+      let ignored = """
+      .target(name: "InsideMultiline")
+      """
+      let rawIgnored = #".executableTarget(name: "InsideRaw")"#
+      let package = Package(
+        name: "FixturePkg",
+        products: [
+          .executable(name: "fixture-bin", targets: ["FixtureExec"])
+        ],
+        targets: [
+          .target(name: "FixtureLib"),
+          .executableTarget(name: "FixtureExec", dependencies: [.target(name: "FixtureLib")]),
+          .testTarget(name: "FixtureLibTests", dependencies: ["FixtureLib"])
+        ]
+      )
+    `,
+    "native/fixture-pkg",
+  );
+  assert.deepEqual(fixtureManifest.productTargets, { "fixture-bin": ["FixtureExec"] });
+  assert.deepEqual(fixtureManifest.targets, [
+    { kind: "target", name: "FixtureLib", dependencies: [] },
+    { kind: "executableTarget", name: "FixtureExec", dependencies: ["FixtureLib"] },
+    { kind: "testTarget", name: "FixtureLibTests", dependencies: ["FixtureLib"] },
+  ]);
+  assert.throws(
+    () =>
+      parseSwiftPackageManifest(
+        'let package = Package(targets: [.plugin(name: "GenPlugin")])',
+        "native/plugin-pkg",
+      ),
+    /Unsupported Swift target kind '\.plugin'/u,
+  );
+
+  // Adding an unwired Swift package or target fails closed until wired or allowlisted.
+  assert.throws(
+    () => validateRegistry({ swiftPackages: [...discoveredPackages, fixtureManifest] }),
+    /Swift package targets never run in CI: \["native\/fixture-pkg:FixtureExec","native\/fixture-pkg:FixtureLib","native\/fixture-pkg:FixtureLibTests"\]/u,
+  );
+
+  // Dropping build:native --required helper compilation orphans the Swift executable targets.
+  const optionalBuildManifest = structuredClone(readPackageManifest());
+  optionalBuildManifest.scripts["build:native"] =
+    "node scripts/build-foundation-models-helper.mjs --optional && node scripts/build-cua-s1-forms-helper.mjs --optional";
+  assert.throws(
+    () => validateRegistry({ packageManifest: optionalBuildManifest }),
+    /Swift package targets never run in CI: \["native\/apple-foundation-models:AidenFoundationModelsHelper","native\/cua-s1-forms:AidenCuaS1FormsHelper"\]/u,
+  );
+
+  // Dropping test:form-fill:native from workflows orphans AidenCuaS1FormsCore and AidenCuaS1FormsCoreTests? Note AidenCuaS1FormsHelper depends on AidenCuaS1FormsCore, so AidenCuaS1FormsCoreTests is orphaned.
+  const withoutFormFillRegistry = structuredClone(readRegistry());
+  withoutFormFillRegistry.workflowScripts = withoutFormFillRegistry.workflowScripts.filter(
+    (entry) => entry.script !== "test:form-fill:native",
+  );
+  withoutFormFillRegistry.manualScripts.push({
+    script: "test:form-fill:native",
+    reason: "temporarily unhooked in fixture",
+  });
+  const withoutFormFillWorkflows = readWorkflows().replaceAll(
+    "npm run test:form-fill:native",
+    "echo skipped",
+  );
+  assert.throws(
+    () =>
+      validateRegistry({
+        registry: withoutFormFillRegistry,
+        workflows: withoutFormFillWorkflows,
+      }),
+    /Swift package targets never run in CI: \["native\/cua-s1-forms:AidenCuaS1FormsCoreTests"\]/u,
+  );
+
+  // Leaving a wired Swift target in manualSwiftTargets fails closed as stale.
+  const staleSwiftRegistry = structuredClone(readRegistry());
+  staleSwiftRegistry.manualSwiftTargets = [
+    {
+      target: "native/cua-s1-forms:AidenCuaS1FormsCoreTests",
+      reason: "already runs via test:form-fill:native",
+    },
+  ];
+  assert.throws(
+    () => validateRegistry({ registry: staleSwiftRegistry }),
+    /Manual Swift target allowlist names targets CI already runs: \["native\/cua-s1-forms:AidenCuaS1FormsCoreTests"\]/u,
+  );
+
+  const unknownSwiftRegistry = structuredClone(readRegistry());
+  unknownSwiftRegistry.manualSwiftTargets = [
+    { target: "native/cua-s1-forms:DeletedTests", reason: "gone" },
+  ];
+  assert.throws(
+    () => validateRegistry({ registry: unknownSwiftRegistry }),
+    /Manual Swift target allowlist references an unknown target: native\/cua-s1-forms:DeletedTests/u,
+  );
+});
+
+test("iOS UI XCTest classes and methods are statically inventoried against -only-testing flags and manualIosUiTests", () => {
+  const discoveredIos = discoverIosUiTests();
+  assert.deepEqual(discoveredIos.classes, [
+    "AidenAgentSliderUITests",
+    "AidenBotUXUITests",
+    "AidenSandboxedHTMLUITests",
+    "AidenShellUITests",
+    "AidenWorkspaceHTMLUITests",
+  ]);
+  const validation = validateRegistry();
+  assert.deepEqual(validation.workflowIosUiTests, [
+    "AidenAgentSliderUITests/testANewChatStaysOnTheStopItStartedOn",
+    "AidenAgentSliderUITests/testAStopChosenOnTheSliderIsTheModelTheTurnRunsOn",
+    "AidenSandboxedHTMLUITests/testATapOnAPreviewLinkAsksFirstAndAScrollNeverDoes",
+    "AidenShellUITests/testShellLaunchesForEveryScenario",
+    "AidenShellUITests/testUnpairedSearchOffersPairingAndExplainsInvalidManualInput",
+    "AidenWorkspaceHTMLUITests/testATruncatedHtmlFileStaysOnSourceWithANote",
+    "AidenWorkspaceHTMLUITests/testAnHtmlFileOpensOnPreviewSwitchesToSourceAndAsksBeforeALink",
+    "AidenWorkspaceHTMLUITests/testFileWrittenOpensTheFileInAWorkspaceChatOnly",
+  ]);
+  assert.equal(validation.manualIosUiTests.length, 61);
+  assert.ok(discoveredIos.tests.some((testId) => testId.startsWith("AidenBotUXUITests/")));
+  assert.ok(validation.manualIosUiTests.some((testId) => testId.startsWith("AidenBotUXUITests/")));
+
+  // Parser ignores non-XCTestCase classes, parameterized helpers, and comments/strings.
+  const parsedUi = parseIosUiTestSource(`
+    import XCTest
+    final class HelperObject {
+      func testNotAnXCTestCase() {}
+    }
+    // final class CommentedUITests: XCTestCase { func testIgnored() {} }
+    final class SamplePreviewUITests: XCTestCase {
+      let note = "func testInsideString() {}"
+      func helperSetUp() {}
+      func testParameterized(_ flag: Bool) {}
+      @MainActor func testRendersOfflinePreview() async throws {}
+    }
+    extension SamplePreviewUITests {
+      func testSupportsAccessibilityRotor() {}
+    }
+  `);
+  assert.deepEqual(parsedUi, {
+    classes: ["SamplePreviewUITests"],
+    tests: [
+      "SamplePreviewUITests/testRendersOfflinePreview",
+      "SamplePreviewUITests/testSupportsAccessibilityRotor",
+    ],
+  });
+
+  // XCTestCase extensions split across separate Swift files are discovered regardless of file order.
+  assert.deepEqual(
+    parseIosUiTestSources([
+      `
+        import XCTest
+        extension SplitUITests {
+          func testDefinedInEarlierSortedExtensionFile() {}
+        }
+      `,
+      `
+        import XCTest
+        final class SplitUITests: XCTestCase {
+          func testDefinedOnClass() {}
+        }
+      `,
+      `
+        import XCTest
+        extension SplitUITests {
+          func testDefinedInLaterSortedExtensionFile() {}
+        }
+      `,
+    ]),
+    {
+      classes: ["SplitUITests"],
+      tests: [
+        "SplitUITests/testDefinedInEarlierSortedExtensionFile",
+        "SplitUITests/testDefinedInLaterSortedExtensionFile",
+        "SplitUITests/testDefinedOnClass",
+      ],
+    },
+  );
+
+  const tempIosRoot = mkdtempSync(path.join(os.tmpdir(), "aiden-ios-ui-split-"));
+  try {
+    const uiDir = path.join(tempIosRoot, "ios/AidenOnTheGoUITests");
+    mkdirSync(uiDir, { recursive: true });
+    writeFileSync(
+      path.join(uiDir, "ASplitUITests+Extra.swift"),
+      "import XCTest\nextension SplitUITests { func testFromSeparateExtensionFile() {} }\n",
+    );
+    writeFileSync(
+      path.join(uiDir, "SplitUITests.swift"),
+      "import XCTest\nfinal class SplitUITests: XCTestCase { func testOnPrimaryClass() {} }\n",
+    );
+    assert.deepEqual(discoverIosUiTests(tempIosRoot), {
+      classes: ["SplitUITests"],
+      tests: [
+        "SplitUITests/testFromSeparateExtensionFile",
+        "SplitUITests/testOnPrimaryClass",
+      ],
+    });
+  } finally {
+    rmSync(tempIosRoot, { recursive: true, force: true });
+  }
+
+  // Adding a new UI test class or method without -only-testing or manualIosUiTests fails closed.
+  assert.throws(
+    () =>
+      validateRegistry({
+        discoveredIosUi: {
+          classes: [...discoveredIos.classes, "AidenNewFeatureUITests"],
+          tests: [...discoveredIos.tests, "AidenNewFeatureUITests/testOfflineBanner"],
+        },
+      }),
+    /iOS UI tests on disk never run in CI: \["AidenNewFeatureUITests\/testOfflineBanner"\]/u,
+  );
+
+  // Removing -only-testing from only one of jobs.ios / jobs.ios-27 fails closed on parity mismatch.
+  const mismatchedIosWorkflows = readWorkflows().replace(
+    "-only-testing:AidenOnTheGoUITests/AidenWorkspaceHTMLUITests",
+    "-only-testing:AidenOnTheGoUITests/AidenSandboxedHTMLUITests",
+  );
+  assert.throws(
+    () => validateRegistry({ workflows: mismatchedIosWorkflows }),
+    /Workflow jobs "ios" and "ios-27" must run identical iOS UI -only-testing targets/u,
+  );
+
+  // Removing -only-testing for AidenWorkspaceHTMLUITests from both iOS jobs fails closed as unrun.
+  const withoutHtmlWorkflows = readWorkflows().replaceAll(
+    "-only-testing:AidenOnTheGoUITests/AidenWorkspaceHTMLUITests",
+    "-only-testing:AidenOnTheGoUITests/AidenSandboxedHTMLUITests",
+  );
+  assert.throws(
+    () => validateRegistry({ workflows: withoutHtmlWorkflows }),
+    /iOS UI tests on disk never run in CI: \["AidenWorkspaceHTMLUITests\/testATruncatedHtmlFileStaysOnSourceWithANote"/u,
+  );
+
+  // Leaving a CI-wired class or method in manualIosUiTests fails closed as stale.
+  const staleClassRegistry = structuredClone(readRegistry());
+  staleClassRegistry.manualIosUiTests.push({
+    test: "AidenWorkspaceHTMLUITests",
+    reason: "already runs in jobs.ios",
+  });
+  assert.throws(
+    () => validateRegistry({ registry: staleClassRegistry }),
+    /Manual iOS UI test allowlist names tests CI already runs: \["AidenWorkspaceHTMLUITests"\]/u,
+  );
+
+  const staleMethodRegistry = structuredClone(readRegistry());
+  staleMethodRegistry.manualIosUiTests.push({
+    test: "AidenShellUITests/testShellLaunchesForEveryScenario",
+    reason: "already runs as shell smoke",
+  });
+  assert.throws(
+    () => validateRegistry({ registry: staleMethodRegistry }),
+    /Manual iOS UI test allowlist names tests CI already runs: \["AidenShellUITests\/testShellLaunchesForEveryScenario"\]/u,
+  );
+
+  const missingIosRegistry = structuredClone(readRegistry());
+  missingIosRegistry.manualIosUiTests.push({
+    test: "AidenShellUITests/testDeletedScenario",
+    reason: "deleted",
+  });
+  assert.throws(
+    () => validateRegistry({ registry: missingIosRegistry }),
+    /Manual iOS UI test allowlist references a missing test method: AidenShellUITests\/testDeletedScenario/u,
+  );
+});
+
+test("CLI test files and server-bundle packaging workflows fail closed when CLI tests are omitted or keyed", () => {
+  const discoveredCli = discoverCliTestFiles();
+  assert.equal(discoveredCli.length, 14);
+  assert.ok(discoveredCli.includes("packages/cli/tests/bundle.test.mjs"));
+  assert.ok(discoveredCli.every((file) => !file.includes("/fixtures/")));
+
+  // New CLI test file on disk omitted from packages/cli/package.json scripts.test fails closed.
+  assert.throws(
+    () =>
+      validateRegistry({
+        discoveredCliFiles: [...discoveredCli, "packages/cli/tests/unwired-route.test.mjs"],
+      }),
+    /CLI test files on disk never run in packages\/cli test script: \["packages\/cli\/tests\/unwired-route\.test\.mjs"\]/u,
+  );
+
+  // Referencing a deleted test file in packages/cli/package.json fails closed.
+  const brokenCliManifest = structuredClone(readCliPackageManifest());
+  brokenCliManifest.scripts.test += " tests/deleted.test.mjs";
+  assert.throws(
+    () => validateRegistry({ cliManifest: brokenCliManifest }),
+    /packages\/cli test script references a missing or unsupported test file: tests\/deleted\.test\.mjs/u,
+  );
+
+  // Any workflow that packs ./packages/cli without running keyless CLI tests before cli:dist fails closed.
+  const withoutCliTestsWorkflow = readWorkflows().replace(
+    "      - name: Build and test the keyless server bundle\n        run: |\n          npm run cli:build\n          npm --prefix packages/cli test\n\n",
+    "",
+  );
+  assert.throws(
+    () => validateRegistry({ workflows: withoutCliTestsWorkflow }),
+    /Workflow "Build keyed server bundle" job "bundle" packs packages\/cli without building a keyless bundle and running CLI tests before cli:dist and npm pack/u,
+  );
+
+  // Running CLI tests with AIDEN_POSTHOG_PROJECT_KEY set fails closed because bundle/analytics tests require keyless builds.
+  const keyedCliTestsWorkflow = readWorkflows().replace(
+    "      - name: Build and test the keyless server bundle\n        run: |",
+    "      - name: Build and test the keyless server bundle\n        env:\n          AIDEN_POSTHOG_PROJECT_KEY: ${{ secrets.AIDEN_POSTHOG_PROJECT_KEY }}\n        run: |",
+  );
+  assert.throws(
+    () => validateRegistry({ workflows: keyedCliTestsWorkflow }),
+    /must run CLI tests without AIDEN_POSTHOG_PROJECT_KEY before packing packages\/cli/u,
+  );
+
+  // Running CLI tests only after cli:dist fails closed.
+  const lateCliTestsWorkflow = readWorkflows()
+    .replace(
+      "      - name: Build and test the keyless server bundle\n        run: |\n          npm run cli:build\n          npm --prefix packages/cli test\n\n",
+      "",
+    )
+    .replace(
+      "      - name: Pack the server\n",
+      "      - name: Test too late\n        run: |\n          npm run cli:build\n          npm --prefix packages/cli test\n\n      - name: Pack the server\n",
+    );
+  assert.throws(
+    () => validateRegistry({ workflows: lateCliTestsWorkflow }),
+    /packs packages\/cli without building a keyless bundle and running CLI tests before cli:dist and npm pack/u,
+  );
+
+  // Shell comments, echo commands, and fallback branches cannot spoof the keyless CLI build/test gate.
+  for (const spoofedRun of [
+    "          # npm run cli:build\n          # npm --prefix packages/cli test",
+    "          echo npm run cli:build\n          echo npm --prefix packages/cli test",
+    "          npm run cli:build\n          true || npm --prefix packages/cli test",
+  ]) {
+    const spoofedCliWorkflow = readWorkflows().replace(
+      "          npm run cli:build\n          npm --prefix packages/cli test",
+      spoofedRun,
+    );
+    assert.throws(
+      () => validateRegistry({ workflows: spoofedCliWorkflow }),
+      /packs packages\/cli without building a keyless bundle and running CLI tests before cli:dist and npm pack/u,
+    );
+  }
+});
+
+test("root package.json test:* scripts and build:native fail closed when unwired or left in manualScripts", () => {
+  const validation = validateRegistry();
+  assert.ok(!validation.manualScripts.includes("test:subagent-worker-smoke"));
+  assert.ok(!validation.manualScripts.includes("test:subagent-worker-smoke:run"));
+
+  // Adding a new unwired root test:* script fails closed.
+  const unwiredManifest = structuredClone(readPackageManifest());
+  unwiredManifest.scripts["test:forgotten-smoke"] = "node scripts/run-forgotten-smoke.mjs";
+  assert.throws(
+    () => validateRegistry({ packageManifest: unwiredManifest }),
+    /Package scripts never run in CI: \["test:forgotten-smoke"\]/u,
+  );
+
+  // Leaving a serial, workflow-invoked, or covered-alias script in manualScripts fails closed as stale.
+  for (const staleScript of [
+    "test:telegram",
+    "test:subagent-worker-smoke:run",
+    "test:subagent-worker-smoke",
+    "test:coverage",
+  ]) {
+    const staleRegistry = structuredClone(readRegistry());
+    staleRegistry.manualScripts.push({
+      script: staleScript,
+      reason: "stale allowlist entry",
+    });
+    assert.throws(
+      () => validateRegistry({ registry: staleRegistry }),
+      new RegExp(
+        `Manual script allowlist names scripts CI already runs: \\["${staleScript}"\\]`,
+        "u",
+      ),
+    );
+  }
+
+  // Referencing a deleted script in manualScripts fails closed.
+  const missingManualScript = structuredClone(readRegistry());
+  missingManualScript.manualScripts.push({
+    script: "test:deleted-packaged-check",
+    reason: "removed",
+  });
+  assert.throws(
+    () => validateRegistry({ registry: missingManualScript }),
+    /Manual script allowlist references a missing or unsupported package script: test:deleted-packaged-check/u,
+  );
 });

@@ -73,6 +73,8 @@ test("changed-area classification is conservative and table-driven", () => {
     ["main/services/aiden-remote-router.ts", select("desktop", "catalog", "cli", "linux", "ios", "android")],
     ["main/handlers/aiden-remote.ts", select("desktop", "catalog", "cli", "linux", "ios", "android")],
     ["native/apple-foundation-models/Package.swift", select("desktop", "catalog", "apple")],
+    ["native/cua-s1-forms/Package.swift", select("desktop", "catalog", "apple")],
+    ["native/cua-s1-forms/Sources/AidenCuaS1FormsCore/Planner.swift", select("desktop", "catalog", "apple")],
     ["native/worktree-file-io/main.c", select("desktop", "catalog", "cli", "linux")],
     ["protocol/aiden-remote/v1/fixtures/contract.json", select("desktop", "catalog", "cli", "ios", "android")],
     ["protocol/aiden-appearance-v1.json", select("desktop", "catalog", "cli", "ios", "android")],
@@ -401,7 +403,12 @@ function manifestPullRequest(base, head, extraFiles = {}) {
 test("a root manifest change skips the native jobs only when it touches host npm scripts alone", () => {
   const hostAreas = select("desktop", "catalog", "cli", "linux");
   const manifest = (fields) => JSON.stringify({ name: "aiden", version: "1.0.0", ...fields }, null, 2);
-  const scripts = { "test:foo": "tsx --test a.ts", "test:ios-release": "ruby a.rb", "test:native": "swift test" };
+  const scripts = {
+    "test:foo": "tsx --test a.ts",
+    "test:form-fill:native": "swift test --package-path native/cua-s1-forms",
+    "test:ios-release": "ruby a.rb",
+    "test:native": "swift test",
+  };
 
   const added = manifestPullRequest(
     manifest({ scripts }),
@@ -414,8 +421,10 @@ test("a root manifest change skips the native jobs only when it touches host npm
     ["the version", manifest({ scripts, version: "1.0.1" })],
     ["the iOS job's script", manifest({ scripts: { ...scripts, "test:ios-release": "ruby b.rb" } })],
     ["the Apple job's script", manifest({ scripts: { ...scripts, "test:native": "swift build" } })],
+    ["the CUA-S1 Swift job's script", manifest({ scripts: { ...scripts, "test:form-fill:native": "swift build" } })],
     ["a removed native script", manifest({ scripts: { "test:foo": scripts["test:foo"] } })],
     ["a new hook before the Apple job", manifest({ scripts: { ...scripts, "pretest:native": "node a.mjs" } })],
+    ["a new hook before the CUA-S1 Swift job", manifest({ scripts: { ...scripts, "pretest:form-fill:native": "node a.mjs" } })],
     ["a new hook after the iOS job", manifest({ scripts: { ...scripts, "posttest:ios-release": "node a.mjs" } })],
     ["an unparsable manifest", "{"],
     ["a non-object manifest", "[]"],
