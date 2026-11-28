@@ -11,7 +11,6 @@ import {
   type DesignFrame,
 } from "../../renderer/shared/design-canvas/schema.js";
 import { AppFrameRegistry } from "../services/design-canvas/app-frames/app-frame-registry.js";
-import { createPageFile } from "../services/design-canvas/app-server/app-page-files.js";
 import { DesignGrantRegistry } from "../services/design-canvas/grants.js";
 import { DesignMdReader } from "../services/design-canvas/design-md/reader.js";
 import { DesignCanvasStore, DesignChatCanvases } from "../services/design-canvas/store.js";
@@ -2208,34 +2207,16 @@ function canvasWriteFails(store: unknown) {
   };
 }
 
-test("3c: a canvas write that fails after the copy takes the unchanged copy back, and its new folder, and answers io", async (t) => {
+test("3c: a canvas write that fails after the copy leaves the copy where it is, removes nothing, and says where it is", async (t) => {
+  // Aiden removes nothing it wrote (Pullfrog r4724929189): no unlink, no Trash, no folder removal.
   const { invoke, store, workspace, trashed } = await pageFixture(t, { files: { "src/routes/pricing/route.tsx": PLAIN_PAGE } });
   await seedFrames(store, pageApp());
   canvasWriteFails(store);
-  assert.deepEqual(await invoke("designCanvas:appPageVariant", "chat-1", { frameId: "app-1" }), { error: "io" });
-  assert.equal(await exists(path.join(workspace, "src/routes/pricing-v2")), false, "the copy and the folder it made are gone");
-  // Linux removes Aiden's own new file through its verified folder, with no Trash (none may be installed); macOS has no
-  // handle-bound unlink, so the file goes to the Trash there.
-  assert.deepEqual(trashed, process.platform === "linux" ? [] : [path.join(workspace, "src/routes/pricing-v2/route.tsx")]);
-  assert.deepEqual(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).frames.map((frame) => frame.id), ["app-1"]);
-});
-
-test("3c: a copy edited before the rollback is kept, and the reply says so", async (t) => {
-  const { invoke, store, workspace, trashed } = await pageFixture(t, {
-    files: { "src/routes/pricing.tsx": PLAIN_PAGE },
-    pageFs: {
-      writeFile: async (file, bytes, mode) => {
-        const created = await createPageFile(file, bytes, mode);
-        await fs.appendFile(file, "// edited\n");
-        return created;
-      },
-    },
-  });
-  await seedFrames(store, pageApp());
-  canvasWriteFails(store);
-  assert.deepEqual(await invoke("designCanvas:appPageVariant", "chat-1", { frameId: "app-1" }), { error: "io", kept: "src/routes/pricing-v2.tsx" });
+  assert.deepEqual(await invoke("designCanvas:appPageVariant", "chat-1", { frameId: "app-1" }), { error: "io", kept: "src/routes/pricing-v2/route.tsx" });
+  // check-aiden-rules: allow no-source-grep-test reads a page file the handler wrote in a temp workspace, not Aiden source
+  assert.equal(await fs.readFile(path.join(workspace, "src/routes/pricing-v2/route.tsx"), "utf8"), PLAIN_PAGE, "a complete copy of the page");
   assert.deepEqual(trashed, []);
-  assert.ok(await exists(path.join(workspace, "src/routes/pricing-v2.tsx")));
+  assert.deepEqual(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).frames.map((frame) => frame.id), ["app-1"], "no variant placed");
 });
 
 test("3c: appPageVariant refuses and writes nothing", async (t) => {

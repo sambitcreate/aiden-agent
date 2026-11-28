@@ -4,9 +4,8 @@
 // or a restore may be written to. Nothing here runs code or overwrites a
 // file; the rules live in `app-page-files-core.ts` and `app-routes-core.ts`.
 
-import { randomBytes } from "node:crypto";
 import { constants as fsConstants, type Stats } from "node:fs";
-import { link, lstat, mkdir, open, realpath, rename, rmdir, unlink, type FileHandle } from "node:fs/promises";
+import { lstat, mkdir, open, realpath, rmdir, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { FrameworkId } from "../../../../renderer/shared/design-app.js";
 import { isPathInside } from "../../../shared/path-containment.js";
@@ -134,7 +133,7 @@ export type PageFileFs = {
   /** Removes an empty folder only. */
   rmdir(dir: string): Promise<void>;
   /** Creates `file` with `wx`: never over anything already at the path, a link included. */
-  writeFile(file: string, bytes: Buffer, mode: number): Promise<FileIdentity | void>;
+  writeFile(file: string, bytes: Buffer, mode: number): Promise<void>;
 };
 
 const DEFAULT_PAGE_FS: PageFileFs = {
@@ -203,9 +202,6 @@ async function makePageFolder(dir: string): Promise<void> {
   }
 }
 
-/** A file's identity on disk: what a rollback checks before it takes back a file this process made. */
-export type FileIdentity = { dev: number; ino: number };
-
 /**
  * macOS's `O_NOFOLLOW_ANY` (`sys/fcntl.h`, macOS 11 and later): the open fails
  * with ELOOP when any part of the path is a link, not only the last. Node has
@@ -216,201 +212,63 @@ const O_NOFOLLOW_ANY = 0x20000000;
 /** What a test does to the path just before and just after the file is made, as a racing process would. */
 export type CreateRace = { beforeCreate?: () => Promise<void>; afterCreate?: () => Promise<void> };
 
+/** Marks an error after which the file this call made was emptied through its own handle and left where it was made. */
+const leftEmpty = (error: unknown): unknown => {
+  if (typeof error === "object" && error !== null) Object.assign(error, { aidenLeftEmpty: true });
+  return error;
+};
+
 /**
  * Creates `file` empty with `O_EXCL`, then writes `bytes` through its own
  * handle, only where the confined path names (S95; Pullfrog r4724521914 and
- * r4724600691). Answers the new file's identity.
+ * r4724600691).
  *
  * - Linux: the folder is held open no-follow while it is the inode at its own
  *   real path, and the file is made through `/proc/self/fd/N/name`, so it
- *   lands in that folder whatever the path names meanwhile. If the folder was
- *   moved away by then, the file is taken back through the same handle before
- *   a byte is written: renamed aside to a random name and unlinked only once
- *   proved to be this inode (`takeBackFrom`), never by a check then an unlink.
+ *   lands in that folder whatever the path names meanwhile, and no byte is
+ *   written unless that folder is still at its path.
  * - macOS: one `open` with `O_NOFOLLOW_ANY`, which refuses a link anywhere on
  *   the path, so the file is made at the literal confined path under real
  *   folders. A swap to a link at any moment answers `link` and makes nothing.
  *   A racer renaming real folders can only move what is already inside the
  *   workspace, which it could do anyway.
  * - Elsewhere: by path, with the folder and file identity checked after the
- *   create; a swap exactly across the create can leave one empty file where
- *   the link pointed. Neither desktop platform takes this path.
+ *   create. Neither desktop platform takes this path.
  *
- * A write that fails after the create takes the file back the same way on
- * Linux (or empties it through its own handle when the rename can't be made);
- * on macOS it is emptied through its handle and left (there is no handle-bound
- * unlink there), and the caller reports `io`.
+ * Nothing is ever removed (Pullfrog r4724929189): POSIX has no unlink bound
+ * to an inode, so any check before an unlink can be raced into deleting
+ * someone else's file. When the folder moved or the write fails after the
+ * create, the file is emptied through its own handle (bound to the inode
+ * this call made) and left where it was made; the error carries
+ * `aidenLeftEmpty`, and the caller reports it.
  */
-export async function createPageFile(file: string, bytes: Buffer, mode: number, race?: CreateRace): Promise<FileIdentity> {
+export async function createPageFile(file: string, bytes: Buffer, mode: number, race?: CreateRace): Promise<void> {
   const create = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL;
-  if (process.platform === "darwin") {
-    await race?.beforeCreate?.();
-    let created: FileHandle;
-    try {
-      created = await open(file, create | O_NOFOLLOW_ANY, mode);
-    } catch (error) {
-      throw errorCode(error) === "ELOOP" ? moved() : error;
-    }
-    try {
-      await race?.afterCreate?.();
-      const info = await created.stat();
-      try {
-        await created.writeFile(bytes);
-      } catch (error) {
-        await created.truncate(0).catch(() => undefined);
-        throw error;
-      }
-      return { dev: info.dev, ino: info.ino };
-    } finally {
-      await created.close().catch(() => undefined);
-    }
-  }
-  const folder = await openHeldFolder(path.dirname(file));
+  const folder = process.platform === "darwin" ? undefined : await openHeldFolder(path.dirname(file));
+  const at = folder && BY_HANDLE ? `/proc/self/fd/${folder.fd}/${path.basename(file)}` : file;
   let created: FileHandle | undefined;
-  const at = BY_HANDLE ? `/proc/self/fd/${folder.fd}/${path.basename(file)}` : file;
   try {
     await race?.beforeCreate?.();
-    created = await open(at, create | fsConstants.O_NOFOLLOW, mode);
+    try {
+      created = await open(at, folder ? create | fsConstants.O_NOFOLLOW : create | O_NOFOLLOW_ANY, mode);
+    } catch (error) {
+      throw !folder && errorCode(error) === "ELOOP" ? moved() : error;
+    }
+    const handle = created;
     await race?.afterCreate?.();
-    const info = await created.stat();
-    // Taken back only through the folder's handle, and only once proved to be this inode (never by path).
-    const takeBack = async () => {
-      if (!BY_HANDLE || !created) return;
-      const own = created;
-      const result = await takeBackFrom(folder, path.basename(file), (entry) => isInode(entry, info)).catch(() => "unrenamed" as const);
-      if (result === "unrenamed") await own.truncate(0).catch(() => undefined);
-    };
-    if (!(await holds(folder, file, info)) || !(await stillAt(folder, path.dirname(file)))) {
-      await takeBack();
-      throw moved();
+    if (folder) {
+      const info = await handle.stat();
+      if (!(await holds(folder, file, info)) || !(await stillAt(folder, path.dirname(file)))) throw leftEmpty(moved());
     }
     try {
-      await created.writeFile(bytes);
+      await handle.writeFile(bytes);
     } catch (error) {
-      await takeBack();
-      throw error;
+      await handle.truncate(0).catch(() => undefined);
+      throw leftEmpty(error);
     }
-    return { dev: info.dev, ino: info.ino };
   } finally {
     await created?.close().catch(() => undefined);
-    await folder.close().catch(() => undefined);
-  }
-}
-
-/** What `removeCreatedFile` did: `aside` names where a file that wasn't Aiden's was left when its name was taken again meanwhile. */
-export type RemoveCreatedResult = "removed" | "missing" | "changed" | "emptied" | "unbound" | { aside: string };
-
-/** Whether the entry at `at` is the file `created` names, holding exactly `bytes` (read through a no-follow handle). */
-async function isOwnCopy(at: string, created: FileIdentity, bytes: Buffer): Promise<boolean> {
-  let handle: FileHandle;
-  try {
-    handle = await open(at, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
-  } catch {
-    return false;
-  }
-  try {
-    const info = await handle.stat();
-    if (!info.isFile() || info.dev !== created.dev || info.ino !== created.ino || info.nlink !== 1 || info.size !== bytes.length) return false;
-    return (await handle.readFile()).equals(bytes);
-  } finally {
-    await handle.close().catch(() => undefined);
-  }
-}
-
-/**
- * Takes back a file this process made with `createPageFile` (a rollback;
- * Pullfrog r4724860830), never deleting a file it hasn't proved is that one.
- * On Linux, through its folder's verified handle:
- *
- * 1. The name is renamed, in that folder, to a random name only Aiden knows.
- *    Rename is atomic, so whatever held the name is now there, and no other
- *    process will put anything at that name.
- * 2. Only if it is the inode the create made, with one link and exactly
- *    `bytes`, is it unlinked.
- * 3. Anything else goes back with `link` then `unlink`, which never replaces a
- *    file that took the name meanwhile. If the name was taken, or `link`
- *    can't be made (a folder), it stays at the random name: `{ aside }`.
- *
- * When the rename itself fails, the file is emptied through a handle opened
- * no-follow and proved to be that inode, rather than unlinked: `emptied`.
- * Elsewhere `unbound`: only a path-based removal exists, so the caller moves
- * the file to the Trash instead (recoverable, unlike an unlink sent elsewhere).
- */
-export async function removeCreatedFile(file: string, created: FileIdentity, bytes: Buffer, race?: TakeBackRace): Promise<RemoveCreatedResult> {
-  if (!BY_HANDLE) return "unbound";
-  const folder = await openHeldFolder(path.dirname(file));
-  try {
-    const result = await takeBackFrom(folder, path.basename(file), (entry) => isOwnCopy(entry, created, bytes), race);
-    return result === "unrenamed" ? await emptyOwnCopy(`/proc/self/fd/${folder.fd}/${path.basename(file)}`, created) : result;
-  } finally {
-    await folder.close().catch(() => undefined);
-  }
-}
-
-/** What a test does to the name just before and just after the take-back renames it aside, as another process would. */
-export type TakeBackRace = { beforeTake?: () => Promise<void>; afterTake?: () => Promise<void> };
-
-/**
- * Linux only, through `folder`'s handle: renames `name` to a random name in
- * the same folder (atomic: whatever held the name is now there), unlinks it
- * only when `own` proves it, and otherwise links it back without replacing a
- * file that took the name meanwhile (`{ aside }` when it can't). `unrenamed`
- * when the rename itself fails; `missing` when nothing held the name.
- */
-async function takeBackFrom(
-  folder: FileHandle,
-  name: string,
-  own: (entry: string) => Promise<boolean>,
-  race?: TakeBackRace,
-): Promise<"removed" | "missing" | "changed" | "unrenamed" | { aside: string }> {
-  const at = `/proc/self/fd/${folder.fd}/${name}`;
-  const asideName = `.aiden-rollback-${randomBytes(16).toString("hex")}`;
-  const aside = `/proc/self/fd/${folder.fd}/${asideName}`;
-  await race?.beforeTake?.();
-  try {
-    await rename(at, aside);
-  } catch (error) {
-    return errorCode(error) === "ENOENT" ? "missing" : "unrenamed";
-  }
-  await race?.afterTake?.();
-  if (await own(aside)) {
-    await unlink(aside);
-    return "removed";
-  }
-  try {
-    await link(aside, at);
-  } catch {
-    return { aside: asideName };
-  }
-  await unlink(aside).catch(() => undefined);
-  return "changed";
-}
-
-/** Whether the entry at `entry` is the inode `info` names, with no other link to it. */
-async function isInode(entry: string, info: FileIdentity): Promise<boolean> {
-  try {
-    const now = await lstat(entry);
-    return now.isFile() && now.dev === info.dev && now.ino === info.ino && now.nlink === 1;
-  } catch {
-    return false;
-  }
-}
-
-/** Empties the file at `at` only through a handle proved to be `created`: what's left is an empty copy, never someone's file gone. */
-async function emptyOwnCopy(at: string, created: FileIdentity): Promise<"emptied" | "changed"> {
-  let handle: FileHandle;
-  try {
-    handle = await open(at, fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW);
-  } catch {
-    return "changed";
-  }
-  try {
-    const info = await handle.stat();
-    if (!info.isFile() || info.dev !== created.dev || info.ino !== created.ino) return "changed";
-    await handle.truncate(0);
-    return "emptied";
-  } finally {
-    await handle.close().catch(() => undefined);
+    await folder?.close().catch(() => undefined);
   }
 }
 
@@ -436,7 +294,8 @@ const errorCode = (error: unknown) => (error as NodeJS.ErrnoException)?.code;
  * and must be a real folder; the file itself must not be a link; and the
  * parent's real path must be its own path, inside the workspace. With
  * `create`, a missing parent (only the last folder) is made with one
- * non-recursive `mkdir`, and removed again if a later check refuses. That
+ * non-recursive `mkdir`, and left in place if a later check refuses: Aiden
+ * removes nothing on cleanup (Pullfrog r4724929189). That
  * last folder already taken, by a file or by a folder in another case on a
  * case-insensitive volume, is `exists`, as a taken file name is.
  *
@@ -458,10 +317,7 @@ export async function confinedTarget(
   const folders = workspaceRelPath.split("/").slice(0, -1);
   let current = workspaceReal;
   let createdFolder: string | undefined;
-  const refuse = async (reason: TargetRefusal["reason"]): Promise<TargetRefusal> => {
-    if (createdFolder) await fs.rmdir(createdFolder).catch(() => undefined);
-    return { ok: false, reason };
-  };
+  const refuse = async (reason: TargetRefusal["reason"]): Promise<TargetRefusal> => ({ ok: false, reason });
   for (let index = 0; index < folders.length; index += 1) {
     current = path.join(current, folders[index]);
     let info: Stats;
@@ -506,9 +362,10 @@ export async function confinedTarget(
 
 /**
  * Writes a new file through `confinedTarget` with `wx`: `exists` when anything
- * is already at the path (a case-insensitive clash included), and a folder it
- * created is removed again when the write fails. The caller holds
- * `withFileLock(absolute)`.
+ * is already at the path (a case-insensitive clash included). Nothing is
+ * removed when the write fails: a folder it made stays, and `empty` names the
+ * workspace-relative file left empty where it was made, if one was. The caller
+ * holds `withFileLock(absolute)`.
  */
 export async function writeConfinedFile(
   workspaceReal: string,
@@ -516,16 +373,16 @@ export async function writeConfinedFile(
   bytes: Buffer,
   mode: number,
   options: { create: boolean; fs?: Partial<PageFileFs> },
-): Promise<{ ok: true; absolute: string; createdFolder?: string; created?: FileIdentity } | { ok: false; reason: "exists" | "outside" | "link" | "io" }> {
+): Promise<{ ok: true; absolute: string; createdFolder?: string } | { ok: false; reason: "exists" | "outside" | "link" | "io"; empty?: string }> {
   const fs: PageFileFs = { ...DEFAULT_PAGE_FS, ...options.fs };
   const target = await confinedTarget(workspaceReal, workspaceRelPath, { create: options.create, fs });
   if (!target.ok) return target;
   try {
-    const created = await fs.writeFile(target.absolute, bytes, mode);
-    return created ? { ...target, created } : target;
+    await fs.writeFile(target.absolute, bytes, mode);
+    return target;
   } catch (error) {
-    if (target.createdFolder) await fs.rmdir(target.createdFolder).catch(() => undefined);
     const code = errorCode(error);
-    return { ok: false, reason: code === "EEXIST" ? "exists" : code === MOVED ? "link" : "io" };
+    const reason = code === "EEXIST" ? "exists" : code === MOVED ? "link" : "io";
+    return (error as { aidenLeftEmpty?: boolean })?.aidenLeftEmpty ? { ok: false, reason, empty: workspaceRelPath } : { ok: false, reason };
   }
 }

@@ -2931,13 +2931,15 @@ export const designCanvasApi = {
     onNotification<DesignCanvasUpdate>("designCanvas:updated", handler),
   /**
    * 3c (S95): the person's Duplicate page as variant: copies the page's one
-   * route file as name-vN and places it beside its set. `kept` names a copy
-   * that stayed on disk though the canvas refused, because it changed.
+   * route file as name-vN and places it beside its set. `kept` names a
+   * complete copy left on disk because the canvas couldn't be saved after it,
+   * and `empty` an empty file left where a copy failed part-way: Aiden
+   * removes nothing it wrote.
    */
   duplicateDesignAppPage: (chatId: string, request: { frameId: string }) =>
     invoke<
       | { placed: string; pageId: string; route: string; file: string }
-      | { error: "unavailable" | "not-found" | "locked" | "full" | "io" | DesignAppPageRefusal; kept?: string }
+      | { error: "unavailable" | "not-found" | "locked" | "full" | "io" | DesignAppPageRefusal; kept?: string; empty?: string }
     >("designCanvas:appPageVariant", chatId, request),
   /**
    * 3c (S96): Move page file to Trash: the page's one route file goes to the

@@ -93,10 +93,8 @@ import {
 import {
   confinedTarget,
   readRegularFileBytes,
-  removeCreatedFile,
   routeFiles,
   writeConfinedFile,
-  type FileIdentity,
   type PageFileFs,
   type RouteFileWalk,
 } from "../services/design-canvas/app-server/app-page-files.js";
@@ -141,10 +139,14 @@ export type DesignCanvasAddAppViewResult =
   | { placed: string; pageId: string }
   | { error: "unavailable" | "not-found" | "locked" | "full" | "bad-size" };
 
-/** `designCanvas:appPageVariant` reply (3c, S95). `kept` says a copy written before the canvas refused stays on disk, because it changed. */
+/**
+ * `designCanvas:appPageVariant` reply (3c, S95). Aiden removes nothing it wrote (Pullfrog r4724929189): `kept` names a
+ * complete copy left on disk because the canvas couldn't be saved after it, and `empty` an empty file left where a copy
+ * failed part-way.
+ */
 export type DesignCanvasAppPageVariantResult =
   | { placed: string; pageId: string; route: string; file: string }
-  | { error: "unavailable" | "not-found" | "locked" | "full" | "io" | AppPageRefusal; kept?: string };
+  | { error: "unavailable" | "not-found" | "locked" | "full" | "io" | AppPageRefusal; kept?: string; empty?: string };
 
 /** `designCanvas:appPageTrash` reply (3c, S96). `restore: "failed"` means the file is in the Trash though the canvas kept its frames. */
 export type DesignCanvasAppPageTrashResult =
@@ -1120,7 +1122,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     // The copy is written inside the canvas update, once its mutator has seen the frame as it is now (Pullfrog
     // r4724600701): a frame another save retargeted or locked meanwhile gets nothing written. Only a canvas write that
     // fails after the copy leaves a file to take back.
-    const state: { copy?: { n: number; route: string; file: string; absolute: string; bytes: Buffer; createdFolder?: string; created?: FileIdentity } } = {};
+    const state: { copy?: { n: number; route: string; file: string; absolute: string; bytes: Buffer; createdFolder?: string } } = {};
     let outcome: DesignCanvasAppPageVariantResult = { error: "too-many" };
     let saved: DesignCanvas | undefined;
     for (let n = 2; n <= 9; n += 1) {
@@ -1138,7 +1140,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
         const rewritten = rewriteTanstackLiteral(read.bytes, from, to);
         if ("refused" in rewritten) return { error: "route-literal" };
         bytes = rewritten.bytes;
-        // A longer literal can take the copy past what its own undo (and a rollback) may read back.
+        // A longer literal can take the copy past what its own undo may read back.
         if (bytes.length > DESIGN_SOURCE_MAX_BYTES) return { error: "too-large" };
       }
       const file = workspaceRelPath(appRoot, candidate.appRelPath);
@@ -1181,7 +1183,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
                 if (!written.ok) {
                   // Taken on disk (a case-insensitive clash, or a concurrent copy): the next number.
                   taken = written.reason === "exists";
-                  outcome = { error: written.reason === "io" ? "io" : "not-regular" };
+                  outcome = { error: written.reason === "io" ? "io" : "not-regular", ...(written.empty ? { empty: written.empty } : {}) };
                   throw UNCHANGED;
                 }
                 state.copy = {
@@ -1191,7 +1193,6 @@ export function registerDesignCanvasHandlers<Event>(deps: {
                   absolute,
                   bytes,
                   ...(written.createdFolder ? { createdFolder: written.createdFolder } : {}),
-                  ...(written.created ? { created: written.created } : {}),
                 };
               }),
           },
@@ -1207,34 +1208,10 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     const copy = state.copy;
     if (!copy) return result;
     if (!saved || !("placed" in result)) {
-      // The canvas write failed after the copy landed: take back Aiden's own new file while it is exactly what was written.
-      const refusal = "error" in result ? result.error : "io";
-      const kept = await withFileLock(copy.absolute, async () => {
-        const created = copy.created;
-        if (created) {
-          // Linux: removed through its verified folder, by identity and bytes; no Trash needed (Linux may have none).
-          const back = await removeCreatedFile(copy.absolute, created, copy.bytes).catch(() => "unbound" as const);
-          // Someone else's file at the name, or one left aside at a random name, is never removed: the reply names where it is.
-          if (typeof back === "object") return path.posix.join(path.posix.dirname(copy.file), back.aside);
-          if (back === "changed" || back === "emptied") return copy.file;
-          if (back !== "unbound") {
-            if (copy.createdFolder) await (deps.pageFs?.rmdir ?? rmdir)(copy.createdFolder).catch(() => undefined);
-            return undefined;
-          }
-        }
-        // Elsewhere only a path reaches it: the Trash, which can be undone, while it is exactly what was written.
-        const now = await readRegularFileBytes(copy.absolute, DESIGN_SOURCE_MAX_BYTES);
-        if (!now.ok) return now.reason !== "missing" ? copy.file : undefined;
-        if (pageDigest(now.bytes) !== pageDigest(copy.bytes)) return copy.file;
-        try {
-          await context.trash(copy.absolute);
-        } catch {
-          return copy.file;
-        }
-        if (copy.createdFolder) await (deps.pageFs?.rmdir ?? rmdir)(copy.createdFolder).catch(() => undefined);
-        return undefined;
-      });
-      return kept !== undefined ? { error: refusal, kept } : { error: refusal };
+      // The canvas write failed after the copy landed. The copy is a complete, valid copy of the page, and Aiden removes
+      // nothing it wrote: POSIX has no unlink bound to an inode, so any check before a removal (or a Trash by path) could
+      // be raced into taking someone else's file (Pullfrog r4724929189). The reply names where it is.
+      return { error: "error" in result ? result.error : "io", kept: copy.file };
     }
     deps.broadcast({ workspaceId, chatId: chat.id, revision: saved.revision, step: `app-page-variant:${saved.revision}` });
     pageLedger!.record({

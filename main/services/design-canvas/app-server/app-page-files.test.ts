@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { ownerOf } from "./app-page-files-core.js";
-import { confinedTarget, createPageFile, readRegularFileBytes, removeCreatedFile, routeFiles, writeConfinedFile } from "./app-page-files.js";
+import { confinedTarget, createPageFile, readRegularFileBytes, routeFiles, writeConfinedFile } from "./app-page-files.js";
 import { readRouteFile, routeFs, type RouteFs } from "./app-routes.js";
 
 async function workspace(t: TestContext, files: Record<string, string | Buffer>): Promise<string> {
@@ -236,16 +236,10 @@ test("confinedTarget refuses a link anywhere on the path and creates one folder 
   }
 });
 
-test("writeConfinedFile writes wx, never over a file, and removes a folder it made when the write fails", async (t) => {
+test("writeConfinedFile writes wx, never over a file, and removes nothing when the write fails", async (t) => {
   const root = await workspace(t, { "app/pricing/page.tsx": "pricing" });
   const written = await writeConfinedFile(root, "app/pricing-v2/page.tsx", Buffer.from([0xff, 0x01]), 0o600, { create: true });
-  const made = await lstat(path.join(root, "app/pricing-v2/page.tsx"));
-  assert.deepEqual(written, {
-    ok: true,
-    absolute: path.resolve(root, "app/pricing-v2/page.tsx"),
-    createdFolder: path.resolve(root, "app/pricing-v2"),
-    created: { dev: made.dev, ino: made.ino },
-  });
+  assert.deepEqual(written, { ok: true, absolute: path.resolve(root, "app/pricing-v2/page.tsx"), createdFolder: path.resolve(root, "app/pricing-v2") });
   assert.ok((await readFile(path.join(root, "app/pricing-v2/page.tsx"))).equals(Buffer.from([0xff, 0x01])));
   assert.equal((await lstat(path.join(root, "app/pricing-v2/page.tsx"))).mode & 0o777, 0o600);
 
@@ -259,14 +253,15 @@ test("writeConfinedFile writes wx, never over a file, and removes a folder it ma
     fs: { writeFile: async () => Promise.reject(clash) },
   });
   assert.deepEqual(caseInsensitive, { ok: false, reason: "exists" });
-  assert.equal(await exists(path.join(root, "app/pricing-v3")), false, "the folder it made is removed");
+  // Aiden removes nothing on cleanup (Pullfrog r4724929189): the empty folder it made stays.
+  assert.deepEqual(await readdir(path.join(root, "app/pricing-v3")), []);
 
   const failing = await writeConfinedFile(root, "app/pricing-v4/page.tsx", Buffer.from("x"), 0o644, {
     create: true,
     fs: { writeFile: async () => Promise.reject(Object.assign(new Error("disk"), { code: "EIO" })) },
   });
   assert.deepEqual(failing, { ok: false, reason: "io" });
-  assert.equal(await exists(path.join(root, "app/pricing-v4")), false);
+  assert.deepEqual(await readdir(path.join(root, "app/pricing-v4")), []);
 });
 
 /** Whether `dir`'s volume finds a name under another case (APFS, NTFS), probed rather than assumed. */
@@ -357,88 +352,22 @@ for (const putBack of ["after the create", "at the end"] as const) {
     };
     const written = await writeConfinedFile(root, "app/routes/pricing-v2.tsx", Buffer.from("the copy"), 0o644, { create: false, fs: racing }).finally(restore);
     assert.deepEqual(await entriesUnder(outside), ["routes", "routes/keep.tsx"], "nothing made outside the workspace, not even an empty file");
+    // check-aiden-rules: allow no-source-grep-test reads page files in a temp workspace, not Aiden source
+    assert.deepEqual([await readFile(path.join(outside, "routes/keep.tsx"), "utf8"), await readFile(path.join(root, "app/routes/home.tsx"), "utf8")], ["", ""], "and no other file changed or went");
     if (written.ok) {
       // Linux creates through the folder's own handle: put back before the checks, the copy is in the workspace.
       assert.equal(putBack, "after the create");
       // check-aiden-rules: allow no-source-grep-test reads a page file in a temp workspace, not Aiden source
       assert.equal(await readFile(path.join(root, "app/routes/pricing-v2.tsx"), "utf8"), "the copy");
     } else {
-      assert.deepEqual(written, { ok: false, reason: "link" });
-      assert.deepEqual(await readdir(path.join(root, "app/routes")), ["home.tsx"], "nothing made, or left aside, in the workspace");
+      if ("empty" in written) {
+        // Linux made it in the held folder before the folder's check failed: emptied through its own handle and left, never removed.
+        assert.deepEqual(written, { ok: false, reason: "link", empty: "app/routes/pricing-v2.tsx" });
+        assert.equal((await lstat(path.join(root, "app/routes/pricing-v2.tsx"))).size, 0, "no byte of the copy");
+      } else {
+        assert.deepEqual(written, { ok: false, reason: "link" });
+        assert.deepEqual(await readdir(path.join(root, "app/routes")), ["home.tsx"], "nothing made in the workspace");
+      }
     }
   });
 }
-
-test("removeCreatedFile takes back only the file it made, with its bytes, through the folder's handle on Linux", async (t) => {
-  const root = await workspace(t, { "app/routes/home.tsx": "" });
-  const file = path.join(root, "app/routes/pricing-v2.tsx");
-  const bytes = Buffer.from("the copy");
-  const created = await createPageFile(file, bytes, 0o644);
-  if (process.platform !== "linux") {
-    // No handle-bound unlink: the caller moves the file to the Trash instead, and nothing is removed here.
-    assert.equal(await removeCreatedFile(file, created, bytes), "unbound");
-    assert.equal(await exists(file), true);
-    return;
-  }
-  // Edited since: kept.
-  await writeFile(file, "edited");
-  assert.equal(await removeCreatedFile(file, created, bytes), "changed");
-  assert.equal(await exists(file), true);
-  // Another file of that name, with the same bytes (made while the first still holds its inode, so not a reused one): kept.
-  await writeFile(`${file}.other`, bytes);
-  await rename(`${file}.other`, file);
-  assert.equal(await removeCreatedFile(file, created, bytes), "changed");
-  await rm(file);
-  // The file it made, unchanged: removed.
-  const again = await createPageFile(file, bytes, 0o644);
-  assert.equal(await removeCreatedFile(file, again, bytes), "removed");
-  assert.equal(await exists(file), false);
-  assert.equal(await removeCreatedFile(file, again, bytes), "missing");
-});
-
-test("removeCreatedFile never removes a file that took the name just before the take-back", async (t) => {
-  // Pullfrog r4724860830: another process puts its own file (the same bytes, so only the inode tells) at the name.
-  const root = await workspace(t, { "app/routes/home.tsx": "" });
-  const file = path.join(root, "app/routes/pricing-v2.tsx");
-  const bytes = Buffer.from("the copy");
-  const created = await createPageFile(file, bytes, 0o644);
-  const replace = async () => {
-    await writeFile(`${file}.theirs`, bytes);
-    await rename(`${file}.theirs`, file);
-  };
-  const result = await removeCreatedFile(file, created, bytes, { beforeTake: replace });
-  if (process.platform !== "linux") {
-    assert.equal(result, "unbound");
-    return;
-  }
-  assert.equal(result, "changed");
-  assert.notEqual((await lstat(file)).ino, created.ino, "the other file is the one at the name");
-  assert.ok((await readFile(file)).equals(bytes), "and it survives");
-  assert.deepEqual((await readdir(path.dirname(file))).sort(), ["home.tsx", "pricing-v2.tsx"], "nothing left aside");
-});
-
-test("removeCreatedFile leaves another file aside, never over the name, when the name is taken again meanwhile", async (t) => {
-  const root = await workspace(t, { "app/routes/home.tsx": "" });
-  const file = path.join(root, "app/routes/pricing-v2.tsx");
-  const bytes = Buffer.from("the copy");
-  const created = await createPageFile(file, bytes, 0o644);
-  const result = await removeCreatedFile(file, created, bytes, {
-    // One process's file takes the name before the take-back, and another's takes it again right after.
-    beforeTake: async () => {
-      await writeFile(`${file}.first`, "first");
-      await rename(`${file}.first`, file);
-    },
-    afterTake: async () => {
-      await writeFile(file, "second");
-    },
-  });
-  if (process.platform !== "linux") {
-    assert.equal(result, "unbound");
-    return;
-  }
-  assert.ok(typeof result === "object" && result.aside.startsWith(".aiden-rollback-"), "the first file is left aside");
-  // check-aiden-rules: allow no-source-grep-test reads page files in a temp workspace, not Aiden source
-  assert.equal(await readFile(file, "utf8"), "second", "the name keeps the file that took it last");
-  // check-aiden-rules: allow no-source-grep-test reads page files in a temp workspace, not Aiden source
-  assert.equal(await readFile(path.join(path.dirname(file), (result as { aside: string }).aside), "utf8"), "first", "and the first survives, aside");
-});

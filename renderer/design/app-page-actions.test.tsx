@@ -157,3 +157,36 @@ test("Ask Aiden's copy note names the page's first variant", () => {
   assert.equal(firstVariantPath("/"), "/index-v2");
   assert.equal(firstVariantPath("/blog/hello#top"), "/blog/hello-v2");
 });
+
+const renderCopyActions = () => {
+  render(<Toaster />);
+  const doc: DesignCanvas = { ...emptyDesignCanvas(), revision: 1, frames: [app] };
+  return renderHook(() =>
+    useAppPageActions({
+      chatId: "chat-1",
+      doc,
+      latestDoc: { current: doc },
+      flush: async () => true,
+      undo: () => undefined,
+      queueOnFrame: () => true,
+      focusCanvas: () => undefined,
+    }),
+  );
+};
+
+test("a copy the canvas couldn't save says the copy wasn't added and where its file still is, with no Ask Aiden", async () => {
+  installBotTestIpc({ "designCanvas:appPageVariant": () => ({ error: "io", kept: "src/routes/pricing-v2/route.tsx" }) });
+  const { result } = renderCopyActions();
+  act(() => result.current.duplicateAppPage("app-1"));
+  assert.ok(
+    await screen.findByText("The canvas couldn't be saved, so the copy wasn't added. It's still at src/routes/pricing-v2/route.tsx."),
+  );
+  assert.equal(screen.queryByRole("button", { name: "Ask Aiden" }), null);
+});
+
+test("a copy refused after Aiden created its file names the empty file it left", async () => {
+  installBotTestIpc({ "designCanvas:appPageVariant": () => ({ error: "io", empty: "src/routes/pricing-v2/route.tsx" }) });
+  const { result } = renderCopyActions();
+  act(() => result.current.duplicateAppPage("app-1"));
+  assert.ok(await screen.findByText("The page's file couldn't be copied. An empty file was left at src/routes/pricing-v2/route.tsx."));
+});

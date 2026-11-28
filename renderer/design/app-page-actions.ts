@@ -189,8 +189,13 @@ export function useAppPageActions({
         }
         const result = await designCanvasApi.duplicateDesignAppPage(chatId, { frameId: id }).catch(() => ({ error: "io" as const }));
         if ("error" in result) {
-          const kept = "kept" in result && typeof result.kept === "string" ? ` The copy at ${result.kept} was kept, because it changed.` : "";
-          refuse(id, result.error, "copy", kept);
+          // Aiden removes nothing it wrote (Pullfrog r4724929189), so a refusal says where the file it left is.
+          if ("kept" in result && typeof result.kept === "string") {
+            toast.error(`The canvas couldn't be saved, so the copy wasn't added. It's still at ${result.kept}.`);
+            return;
+          }
+          const empty = "empty" in result && typeof result.empty === "string" ? ` An empty file was left at ${result.empty}.` : "";
+          refuse(id, result.error, "copy", empty);
           return;
         }
         toast.success(`Copied the page's file to ${result.file}.`);
