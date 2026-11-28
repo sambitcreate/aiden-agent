@@ -13,6 +13,12 @@ export const BOT_MANAGED_IDENTIFIER_CHARS = 160;
 
 const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const PATH_SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
+const AUDIT_CONCURRENCY = 16;
+
+interface LockWaiter {
+  readonly mode: "read" | "write";
+  readonly grant: () => void;
+}
 
 interface StoredBotManagedWorkspaceBinding {
   botId: string;
@@ -393,20 +399,62 @@ function assertSameBinding(
 }
 
 /**
- * Durable one-home-per-Bot service. All operations serialize within the process;
- * the production app creates one instance under its single-instance main owner.
+ * Durable one-home-per-Bot service. Reads share concurrent access while no
+ * mutation is active or waiting, and mutations run exclusively; the production
+ * app creates one instance under its single-instance main owner.
  */
 export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOptions) {
   const now = options.now ?? Date.now;
-  let mutationTail: Promise<void> = Promise.resolve();
+  let activeReaders = 0;
+  let activeWriter = false;
+  const waiters: LockWaiter[] = [];
 
-  const serialized = <Result>(operation: () => Promise<Result>): Promise<Result> => {
-    const result = mutationTail.then(operation, operation);
-    mutationTail = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
+  const pumpWaiters = (): void => {
+    if (waiters.length === 0) return;
+    if (waiters[0]!.mode === "write") {
+      if (activeReaders > 0) return;
+      const writer = waiters.shift()!;
+      activeWriter = true;
+      writer.grant();
+      return;
+    }
+    while (waiters[0]?.mode === "read") {
+      const reader = waiters.shift()!;
+      activeReaders += 1;
+      reader.grant();
+    }
+  };
+
+  const withReadLock = async <Result>(operation: () => Promise<Result>): Promise<Result> => {
+    if (activeWriter || waiters.length > 0) {
+      await new Promise<void>((grant) => {
+        waiters.push({ mode: "read", grant });
+      });
+    } else {
+      activeReaders += 1;
+    }
+    try {
+      return await operation();
+    } finally {
+      activeReaders -= 1;
+      pumpWaiters();
+    }
+  };
+
+  const withWriteLock = async <Result>(operation: () => Promise<Result>): Promise<Result> => {
+    if (activeWriter || activeReaders > 0 || waiters.length > 0) {
+      await new Promise<void>((grant) => {
+        waiters.push({ mode: "write", grant });
+      });
+    } else {
+      activeWriter = true;
+    }
+    try {
+      return await operation();
+    } finally {
+      activeWriter = false;
+      pumpWaiters();
+    }
   };
 
   const loadDocument = async (): Promise<BotManagedWorkspaceDocument> => {
@@ -416,10 +464,10 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
       : parseBotManagedWorkspaceDocument(raw);
   };
 
-  const inspectBinding = async (
+  const verifyBindingInspection = (
     binding: StoredBotManagedWorkspaceBinding,
-  ): Promise<BotManagedWorkspaceResolution> => {
-    const inspection = await options.storage.inspectHome(binding.directoryName);
+    inspection: BotManagedHomeInspection | null,
+  ): BotManagedWorkspaceResolution => {
     if (!inspection) {
       throw new BotManagedWorkspaceStateError("This Bot's managed home is missing.");
     }
@@ -439,7 +487,12 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
     };
   };
 
-  const auditDocument = async (
+  const inspectBinding = async (
+    binding: StoredBotManagedWorkspaceBinding,
+  ): Promise<BotManagedWorkspaceResolution> =>
+    verifyBindingInspection(binding, await options.storage.inspectHome(binding.directoryName));
+
+  const assertNoUnboundHomes = async (
     document: BotManagedWorkspaceDocument,
     allowedPendingDirectoryName?: string,
   ): Promise<void> => {
@@ -452,23 +505,56 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
         );
       }
     }
-    for (const binding of document.bindings) await inspectBinding(binding);
+  };
+
+  const inspectBindingsBounded = async (
+    bindings: readonly StoredBotManagedWorkspaceBinding[],
+  ): Promise<Map<string, BotManagedWorkspaceResolution>> => {
+    const resolutions = new Map<string, BotManagedWorkspaceResolution>();
+    let nextIndex = 0;
+    let firstError: unknown;
+    let hasError = false;
+    const workerCount = Math.min(AUDIT_CONCURRENCY, bindings.length);
+    await Promise.all(
+      Array.from({ length: workerCount }, async () => {
+        while (!hasError && nextIndex < bindings.length) {
+          const binding = bindings[nextIndex]!;
+          nextIndex += 1;
+          try {
+            const resolution = await inspectBinding(binding);
+            resolutions.set(binding.botId, resolution);
+          } catch (error) {
+            if (!hasError) {
+              hasError = true;
+              firstError = error;
+            }
+          }
+        }
+      }),
+    );
+    if (hasError) throw firstError;
+    return resolutions;
+  };
+
+  const auditDocument = async (
+    document: BotManagedWorkspaceDocument,
+    allowedPendingDirectoryName?: string,
+  ): Promise<Map<string, BotManagedWorkspaceResolution>> => {
+    await assertNoUnboundHomes(document, allowedPendingDirectoryName);
+    return inspectBindingsBounded(document.bindings);
   };
 
   const provisionReservation = async (
     reservation: BotManagedWorkspaceReservation,
-    reconciliation: boolean,
+    mode: { enforceReservationMatch: boolean; reconciliation: boolean },
   ): Promise<BotManagedWorkspaceResolution> => {
     const requested = bindingFor(reservation);
     const document = await loadDocument();
     const byBot = document.bindings.find(({ botId }) => botId === requested.botId);
     if (byBot) {
-      if (reconciliation) assertSameBinding(byBot, requested);
-      else if (byBot.workspaceId !== requested.workspaceId) {
-        return inspectBinding(byBot);
-      }
-      await auditDocument(document);
-      return inspectBinding(byBot);
+      if (mode.enforceReservationMatch) assertSameBinding(byBot, requested);
+      const resolutions = await auditDocument(document);
+      return resolutions.get(byBot.botId)!;
     }
     if (document.bindings.length >= BOT_MANAGED_WORKSPACE_LIMIT) {
       throw new BotManagedWorkspaceStateError("Aiden supports up to 256 Bot managed homes.");
@@ -479,9 +565,9 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
       );
     }
 
-    await auditDocument(document, reconciliation ? requested.directoryName : undefined);
+    await auditDocument(document, mode.reconciliation ? requested.directoryName : undefined);
     let inspection: BotManagedHomeInspection;
-    if (reconciliation) {
+    if (mode.reconciliation) {
       inspection = await options.storage.createHome(
         requested.directoryName,
         provisioningReceiptFor(requested),
@@ -528,8 +614,8 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
       }
       throw error;
     }
-    await auditDocument(next);
-    return inspectBinding(published);
+    const resolutions = await auditDocument(next);
+    return resolutions.get(published.botId)!;
   };
 
   const reserve = (botId: string): BotManagedWorkspaceReservation => {
@@ -556,7 +642,7 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
       botId: string,
       reservation?: BotManagedWorkspaceReservation,
     ): Promise<BotManagedWorkspaceResolution> {
-      return serialized(async () => {
+      return withWriteLock(async () => {
         if (!isPathSafeBotManagedIdentifier(botId)) {
           throw new BotManagedWorkspaceStateError("Bot identifier is invalid.");
         }
@@ -566,14 +652,10 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
             "Bot managed workspace reservation belongs to another Bot.",
           );
         }
-        const document = await loadDocument();
-        const existing = document.bindings.find((binding) => binding.botId === botId);
-        if (existing) {
-          if (reservation) assertSameBinding(existing, bindingFor(reservation));
-          await auditDocument(document);
-          return inspectBinding(existing);
-        }
-        return provisionReservation(selected, false);
+        return provisionReservation(selected, {
+          enforceReservationMatch: reservation !== undefined,
+          reconciliation: false,
+        });
       });
     },
 
@@ -581,16 +663,21 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
     reconcileProvision(
       reservation: BotManagedWorkspaceReservation,
     ): Promise<BotManagedWorkspaceResolution> {
-      return serialized(() => provisionReservation(reservation, true));
+      return withWriteLock(() =>
+        provisionReservation(reservation, {
+          enforceReservationMatch: true,
+          reconciliation: true,
+        }),
+      );
     },
 
     resolve(botId: string): Promise<BotManagedWorkspaceResolution> {
-      return serialized(async () => {
+      return withReadLock(async () => {
         if (!isPathSafeBotManagedIdentifier(botId)) {
           throw new BotManagedWorkspaceStateError("Bot identifier is invalid.");
         }
         const document = await loadDocument();
-        await auditDocument(document);
+        await assertNoUnboundHomes(document);
         const binding = document.bindings.find((candidate) => candidate.botId === botId);
         if (!binding) {
           throw new BotManagedWorkspaceNotProvisionedError(
@@ -608,7 +695,7 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
     revalidate(
       expected: BotManagedWorkspaceResolution,
     ): Promise<BotManagedWorkspaceResolution> {
-      return serialized(async () => {
+      return withReadLock(async () => {
         if (
           !isPathSafeBotManagedIdentifier(expected.botId) ||
           !isBotManagedWorkspaceId(expected.workspaceId) ||
@@ -619,7 +706,19 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
           );
         }
         const expectedIncarnation = parseBotManagedWorkspaceIncarnation(expected.incarnation);
-        const document = await loadDocument();
+        const directoryName = botManagedHomeDirectoryName(expected.workspaceId);
+        const [documentResult, inspectionResult] = await Promise.all([
+          loadDocument().then(
+            (document) => ({ ok: true as const, document }),
+            (error: unknown) => ({ ok: false as const, error }),
+          ),
+          options.storage.inspectHome(directoryName).then(
+            (inspection) => ({ ok: true as const, inspection }),
+            (error: unknown) => ({ ok: false as const, error }),
+          ),
+        ]);
+        if (!documentResult.ok) throw documentResult.error;
+        const document = documentResult.document;
         const binding = document.bindings.find(({ botId }) => botId === expected.botId);
         if (!binding) {
           throw new BotManagedWorkspaceNotProvisionedError(
@@ -635,7 +734,8 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
             "This Bot's managed home binding changed after it was resolved.",
           );
         }
-        const current = await inspectBinding(binding);
+        if (!inspectionResult.ok) throw inspectionResult.error;
+        const current = verifyBindingInspection(binding, inspectionResult.inspection);
         if (
           current.homePath !== expected.homePath ||
           !sameIncarnation(current.incarnation, expectedIncarnation)
@@ -649,7 +749,7 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
     },
 
     listBindings(): Promise<readonly BotManagedWorkspaceHandle[]> {
-      return serialized(async () => {
+      return withReadLock(async () => {
         const document = await loadDocument();
         await auditDocument(document);
         return document.bindings.map(handleFor);
@@ -657,7 +757,9 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
     },
 
     audit(): Promise<void> {
-      return serialized(async () => auditDocument(await loadDocument()));
+      return withReadLock(async () => {
+        await auditDocument(await loadDocument());
+      });
     },
 
     /**
@@ -666,7 +768,7 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
      * binding go, and each step tolerates the earlier ones having finished.
      */
     deleteHome(botId: string): Promise<boolean> {
-      return serialized(async () => {
+      return withWriteLock(async () => {
         if (!isPathSafeBotManagedIdentifier(botId)) {
           throw new BotManagedWorkspaceStateError("Bot identifier is invalid.");
         }
@@ -690,7 +792,7 @@ export function createBotManagedWorkspaceCore(options: BotManagedWorkspaceCoreOp
       /** The caller must derive this from its durable lifecycle checkpoint. */
       identityCommitted: false;
     }): Promise<void> {
-      return serialized(async () => {
+      return withWriteLock(async () => {
         if (input.identityCommitted !== false) {
           throw new BotManagedWorkspaceRollbackError(
             "A Bot managed home cannot be rolled back after identity commit.",
