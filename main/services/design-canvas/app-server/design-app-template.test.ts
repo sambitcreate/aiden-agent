@@ -90,6 +90,7 @@ test("theme.css is the css-vars export of the starter DESIGN.md", async () => {
   assert.equal(outcome.ok, true);
   if (!outcome.ok) return;
   assert.equal(outcome.result.success, true);
+  // check-aiden-rules: allow no-source-grep-test the shipped theme.css must equal the exporter's output for the shipped DESIGN.md
   assert.equal(fs.readFileSync(path.join(TEMPLATE, "src", "theme.css"), "utf8"), outcome.result.text);
 });
 

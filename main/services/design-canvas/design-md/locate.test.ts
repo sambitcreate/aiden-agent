@@ -277,3 +277,25 @@ test("an aborted signal stops before detection and before each lookup", async ()
     await assert.rejects(locateDesignMd(ws, "apps/web", null, { signal: controller.signal }), { name: "AbortError" });
   });
 });
+
+test("3d: invalidate makes the next roots call see a new design-app/DESIGN.md", async () => {
+  const signal = new AbortController().signal;
+  await withBase(async (base, ws) => {
+    await writeTree(base, {
+      "ws/package.json": { name: "desk", dependencies: { react: "^19.0.0", "react-dom": "^19.0.0" }, devDependencies: { electron: "43.0.0" } },
+    });
+    const appRoots = createDesignAppRoots({ detect: detectIn(base) });
+    const before = await appRoots(ws, { signal, config: null });
+    assert.equal(before.roots.includes("design-app"), false);
+    // A scaffold writes design-app/ and touches neither root manifest, so the cache still holds.
+    await writeTree(base, {
+      "ws/design-app/package.json": { name: "design-app", private: true, aiden: { designApp: 1 }, scripts: { dev: "vite" }, dependencies: { react: "19.2.7", "react-dom": "19.2.7" }, devDependencies: { vite: "8.3.5" } },
+      "ws/design-app/DESIGN.md": DOC,
+    });
+    assert.deepEqual(await appRoots(ws, { signal, config: null }), before, "cached");
+    appRoots.invalidate(ws);
+    const after = await appRoots(ws, { signal, config: null });
+    assert.ok(after.roots.includes("design-app"), JSON.stringify(after));
+    assert.deepEqual(await locateDesignMd(ws, "design-app", null), { path: "design-app/DESIGN.md", source: "app" });
+  });
+});

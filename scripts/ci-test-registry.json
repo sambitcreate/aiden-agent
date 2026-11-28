@@ -495,7 +495,8 @@
         "main/services/design-canvas/app-page-ledger.test.ts",
         "main/services/design-canvas/app-server/design-app-template.test.ts",
         "main/services/design-canvas/app-server/mock-app-core.test.ts",
-        "main/services/design-canvas/app-server/mock-route-path.test.ts"
+        "main/services/design-canvas/app-server/mock-route-path.test.ts",
+        "main/services/design-canvas/app-server/mock-app.test.ts"
       ],
       "preserved": [
         "browser"

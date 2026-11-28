@@ -274,6 +274,11 @@ async function readPnpmWorkspace(root: string): Promise<unknown> {
   }
 }
 
+/** The root's own workspace patterns (package.json `workspaces`, pnpm-workspace.yaml), read bounded and no-follow. */
+export async function readWorkspacePatterns(root: string): Promise<{ include: string[]; exclude: string[] }> {
+  return workspacePatterns(await readPackage(root), await readPnpmWorkspace(root));
+}
+
 /** R1: candidate folders (relative, POSIX) and whether a workspace pattern matched them. */
 async function findCandidates(
   root: string,

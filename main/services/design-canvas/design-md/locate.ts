@@ -151,6 +151,12 @@ export type DesignAppRoots = (
   options: { signal?: AbortSignal; config: CanvasConfig | null },
 ) => Promise<{ roots: string[]; more: number }>;
 
+/** `createDesignAppRoots`' answer: the roots, and a way to forget a workspace's cached detection. */
+export interface CachedDesignAppRoots extends DesignAppRoots {
+  /** A scaffolded design app (3d, S110) touches neither manifest the cache is keyed on. */
+  invalidate(workspaceRoot: string): void;
+}
+
 async function manifestKey(workspaceRoot: string): Promise<string> {
   const hash = createHash("sha256");
   for (const [name, cap] of [
@@ -170,10 +176,10 @@ async function manifestKey(workspaceRoot: string): Promise<string> {
  */
 export function createDesignAppRoots(
   deps: { detect?: (workspaceRoot: string) => Promise<WebAppDetection> } = {},
-): DesignAppRoots {
+): CachedDesignAppRoots {
   const detect = deps.detect ?? ((workspaceRoot: string) => detectWebApp(workspaceRoot));
   const cache = new Map<string, { key: string; detection: WebAppDetection }>();
-  return async (workspaceRoot, { signal, config }) => {
+  const appRoots: DesignAppRoots = async (workspaceRoot, { signal, config }) => {
     throwIfAborted(signal);
     const root = path.resolve(workspaceRoot);
     const key = await manifestKey(root);
@@ -190,4 +196,5 @@ export function createDesignAppRoots(
     const roots = safe.slice(0, MAX_RESOLVED_ROOTS);
     return { roots, more: all.length - roots.length };
   };
+  return Object.assign(appRoots, { invalidate: (workspaceRoot: string) => void cache.delete(path.resolve(workspaceRoot)) });
 }

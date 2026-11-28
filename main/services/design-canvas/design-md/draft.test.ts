@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { parse } from "yaml";
-import { designMdDraftFor, draftDesignMd, type DesignTokenSnapshot } from "./draft.js";
+import { designMdDraftFor, designMdDraftResultFor, draftDesignMd, type DesignTokenSnapshot } from "./draft.js";
 import { runDesignMdWorker } from "./lint-client.js";
 
 /** The front matter (between the first two `---` lines) and the `## ` headings after it. */
@@ -130,5 +130,31 @@ test("designMdDraftFor reads only the app root's own style files", async () => {
     await assert.rejects(designMdDraftFor(ws, "../elsewhere"));
   } finally {
     await rm(ws, { recursive: true, force: true });
+  }
+});
+
+test("3d: designMdDraftResultFor counts the tokens, names the sources, and refuses a source that links out", async () => {
+  const base = await realpath(await mkdtemp(path.join(tmpdir(), "aiden-design-md-draft-")));
+  try {
+    const ws = path.join(base, "ws");
+    await mkdir(path.join(ws, "desk/src"), { recursive: true });
+    await mkdir(path.join(base, "outside/src"), { recursive: true });
+    await writeFile(path.join(ws, "desk/src/index.css"), ":root { --primary: #1a1c1e; --font-sans: Inter, sans-serif; }\n");
+    await writeFile(path.join(base, "outside/src/index.css"), ":root { --leak: #ff00ff; }\n");
+    const result = await designMdDraftResultFor(ws, "desk");
+    assert.deepEqual([result.colors, result.fonts, result.sources], [1, 1, ["desk/src/index.css"]]);
+    assert.equal((split(result.content).front.colors as Record<string, unknown>).primary, "#1a1c1e");
+    assert.equal((await lintSummary(result.content)).summary.errors, 0);
+
+    await symlink(path.join(base, "outside"), path.join(ws, "linked"));
+    await assert.rejects(designMdDraftResultFor(ws, "linked"));
+    await mkdir(path.join(ws, "nested"));
+    await symlink(path.join(base, "outside/src"), path.join(ws, "nested/src"));
+    await assert.rejects(designMdDraftResultFor(ws, "nested/src"), "a link on the way");
+    await assert.rejects(designMdDraftResultFor(ws, "../outside"));
+    const empty = await designMdDraftResultFor(ws, "nested");
+    assert.deepEqual([empty.colors, empty.fonts], [0, 0], "a link inside the source isn't followed");
+  } finally {
+    await rm(base, { recursive: true, force: true });
   }
 });

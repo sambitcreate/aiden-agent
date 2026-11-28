@@ -12,6 +12,7 @@
 import path from "node:path";
 import { stringify } from "yaml";
 import { isSafeWorkspaceRelativePath } from "../canvas-config.js";
+import { confinedRoot, routeFs } from "../app-server/app-routes.js";
 import { findWorkspaceDesignSystem } from "./style-scan.js";
 
 export const DESIGN_MD_DRAFT_MAX_BYTES = 32 * 1024;
@@ -123,4 +124,31 @@ export async function designMdDraftFor(workspaceRoot: string, appRoot: string, s
     colors: detected.colors.map((color) => ({ name: color.name, value: color.value, ...(color.dark ? { dark: color.dark } : {}) })),
     fonts: detected.fonts.map((font) => ({ name: font.name, family: font.family })),
   });
+}
+
+/**
+ * A drafted DESIGN.md for a design app (3d, S110), from the style files of
+ * the project it mocks. `source` is confined first: a link anywhere on it,
+ * or a folder outside the workspace, refuses before anything is read.
+ * `sources` are workspace-relative.
+ */
+export async function designMdDraftResultFor(
+  workspaceRoot: string,
+  source: string,
+  signal?: AbortSignal,
+): Promise<{ content: string; colors: number; fonts: number; sources: string[] }> {
+  if (!isSafeWorkspaceRelativePath(source)) throw new Error("The source folder isn't a safe workspace path.");
+  const folder = await confinedRoot(routeFs(), workspaceRoot, source);
+  if (!folder) throw new Error("The source folder isn't a folder inside the workspace.");
+  const detected = await findWorkspaceDesignSystem(folder, signal);
+  const content = draftDesignMd({
+    colors: detected.colors.map((color) => ({ name: color.name, value: color.value, ...(color.dark ? { dark: color.dark } : {}) })),
+    fonts: detected.fonts.map((font) => ({ name: font.name, family: font.family })),
+  });
+  return {
+    content,
+    colors: detected.colors.length,
+    fonts: detected.fonts.length,
+    sources: detected.sources.map((file) => (source === "." ? file : `${source}/${file}`)),
+  };
 }

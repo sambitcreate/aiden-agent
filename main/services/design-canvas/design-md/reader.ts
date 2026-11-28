@@ -76,6 +76,15 @@ export type DesignMdExportState =
   | (FileFields & { status: "error"; errors: string[] })
   | Exclude<DesignMdState, DesignMdOkState>;
 
+/** An export of text with no file (`exportContent`): `too-large` past the read cap, else the worker's answer. */
+export type DesignMdContentExportState =
+  | { status: "ok"; text: string }
+  | { status: "oversized"; bytes: number }
+  | { status: "error"; errors: string[] }
+  | { status: "too-large"; size: number }
+  | { status: LintFailureStatus };
+type ContentExportOutcome = Exclude<DesignMdContentExportState, { status: "too-large" }>;
+
 type ReportEvent = (
   event: "design_md_linted",
   props: { errors_bucket: ReturnType<typeof countBucket>; warnings_bucket: ReturnType<typeof countBucket> },
@@ -224,7 +233,7 @@ export class DesignMdReader {
   /** Set once the linter failed to load in time: no more workers start this run. */
   private unavailable = false;
   private readonly cache = new Map<string, CacheEntry>();
-  private readonly exports = new Map<string, { state: DesignMdExportState; retryAt?: number }>();
+  private readonly exports = new Map<string, { state: ContentExportOutcome; retryAt?: number }>();
   /** Lints and exports in flight, so reads of the same content that overlap share one worker. */
   private readonly inFlight = new Map<string, Promise<unknown>>();
 
@@ -373,34 +382,41 @@ export class DesignMdReader {
   ): Promise<DesignMdExportState> {
     const loaded = await this.load(workspaceRoot, located);
     if (!loaded.ok) return loaded.state;
-    const key = `${loaded.hash}:${format}`;
-    const cached = this.exports.get(key);
-    if (cached && (cached.retryAt === undefined || this.now() < cached.retryAt)) {
-      return { ...cached.state, ...loaded.file } as DesignMdExportState;
-    }
-    const state = await this.shared(`export\0${key}`, () => this.exportFresh(loaded, format, key), signal);
+    const state = await this.exportCached(loaded.content, loaded.hash, format, signal);
     return { ...state, ...loaded.file } as DesignMdExportState;
   }
 
-  private async exportFresh(
-    loaded: Extract<Loaded, { ok: true }>,
-    format: DesignMdExportFormat,
-    key: string,
-  ): Promise<DesignMdExportState> {
-    const outcome = await this.runWorker({ op: "export", content: loaded.content, format });
-    let state: DesignMdExportState;
+  /**
+   * The same export over text that isn't a file yet (3d's drafted DESIGN.md,
+   * S110): the same cap, worker, limits and cache as `export`, keyed by the
+   * text's hash.
+   */
+  async exportContent(content: string, format: DesignMdExportFormat, signal?: AbortSignal): Promise<DesignMdContentExportState> {
+    const text = stripBom(content);
+    const size = Buffer.byteLength(text);
+    if (size > DESIGN_MD_MAX_BYTES) return { status: "too-large", size };
+    return this.exportCached(text, sha256(text), format, signal);
+  }
+
+  private async exportCached(content: string, hash: string, format: DesignMdExportFormat, signal?: AbortSignal): Promise<ContentExportOutcome> {
+    const key = `${hash}:${format}`;
+    const cached = this.exports.get(key);
+    if (cached && (cached.retryAt === undefined || this.now() < cached.retryAt)) return cached.state;
+    return this.shared(`export\0${key}`, () => this.exportFresh(content, format, key), signal);
+  }
+
+  private async exportFresh(content: string, format: DesignMdExportFormat, key: string): Promise<ContentExportOutcome> {
+    const outcome = await this.runWorker({ op: "export", content, format });
+    let state: ContentExportOutcome;
     if (!outcome.ok) {
       if (outcome.status === "lint-failed") this.log("The DESIGN.md linter failed on an export.");
-      state = { status: outcome.status, ...loaded.file };
+      state = { status: outcome.status };
       if (outcome.status === "busy" || outcome.status === "linter-unavailable") return state;
     } else if (outcome.result.success && typeof outcome.result.text === "string") {
       const size = Buffer.byteLength(outcome.result.text);
-      state =
-        size > DESIGN_MD_EXPORT_MAX_BYTES
-          ? { status: "oversized", bytes: size, ...loaded.file }
-          : { status: "ok", text: outcome.result.text, ...loaded.file };
+      state = size > DESIGN_MD_EXPORT_MAX_BYTES ? { status: "oversized", bytes: size } : { status: "ok", text: outcome.result.text };
     } else {
-      state = { status: "error", errors: (outcome.result.errors ?? []).map((error) => cut(error, MAX_MESSAGE_CHARS)), ...loaded.file };
+      state = { status: "error", errors: (outcome.result.errors ?? []).map((error) => cut(error, MAX_MESSAGE_CHARS)) };
     }
     this.exports.delete(key);
     this.exports.set(key, {

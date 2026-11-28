@@ -509,3 +509,20 @@ test("long finding paths, rules, section names and omitted entries are bounded",
     assert.ok(state.omitted[0]!.section.startsWith("0L"));
   });
 });
+
+test("3d: exportContent gives the same CSS as export on the same text, from one worker run", async () => {
+  await withWorkspace(async (ws) => {
+    const { reader, counter } = countingReader();
+    const text = await fixture("valid.md");
+    await writeFile(path.join(ws, "DESIGN.md"), text);
+    const fromText = await reader.exportContent(text, "css-vars");
+    assert.equal(fromText.status, "ok", JSON.stringify(fromText));
+    const fromFile = await reader.export(ws, at("DESIGN.md"), "css-vars");
+    assert.equal(fromFile.status, "ok");
+    assert.equal((fromFile as { text: string }).text, (fromText as { text: string }).text);
+    assert.match((fromText as { text: string }).text, /--/u, "custom properties");
+    assert.equal(counter.runs, 1, "the same text is cached by its hash");
+    assert.deepEqual(await reader.exportContent("x".repeat(DESIGN_MD_MAX_BYTES + 1), "css-vars"), { status: "too-large", size: DESIGN_MD_MAX_BYTES + 1 });
+    assert.equal(counter.runs, 1, "no worker for text over the cap");
+  });
+});
