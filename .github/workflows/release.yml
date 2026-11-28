@@ -85,6 +85,10 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=4096
         run: npm run type-check
 
+      - name: Verify formatting
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        run: npm run format:check
+
       - name: Verify lint
         if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run lint
@@ -255,7 +259,7 @@ jobs:
 
       - name: Verify Linux contracts, diagnostics, and native helpers
         if: ${{ steps.version.outputs.publish == 'true' }}
-        run: npm run type-check && npm run lint && npm run test:diagnostics && npm run test:linux-contracts && npm run test:linux-native
+        run: npm run type-check && npm run format:check && npm run lint && npm run test:diagnostics && npm run test:linux-contracts && npm run test:linux-native
 
       - name: Build and verify Linux distributions
         if: ${{ steps.version.outputs.publish == 'true' }}

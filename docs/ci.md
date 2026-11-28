@@ -57,7 +57,12 @@ cancelling CI never cancels a release. Runner capacity can still cause queueing.
 
 ## Execution and coverage
 
-- TypeScript (including the e2e project) and lint run on Ubuntu. One macOS
+- TypeScript (including the e2e project), formatting (`npm run format:check`,
+  configured by `.oxfmtrc.json`; `npm run format` writes fixes and
+  `.git-blame-ignore-revs` records bulk normalization commits), ESLint, and
+  Aiden design rules run on Ubuntu in `static`. `npm run format:check` also
+  gates macOS and Linux release and Linux installer workflows, and
+  `.oxfmtrc.json` changes select the full CI matrix. One macOS
   `build` job runs `npm run build` and uploads `build/` as a tarred, one-day
   artifact; the Electron shards and `verify` download it instead of rebuilding.
   Diagnostics and branding remain in `verify`; the model-catalog suite runs in

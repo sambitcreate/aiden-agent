@@ -84,9 +84,7 @@ const service = createBotRoutineModelService({
 export const botRoutineModels = {
   ...service,
   /** Owner model chooser covers scheduled, generic event, script and connector watches. */
-  async listRoutines(
-    botId: string,
-  ): Promise<{
+  async listRoutines(botId: string): Promise<{
     botId: string;
     routines: { id: string; name: string; kind: "scheduled" | "event" | "watch" }[];
   }> {

@@ -10,7 +10,7 @@ const IMPORT_SPEC =
 const LOCK_FILE =
   /(?:^|\/)(?:[^/]+\.(?:lock|lockfile)|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lock(?:b)?)$/u;
 const CONFIG_FILE =
-  /(?:^|\/)(?:[^/]*\.config\.[^/]+|(?:config|tsconfig)(?:\.[^/]+)?|\.eslintrc(?:\.[^/]+)?|\.prettierrc(?:\.[^/]+)?)$/u;
+  /(?:^|\/)(?:[^/]*\.config\.[^/]+|(?:config|tsconfig)(?:\.[^/]+)?|\.eslintrc(?:\.[^/]+)?|\.prettierrc(?:\.[^/]+)?|\.oxfmtrc(?:\.[^/]+)?)$/u;
 const ALIASES = Object.freeze([
   ["@renderer/", "renderer/"],
   ["@main/", "main/"],

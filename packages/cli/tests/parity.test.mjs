@@ -3886,16 +3886,14 @@ test("MCP shutdown during credential resolution starts no connection and sends n
     oauth: true,
   };
   api.atomicJson(join(dir, "aiden-mcp.json"), [server]);
-  await api
-    .insightCredentials(dir)
-    .write(
-      api.mcpCredentialId(server),
-      JSON.stringify({
-        authorizationBinding: api.mcpOAuthBindingForServer(server),
-        clientInformation: { client_id: "registered" },
-        tokens: { access_token: "secret", token_type: "Bearer" },
-      }),
-    );
+  await api.insightCredentials(dir).write(
+    api.mcpCredentialId(server),
+    JSON.stringify({
+      authorizationBinding: api.mcpOAuthBindingForServer(server),
+      clientInformation: { client_id: "registered" },
+      tokens: { access_token: "secret", token_type: "Bearer" },
+    }),
+  );
   // Pause the second credential-file open: the provider read after incarnation resolution.
   const fsPromises = createRequire(import.meta.url)("node:fs/promises"),
     open = fsPromises.open;

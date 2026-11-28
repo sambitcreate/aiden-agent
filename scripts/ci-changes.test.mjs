@@ -95,6 +95,7 @@ test("changed-area classification is conservative and table-driven", () => {
     ["package.json", allTrue],
     ["package-lock.json", allTrue],
     ["vite.config.ts", allTrue],
+    [".oxfmtrc.json", allTrue],
     ["unknown/new-file.bin", allTrue],
     ["marketing/rive/aiden/scene.rml", allFalse],
     ["marketing/rive/tools/render.py", allFalse],
@@ -107,6 +108,8 @@ test("changed-area classification is conservative and table-driven", () => {
     assert.deepEqual(classifyChangedPath(path), expected, path);
     assert.deepEqual(decideChangedAreas([path]), expected, path);
   }
+  assert.equal(analyzeChangedPaths([".oxfmtrc.json"]).reason, "changed-paths");
+  assert.equal(analyzeChangedPaths(["unknown/new-file.bin"]).reason, "unknown-path");
 });
 
 test("scoped paths never select mobile or Apple jobs for desktop-only server changes", () => {

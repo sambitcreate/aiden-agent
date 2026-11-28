@@ -12,6 +12,10 @@ import { readRegistry } from "./ci-test-registry.mjs";
 
 const workflowUrl = new URL("../.github/workflows/ci.yml", import.meta.url);
 const releaseWorkflowUrl = new URL("../.github/workflows/release.yml", import.meta.url);
+const linuxInstallersWorkflowUrl = new URL(
+  "../.github/workflows/linux-installers.yml",
+  import.meta.url,
+);
 const pullfrogWorkflowUrl = new URL("../.github/workflows/pullfrog.yml", import.meta.url);
 
 function workflowStep(workflow, name) {
@@ -440,6 +444,148 @@ test("coverage collection is enabled before positional test paths", async () => 
   assert.ok(flag > 0 && firstTest > flag, "Node coverage flags must precede test files");
 });
 
+function hasBlockingFormatCheck(job, { requiredIf } = {}) {
+  if (!job || job["continue-on-error"] === true) return false;
+  const steps = (job.steps ?? []).filter((step) =>
+    /(?:^|&&|\n)\s*npm run format:check(?:\s*(?:&&|\n|$))/u.test(step.run ?? ""),
+  );
+  if (steps.length === 0) return false;
+  return steps.every(
+    (step) =>
+      step["continue-on-error"] !== true &&
+      (requiredIf === undefined ? step.if === undefined : step.if === requiredIf),
+  );
+}
+
+function assertFormattingPolicy({
+  manifest,
+  oxfmtConfig,
+  blameIgnoreRevs,
+  ciSource,
+  releaseSource,
+  linuxInstallersSource,
+}) {
+  assert.equal(manifest.scripts.format, "oxfmt .");
+  assert.equal(manifest.scripts["format:check"], "oxfmt --check .");
+  assert.equal(oxfmtConfig.experimentalSortPackageJson, false);
+  for (const requiredIgnore of [
+    "resources/generative-ui/**",
+    "packages/cli/dist/**",
+    "android/**/build/**",
+    "THIRD_PARTY_NOTICES.md",
+    "docs/plans/completed/**",
+    "**/CHANGELOG.md",
+    "ios/TESTFLIGHT.md",
+    ".superpowers/**",
+    "docs/audits/**",
+    "protocol/**",
+    "resources/model-capabilities.json",
+    "resources/aiden-help/manifest.json",
+    "resources/bot-computers/lume-artifact.json",
+    "docs/research/experiments/task-quality-fixtures/**",
+    "ios/**/*.xcassets/**",
+    "ios/**/*.icon/**",
+    "ios/APP_STORE_METADATA.md",
+    "gui/themes/**",
+    "docs/**/*.html",
+  ]) {
+    assert.ok(
+      oxfmtConfig.ignorePatterns?.includes(requiredIgnore),
+      `Missing oxfmt ignore pattern: ${requiredIgnore}`,
+    );
+  }
+  assert.match(blameIgnoreRevs, /^[a-f0-9]{40}$/mu);
+
+  const ci = parse(ciSource);
+  const release = parse(releaseSource);
+  const linuxInstallers = parse(linuxInstallersSource);
+  const publishGate = "${{ steps.version.outputs.publish == 'true' }}";
+
+  assert.ok(hasBlockingFormatCheck(ci.jobs.static), "CI static job must enforce format:check");
+  assert.ok(
+    hasBlockingFormatCheck(release.jobs.release, { requiredIf: publishGate }),
+    "macOS release job must enforce format:check",
+  );
+  assert.ok(
+    hasBlockingFormatCheck(release.jobs["linux-release"], { requiredIf: publishGate }),
+    "Linux release job must enforce format:check",
+  );
+  assert.ok(
+    hasBlockingFormatCheck(linuxInstallers.jobs.build),
+    "Linux installers workflow must enforce format:check",
+  );
+}
+
+test("oxfmt formatting checks are enforced across CI, release, and Linux installer workflows", async () => {
+  const [manifestRaw, oxfmtRaw, blameIgnoreRevs, ciSource, releaseSource, linuxInstallersSource] =
+    await Promise.all([
+      readFile(new URL("../package.json", import.meta.url), "utf8"),
+      readFile(new URL("../.oxfmtrc.json", import.meta.url), "utf8"),
+      readFile(new URL("../.git-blame-ignore-revs", import.meta.url), "utf8"),
+      readFile(workflowUrl, "utf8"),
+      readFile(releaseWorkflowUrl, "utf8"),
+      readFile(linuxInstallersWorkflowUrl, "utf8"),
+    ]);
+  const inputs = {
+    manifest: JSON.parse(manifestRaw),
+    oxfmtConfig: JSON.parse(oxfmtRaw),
+    blameIgnoreRevs,
+    ciSource,
+    releaseSource,
+    linuxInstallersSource,
+  };
+  assertFormattingPolicy(inputs);
+
+  for (const [name, mutate] of [
+    [
+      "removed from ci.yml",
+      () => ({ ...inputs, ciSource: ciSource.replaceAll("npm run format:check", "true") }),
+    ],
+    [
+      "non-blocking in ci.yml",
+      () => ({
+        ...inputs,
+        ciSource: ciSource.replace(
+          "- name: Verify formatting\n        run: npm run format:check",
+          "- name: Verify formatting\n        continue-on-error: true\n        run: npm run format:check",
+        ),
+      }),
+    ],
+    [
+      "removed from macOS release.yml",
+      () => ({
+        ...inputs,
+        releaseSource: releaseSource.replace(
+          "- name: Verify formatting\n        if: ${{ steps.version.outputs.publish == 'true' }}\n        run: npm run format:check",
+          "- name: Verify formatting\n        if: ${{ steps.version.outputs.publish == 'true' }}\n        run: true",
+        ),
+      }),
+    ],
+    [
+      "removed from Linux release.yml",
+      () => ({
+        ...inputs,
+        releaseSource: releaseSource.replace(
+          "npm run type-check && npm run format:check && npm run lint",
+          "npm run type-check && npm run lint",
+        ),
+      }),
+    ],
+    [
+      "removed from linux-installers.yml",
+      () => ({
+        ...inputs,
+        linuxInstallersSource: linuxInstallersSource.replace(
+          "npm run type-check && npm run format:check && npm run lint",
+          "npm run type-check && npm run lint",
+        ),
+      }),
+    ],
+  ]) {
+    assert.throws(() => assertFormattingPolicy(mutate()), undefined, name);
+  }
+});
+
 function assertLinuxReleaseProvenance(workflow) {
   const linuxJob = workflow.match(/^ {2}linux-release:\n[\s\S]*?(?=^ {2}\S|(?![\s\S]))/mu)?.[0];
   assert.ok(linuxJob, "Linux release job is missing");
@@ -633,6 +779,7 @@ test("CI supersedes older PR and main runs, keeps dispatches independent, and ke
   );
   assert.equal(workflow.jobs.static["runs-on"], "ubuntu-24.04");
   assert.ok(workflow.jobs.static.steps.some((step) => step.run?.includes("npm run type-check")));
+  assert.ok(workflow.jobs.static.steps.some((step) => step.run === "npm run format:check"));
   assert.ok(workflow.jobs.static.steps.some((step) => step.run === "npm run lint"));
   for (const [name, job] of Object.entries(workflow.jobs))
     assert.ok(job["timeout-minutes"] > 0, name);

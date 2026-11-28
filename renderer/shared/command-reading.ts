@@ -897,12 +897,10 @@ export function commandTags(
     tone: "risk" as const,
   }));
   const room = Math.max(0, COMMAND_READING_LIMITS.tags - risky.length);
-  const calm = [...reader.calm.keys()]
-    .slice(0, room)
-    .map((label) => ({
-      label: clip(label, COMMAND_READING_LIMITS.tagLabel),
-      tone: "calm" as const,
-    }));
+  const calm = [...reader.calm.keys()].slice(0, room).map((label) => ({
+    label: clip(label, COMMAND_READING_LIMITS.tagLabel),
+    tone: "calm" as const,
+  }));
   return [...risky, ...calm];
 }
 

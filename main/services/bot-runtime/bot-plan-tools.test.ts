@@ -879,16 +879,14 @@ const browserCheck = (requestIds: string[], executionId = randomUUID()) => ({
 
 async function pendingOtherPlan(f: Awaited<ReturnType<typeof fixture>>, planId = "other-plan") {
   const memo = f.memos.get(BOT_PLAN_MEMO) as { proposal: JsonValue; requestIds: string[] };
-  const waiting = f
-    .plans()
-    .request({
-      botId: BOT,
-      planId,
-      toolCallId: "other-call",
-      requestIds: memo.requestIds,
-      proposal: memo.proposal as unknown as BotPlanProposal,
-      signal: undefined,
-    });
+  const waiting = f.plans().request({
+    botId: BOT,
+    planId,
+    toolCallId: "other-call",
+    requestIds: memo.requestIds,
+    proposal: memo.proposal as unknown as BotPlanProposal,
+    signal: undefined,
+  });
   assert.equal((await f.plans().current(BOT))?.planId, planId);
   return { waiting, planId };
 }

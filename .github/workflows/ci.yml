@@ -227,6 +227,8 @@ jobs:
         run: npm ci
       - name: Verify TypeScript
         run: npm run type-check && npm run type-check:e2e
+      - name: Verify formatting
+        run: npm run format:check
       - name: Verify lint
         run: npm run lint
       - name: Verify Aiden design rules

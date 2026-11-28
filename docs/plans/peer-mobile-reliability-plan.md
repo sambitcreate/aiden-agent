@@ -473,6 +473,7 @@ T3 keeps a per-thread composer error map `{message, messageId}`, filled by the o
 
 - Add an additive field on authenticated `GET /server`, e.g. `peerRoutes`, gated by a new feature string `peer-routes-v1`. Emit it **only** to desktop peer devices (mac/linux device kinds, like the existing desktop-only features). Never put it on unauthenticated `/health`, Bonjour TXT (which stays `v=1` + instanceId), or the QR.
 - Shape (finalize in the doc first, then OpenAPI, fixture, TS and mobile tolerance):
+
   ```jsonc
   "peerRoutes": [
     { "kind": "lan", "endpoint": "https://<name>.local:<port>/api/aiden/v1",
@@ -488,6 +489,7 @@ T3 keeps a per-thread composer error map `{message, messageId}`, filled by the o
   - Include the Tailscale route only when Serve ownership is verified (reuse the existing Serve verification state). Never probe synchronously inside the request; serve the cached state.
   - Leave out a route whose listener is disabled by `connectionMode`.
   - LAN-paired clients hold the private CA; Tailscale-paired clients do not. Finalize the authenticated CA bootstrap described in the approved decisions before freezing this shape.
+
 - Bump `AIDEN_REMOTE_CONTRACT_REVISION` to **main's revision + 1 at merge time**. Update together: `docs/aiden-remote-api-v1.md` (§5 `/server`, §9 Transport identity, §10), `protocol/aiden-remote/v1/openapi.json`, `protocol/aiden-remote/v1/fixtures/contract.json`, and the Android test copy `app/src/test/resources/contract.json` if it mirrors it, `aiden-remote-protocol.ts` (+ test), and the iOS/Android revision assertions (`AidenRemotePhase0Tests.swift`, `AidenBotContractTest.kt` / `AidenRemotePhase0Test.kt`). Mobile ignores the field. Verify Android's decoder tolerates unknown `/server` keys. iOS looked tolerant; Android wasn't checked.
 - `features` is capped at 32 by the peer client's parser. Count the current list before adding. (After 0.59.0 the desktop parser accepts up to 64, but hosts still send at most 32 per device; see the `/server` notes in `docs/aiden-remote-api-v1.md`.)
 

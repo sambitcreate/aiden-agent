@@ -716,12 +716,10 @@ for (const boundary of ["ordinary", "global-stop", "same-url-replacement"]) {
       expect(
         nativeEvents.some((event) => event.event === "did-stop-loading" && event.osProcessId === 0),
       ).toBe(true);
-      await test
-        .info()
-        .attach("native-crash-event-order", {
-          body: JSON.stringify(nativeEvents, null, 2),
-          contentType: "application/json",
-        });
+      await test.info().attach("native-crash-event-order", {
+        body: JSON.stringify(nativeEvents, null, 2),
+        contentType: "application/json",
+      });
 
       const state = await aiden.page.evaluate(
         (workspaceId) =>

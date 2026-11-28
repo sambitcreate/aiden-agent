@@ -846,13 +846,11 @@ test("multi-connector metadata overflow refuses discovery atomically without rep
   }));
   assert.equal(new Set(longSources.map((source) => source.serverId)).size, 10);
   for (let index = 0; index < 10; index++) {
-    const mailboxes = longSources
-      .slice(index * 50, (index + 1) * 50)
-      .map((source) => ({
-        "@id": source.mailbox,
-        name: source.labels.resourceLabel,
-        account: { "@id": source.account, email: source.labels.accountLabel },
-      }));
+    const mailboxes = longSources.slice(index * 50, (index + 1) * 50).map((source) => ({
+      "@id": source.mailbox,
+      name: source.labels.resourceLabel,
+      account: { "@id": source.account, email: source.labels.accountLabel },
+    }));
     assert.ok(
       Buffer.byteLength(
         JSON.stringify({ "@type": "ItemList", itemListElement: mailboxes }),

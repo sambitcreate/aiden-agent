@@ -416,9 +416,7 @@ function modelSaw(requests: Array<{ body: unknown }>, text: string): boolean {
 }
 
 /** The saved comments of the first canvas. */
-async function savedComments(
-  userDataDir: string,
-): Promise<
+async function savedComments(userDataDir: string): Promise<
   Array<{
     note: string;
     state: string;

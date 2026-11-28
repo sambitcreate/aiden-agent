@@ -43,7 +43,7 @@ const REMOTE_SERVER_PATH = /^main\/(?:services|handlers)\/(?:[^/]+\/)*aiden-remo
 const LOCK_FILE =
   /(?:^|\/)(?:[^/]+\.(?:lock|lockfile)|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lock(?:b)?)$/u;
 const CONFIG_FILE =
-  /(?:^|\/)(?:[^/]*\.config\.[^/]+|(?:config|tsconfig)(?:\.[^/]+)?|\.eslintrc(?:\.[^/]+)?|\.prettierrc(?:\.[^/]+)?)$/u;
+  /(?:^|\/)(?:[^/]*\.config\.[^/]+|(?:config|tsconfig)(?:\.[^/]+)?|\.eslintrc(?:\.[^/]+)?|\.prettierrc(?:\.[^/]+)?|\.oxfmtrc(?:\.[^/]+)?)$/u;
 // Shared renderer files whose contract a native client mirrors by hand. Add a
 // file here when a native client starts mirroring it. No mobile build or test
 // reads renderer/shared/, and the wire contract is pinned by protocol/ fixtures,

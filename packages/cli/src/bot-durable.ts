@@ -474,7 +474,8 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
   try {
     await runtime.initialize();
     await messages.start();
-  } catch (error) { // Interrupted runs stay paused; accepted courier work reattaches.
+  } catch (error) {
+    // Interrupted runs stay paused; accepted courier work reattaches.
     await messages.dispose();
     await runtime.shutdown();
     throw error;

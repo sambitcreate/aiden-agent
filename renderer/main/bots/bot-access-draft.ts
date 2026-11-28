@@ -247,15 +247,13 @@ function toolOptions(catalog: BotCapabilityCatalog, draft: BotAccessDraft): BotT
         group: "Connected apps",
         ...(option.description ? { description: option.description } : {}),
       })),
-    ...catalog.skills
-      .filter(skillsAvailable)
-      .map((option) => ({
-        key: "skillIds" as const,
-        id: option.id,
-        label: option.label,
-        group: "Skills",
-        ...(option.description ? { description: option.description } : {}),
-      })),
+    ...catalog.skills.filter(skillsAvailable).map((option) => ({
+      key: "skillIds" as const,
+      id: option.id,
+      label: option.label,
+      group: "Skills",
+      ...(option.description ? { description: option.description } : {}),
+    })),
     ...others.map((option) => ({
       key: "otherCapabilityIds" as const,
       id: option.id,

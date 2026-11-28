@@ -211,9 +211,7 @@ export async function rotateTaskTriggerLink(
 }
 
 /** Whether a link task has a link, whether the listener is on, and its recent calls (never the link). */
-export async function taskTriggerLinkState(
-  taskId: string,
-): Promise<{
+export async function taskTriggerLinkState(taskId: string): Promise<{
   hasLink: boolean;
   needsNewLink: boolean;
   listenerOn: boolean;

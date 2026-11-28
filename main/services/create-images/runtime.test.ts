@@ -69,13 +69,11 @@ test("a crash mid-request leaves the attempt interrupted and may-be-billed, and 
   const sessionA = env.runtime();
   assert.equal(await sessionA.initialize({ enabled: true, onError: failOnError }), true);
   const doc = await saveWorkflow(sessionA.services().workflows, generateChains(1));
-  const plan = await sessionA
-    .services()
-    .coordinator.prepare(OWNER, {
-      workflowId: doc.id,
-      revision: doc.revision,
-      scope: { kind: "all" },
-    });
+  const plan = await sessionA.services().coordinator.prepare(OWNER, {
+    workflowId: doc.id,
+    revision: doc.revision,
+    scope: { kind: "all" },
+  });
   assert.ok("plan" in plan);
   const started = await sessionA.services().coordinator.start(OWNER, plan.plan.consentId);
   assert.ok("runId" in started);
@@ -102,13 +100,11 @@ test("a crash mid-request leaves the attempt interrupted and may-be-billed, and 
   });
 
   // Only a fresh consent sends exactly one more request.
-  const retry = await sessionB
-    .services()
-    .coordinator.prepare(OWNER, {
-      workflowId: doc.id,
-      revision: doc.revision,
-      scope: { kind: "all" },
-    });
+  const retry = await sessionB.services().coordinator.prepare(OWNER, {
+    workflowId: doc.id,
+    revision: doc.revision,
+    scope: { kind: "all" },
+  });
   assert.ok("plan" in retry);
   await sessionB.services().coordinator.start(OWNER, retry.plan.consentId);
   await sessionB.services().coordinator.whenIdle();
@@ -120,13 +116,11 @@ test("shutdown aborts in-flight requests and records app-quit", async (t) => {
   const runtime = env.runtime();
   await runtime.initialize({ enabled: true, onError: failOnError });
   const doc = await saveWorkflow(runtime.services().workflows, generateChains(1));
-  const plan = await runtime
-    .services()
-    .coordinator.prepare(OWNER, {
-      workflowId: doc.id,
-      revision: doc.revision,
-      scope: { kind: "all" },
-    });
+  const plan = await runtime.services().coordinator.prepare(OWNER, {
+    workflowId: doc.id,
+    revision: doc.revision,
+    scope: { kind: "all" },
+  });
   assert.ok("plan" in plan);
   const started = await runtime.services().coordinator.start(OWNER, plan.plan.consentId);
   assert.ok("runId" in started);
@@ -184,13 +178,11 @@ test("quit waits for an auto-save still writing, so the file is complete and rec
   });
   await runtime.initialize({ enabled: true, onError: failOnError });
   const doc = await saveWorkflow(runtime.services().workflows, generateChains(1));
-  const plan = await runtime
-    .services()
-    .coordinator.prepare(OWNER, {
-      workflowId: doc.id,
-      revision: doc.revision,
-      scope: { kind: "all" },
-    });
+  const plan = await runtime.services().coordinator.prepare(OWNER, {
+    workflowId: doc.id,
+    revision: doc.revision,
+    scope: { kind: "all" },
+  });
   assert.ok("plan" in plan);
   const started = await runtime.services().coordinator.start(OWNER, plan.plan.consentId);
   assert.ok("runId" in started);

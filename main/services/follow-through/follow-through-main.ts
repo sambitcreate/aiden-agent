@@ -672,9 +672,7 @@ export interface PullRequestTarget {
 export async function resolvePullRequestTarget(
   chatId: string,
   url: string | undefined,
-  currentPullRequest: (
-    chatId: string,
-  ) => Promise<{
+  currentPullRequest: (chatId: string) => Promise<{
     pullRequest?: {
       host: string;
       repository: string;

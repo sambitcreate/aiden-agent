@@ -488,15 +488,13 @@ test("the request cap holds for every scope", async (t) => {
         target: id,
         targetPort: "prompt",
       })),
-      ...ids
-        .slice(1)
-        .map((id, index) => ({
-          id: `${ids[index]}-${id}`,
-          source: ids[index]!,
-          sourcePort: "images",
-          target: id,
-          targetPort: "references",
-        })),
+      ...ids.slice(1).map((id, index) => ({
+        id: `${ids[index]}-${id}`,
+        source: ids[index]!,
+        sourcePort: "images",
+        target: id,
+        targetPort: "references",
+      })),
     ];
     return draft;
   });

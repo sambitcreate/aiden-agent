@@ -175,6 +175,8 @@ test("a handler change selects the registered IPC contract inventory test", () =
 test("package locks, CI scripts, and unknown paths keep the full unit suite", () => {
   for (const changedPaths of [
     ["package-lock.json"],
+    [".oxfmtrc.json"],
+    ["renderer/.oxfmtrc.json"],
     ["scripts/ci-related-tests.mjs"],
     ["scripts/patch-electron-builder-keychain.mjs"],
     ["renderer/styles.css"],

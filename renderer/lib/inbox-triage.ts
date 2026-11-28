@@ -268,9 +268,7 @@ export function mergeInboxTriageUndo(
 }
 
 /** Undo's writes: the inverse of each chat's patch, guarded by the revision its last write left. */
-export function inboxTriageUndoWrites(
-  batch: InboxTriageUndoBatch,
-): {
+export function inboxTriageUndoWrites(batch: InboxTriageUndoBatch): {
   target: InboxTriageTarget;
   patch: ChatTriagePatch;
   ifRevision: number;
